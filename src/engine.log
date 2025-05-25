@@ -1,0 +1,291 @@
+[2025-05-19 05:19:35] [INFO] Engine starting...
+[2025-05-19 05:19:35] [INFO] Precomputed attack tables initialized.
+[2025-05-19 05:19:35] [INFO] Magic bitboards initialized.
+[2025-05-19 05:19:35] [INFO] Global board initialized to starting position.
+[2025-05-19 05:19:35] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 05:19:35] [INFO] UCI input thread created successfully.
+[2025-05-19 05:19:35] [INFO] UCI input thread started.
+[2025-05-19 05:20:07] [DEBUG] UCI Received: isready
+[2025-05-19 05:20:07] [INFO] UCI command: isready
+[2025-05-19 05:20:19] [DEBUG] UCI Received: position startpos
+[2025-05-19 05:20:19] [INFO] UCI command: position startpos
+[2025-05-19 05:20:19] [INFO] Position set to startpos.
+[2025-05-19 05:20:19] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 05:20:29] [DEBUG] UCI Received: ucinewgame
+[2025-05-19 05:20:29] [WARN] Unknown UCI command: ucinewgame from line: ucinewgame
+[2025-05-19 05:20:54] [DEBUG] UCI Received: go perft 1
+[2025-05-19 05:20:54] [INFO] UCI command: go perft 1
+[2025-05-19 05:20:54] [INFO] Starting 'go perft 1' on current board state.
+[2025-05-19 05:20:54] [INFO] Perft(1) result: 20 nodes.
+[2025-05-19 05:21:06] [DEBUG] UCI Received: go perft 2
+[2025-05-19 05:21:06] [INFO] UCI command: go perft 2
+[2025-05-19 05:21:06] [INFO] Starting 'go perft 2' on current board state.
+[2025-05-19 05:21:06] [INFO] Perft(2) result: 400 nodes.
+[2025-05-19 05:21:11] [DEBUG] UCI Received: go perft 3
+[2025-05-19 05:21:11] [INFO] UCI command: go perft 3
+[2025-05-19 05:21:11] [INFO] Starting 'go perft 3' on current board state.
+[2025-05-19 05:21:11] [INFO] Perft(3) result: 8424 nodes.
+[2025-05-19 05:21:24] [DEBUG] UCI Received: go perft 4
+[2025-05-19 05:21:24] [INFO] UCI command: go perft 4
+[2025-05-19 05:21:24] [INFO] Starting 'go perft 4' on current board state.
+[2025-05-19 05:21:24] [INFO] Perft(4) result: 55066 nodes.
+[2025-05-19 05:21:33] [DEBUG] UCI Received: go perft 5
+[2025-05-19 05:21:33] [INFO] UCI command: go perft 5
+[2025-05-19 05:21:33] [INFO] Starting 'go perft 5' on current board state.
+[2025-05-19 05:21:33] [INFO] Perft(5) result: 56403 nodes.
+[2025-05-19 05:21:42] [DEBUG] UCI Received: go perft 69
+[2025-05-19 05:21:42] [INFO] UCI command: go perft 69
+[2025-05-19 05:21:42] [INFO] Starting 'go perft 69' on current board state.
+[2025-05-19 05:21:42] [INFO] Perft(69) result: 0 nodes.
+[2025-05-19 05:25:29] [INFO] Engine starting...
+[2025-05-19 05:25:29] [INFO] Precomputed attack tables initialized.
+[2025-05-19 05:25:29] [INFO] Magic bitboards initialized.
+[2025-05-19 05:25:29] [INFO] Global board initialized to starting position.
+[2025-05-19 05:25:29] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 05:25:29] [INFO] UCI input thread created successfully.
+[2025-05-19 05:25:29] [INFO] UCI input thread started.
+[2025-05-19 05:25:45] [DEBUG] UCI Received: position startpos
+[2025-05-19 05:25:45] [INFO] UCI command: position startpos
+[2025-05-19 05:25:45] [INFO] Position set to startpos.
+[2025-05-19 05:25:45] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 05:25:56] [DEBUG] UCI Received: go perftdivide 3
+[2025-05-19 05:25:56] [INFO] UCI command: go perftdivide 3
+[2025-05-19 05:25:56] [INFO] Starting 'go perftdivide 3' on current board state.
+[2025-05-19 05:25:56] [INFO] PerftDivide(3) finished. Total nodes: 8424. Time: 276.33 ms.
+[2025-05-19 05:30:46] [INFO] Engine starting...
+[2025-05-19 05:30:46] [INFO] Precomputed attack tables initialized.
+[2025-05-19 05:30:46] [INFO] Magic bitboards initialized.
+[2025-05-19 05:30:46] [INFO] Global board initialized to starting position.
+[2025-05-19 05:30:46] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 05:30:46] [INFO] UCI input thread created successfully.
+[2025-05-19 05:30:46] [INFO] UCI input thread started.
+[2025-05-19 05:32:09] [DEBUG] UCI Received: position startpos moves b2b3
+[2025-05-19 05:32:09] [INFO] UCI command: position startpos moves b2b3
+[2025-05-19 05:32:09] [INFO] Position set to startpos.
+[2025-05-19 05:32:09] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 05:32:09] [INFO] Applying moves:
+[2025-05-19 05:32:09] [DEBUG] Attempting to apply move: b2b3
+[2025-05-19 05:32:09] [DEBUG] Applying UCI move: b2b3 (parsed as b2b3)
+[2025-05-19 05:32:09] [INFO] Successfully applied move: b2b3. Board side to move now: Black
+[2025-05-19 05:32:09] [INFO] All UCI moves applied successfully.
+[2025-05-19 05:32:30] [DEBUG] UCI Received: go perftdivide 2
+[2025-05-19 05:32:30] [INFO] UCI command: go perftdivide 2
+[2025-05-19 05:32:30] [INFO] Starting 'go perftdivide 2' on current board state.
+[2025-05-19 05:32:30] [INFO] PerftDivide(2) finished. Total nodes: 400. Time: 36.14 ms.
+[2025-05-19 05:34:58] [INFO] Engine starting...
+[2025-05-19 05:34:58] [INFO] Precomputed attack tables initialized.
+[2025-05-19 05:34:58] [INFO] Magic bitboards initialized.
+[2025-05-19 05:34:58] [INFO] Global board initialized to starting position.
+[2025-05-19 05:34:58] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 05:34:58] [INFO] UCI input thread created successfully.
+[2025-05-19 05:34:58] [INFO] UCI input thread started.
+[2025-05-19 05:35:45] [INFO] Engine starting...
+[2025-05-19 05:35:45] [INFO] Precomputed attack tables initialized.
+[2025-05-19 05:35:45] [INFO] Magic bitboards initialized.
+[2025-05-19 05:35:45] [INFO] Global board initialized to starting position.
+[2025-05-19 05:35:45] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 05:35:45] [INFO] UCI input thread created successfully.
+[2025-05-19 05:35:45] [INFO] UCI input thread started.
+[2025-05-19 05:36:05] [DEBUG] UCI Received: position startpos moves b2b3 a7a6
+[2025-05-19 05:36:05] [INFO] UCI command: position startpos moves b2b3 a7a6
+[2025-05-19 05:36:05] [INFO] Position set to startpos.
+[2025-05-19 05:36:05] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 05:36:05] [INFO] Applying moves:
+[2025-05-19 05:36:05] [DEBUG] Attempting to apply move: b2b3
+[2025-05-19 05:36:05] [DEBUG] Applying UCI move: b2b3 (parsed as b2b3)
+[2025-05-19 05:36:05] [INFO] Successfully applied move: b2b3. Board side to move now: Black
+[2025-05-19 05:36:05] [DEBUG] Attempting to apply move: a7a6
+[2025-05-19 05:36:05] [DEBUG] Applying UCI move: a7a6 (parsed as a7a6)
+[2025-05-19 05:36:05] [INFO] Successfully applied move: a7a6. Board side to move now: White
+[2025-05-19 05:36:05] [INFO] All UCI moves applied successfully.
+[2025-05-19 05:36:24] [DEBUG] UCI Received: go perftdivide 1
+[2025-05-19 05:36:24] [INFO] UCI command: go perftdivide 1
+[2025-05-19 05:36:24] [INFO] Starting 'go perftdivide 1' on current board state.
+[2025-05-19 05:36:24] [INFO] PerftDivide(1) finished. Total nodes: 20. Time: 28.61 ms.
+[2025-05-19 05:53:42] [INFO] Engine starting...
+[2025-05-19 05:53:42] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:04:51] [INFO] Engine starting...
+[2025-05-19 06:04:51] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:04:51] [INFO] Magic bitboards initialized.
+[2025-05-19 06:04:51] [INFO] Global board initialized to starting position.
+[2025-05-19 06:04:51] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:04:51] [INFO] UCI input thread created successfully.
+[2025-05-19 06:04:51] [INFO] UCI input thread started.
+[2025-05-19 06:05:00] [DEBUG] UCI Received: position startpos
+[2025-05-19 06:05:00] [INFO] UCI command: position startpos
+[2025-05-19 06:05:00] [INFO] Position set to startpos.
+[2025-05-19 06:05:00] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:05:04] [DEBUG] UCI Received: go perft 3
+[2025-05-19 06:05:04] [INFO] UCI command: go perft 3
+[2025-05-19 06:05:04] [INFO] Starting 'go perft 3' on current board state.
+[2025-05-19 06:05:04] [INFO] Perft(3) result: 8844 nodes.
+[2025-05-19 06:07:15] [INFO] Engine starting...
+[2025-05-19 06:07:15] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:07:15] [INFO] Magic bitboards initialized.
+[2025-05-19 06:07:15] [INFO] Global board initialized to starting position.
+[2025-05-19 06:07:15] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:07:15] [INFO] UCI input thread created successfully.
+[2025-05-19 06:07:15] [INFO] UCI input thread started.
+[2025-05-19 06:07:46] [DEBUG] UCI Received: position startpos b2b3 a7a6
+[2025-05-19 06:07:46] [INFO] UCI command: position startpos b2b3 a7a6
+[2025-05-19 06:07:46] [INFO] Position set to startpos.
+[2025-05-19 06:07:46] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:07:56] [INFO] Engine starting...
+[2025-05-19 06:07:56] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:07:56] [INFO] Magic bitboards initialized.
+[2025-05-19 06:07:56] [INFO] Global board initialized to starting position.
+[2025-05-19 06:07:56] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:07:56] [INFO] UCI input thread created successfully.
+[2025-05-19 06:07:56] [INFO] UCI input thread started.
+[2025-05-19 06:08:08] [DEBUG] UCI Received: position startpos moves b2b3 a7a6
+[2025-05-19 06:08:08] [INFO] UCI command: position startpos moves b2b3 a7a6
+[2025-05-19 06:08:08] [INFO] Position set to startpos.
+[2025-05-19 06:08:08] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:08:08] [INFO] Applying moves:
+[2025-05-19 06:08:08] [DEBUG] Attempting to apply move: b2b3
+[2025-05-19 06:08:08] [DEBUG] Applying UCI move: b2b3 (parsed as b2b3)
+[2025-05-19 06:08:08] [INFO] Successfully applied move: b2b3. Board side to move now: Black
+[2025-05-19 06:08:08] [DEBUG] Attempting to apply move: a7a6
+[2025-05-19 06:08:08] [DEBUG] Applying UCI move: a7a6 (parsed as a7a6)
+[2025-05-19 06:08:08] [INFO] Successfully applied move: a7a6. Board side to move now: White
+[2025-05-19 06:08:08] [INFO] All UCI moves applied successfully.
+[2025-05-19 06:08:15] [DEBUG] UCI Received: go perftdivide 1
+[2025-05-19 06:08:15] [INFO] UCI command: go perftdivide 1
+[2025-05-19 06:08:15] [INFO] Starting 'go perftdivide 1' on current board state.
+[2025-05-19 06:08:15] [INFO] PerftDivide(1) finished. Total nodes: 21. Time: 31.67 ms.
+[2025-05-19 06:08:29] [INFO] Engine starting...
+[2025-05-19 06:08:29] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:08:29] [INFO] Magic bitboards initialized.
+[2025-05-19 06:08:29] [INFO] Global board initialized to starting position.
+[2025-05-19 06:08:29] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:08:29] [INFO] UCI input thread created successfully.
+[2025-05-19 06:08:29] [INFO] UCI input thread started.
+[2025-05-19 06:08:38] [DEBUG] UCI Received: position startpos
+[2025-05-19 06:08:38] [INFO] UCI command: position startpos
+[2025-05-19 06:08:38] [INFO] Position set to startpos.
+[2025-05-19 06:08:38] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:08:43] [DEBUG] UCI Received: go perft 1
+[2025-05-19 06:08:43] [INFO] UCI command: go perft 1
+[2025-05-19 06:08:43] [INFO] Starting 'go perft 1' on current board state.
+[2025-05-19 06:08:43] [INFO] Perft(1) result: 20 nodes.
+[2025-05-19 06:08:47] [DEBUG] UCI Received: go perft 2
+[2025-05-19 06:08:47] [INFO] UCI command: go perft 2
+[2025-05-19 06:08:47] [INFO] Starting 'go perft 2' on current board state.
+[2025-05-19 06:08:47] [INFO] Perft(2) result: 400 nodes.
+[2025-05-19 06:08:50] [DEBUG] UCI Received: go perft 3
+[2025-05-19 06:08:50] [INFO] UCI command: go perft 3
+[2025-05-19 06:08:50] [INFO] Starting 'go perft 3' on current board state.
+[2025-05-19 06:08:50] [INFO] Perft(3) result: 8844 nodes.
+[2025-05-19 06:19:15] [INFO] Engine starting...
+[2025-05-19 06:19:15] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:19:15] [INFO] Magic bitboards initialized.
+[2025-05-19 06:19:15] [INFO] Global board initialized to starting position.
+[2025-05-19 06:19:15] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:19:15] [INFO] UCI input thread created successfully.
+[2025-05-19 06:19:15] [INFO] UCI input thread started.
+[2025-05-19 06:19:27] [DEBUG] UCI Received: position startpos
+[2025-05-19 06:19:27] [INFO] UCI command: position startpos
+[2025-05-19 06:19:27] [INFO] Position set to startpos.
+[2025-05-19 06:19:27] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:19:34] [DEBUG] UCI Received: go perft 1
+[2025-05-19 06:19:34] [INFO] UCI command: go perft 1
+[2025-05-19 06:19:34] [INFO] Starting 'go perft 1' on current board state.
+[2025-05-19 06:19:34] [INFO] Perft(1) result: 20 nodes.
+[2025-05-19 06:19:38] [DEBUG] UCI Received: go perft 2
+[2025-05-19 06:19:38] [INFO] UCI command: go perft 2
+[2025-05-19 06:19:38] [INFO] Starting 'go perft 2' on current board state.
+[2025-05-19 06:19:38] [INFO] Perft(2) result: 400 nodes.
+[2025-05-19 06:19:43] [DEBUG] UCI Received: go perft 3
+[2025-05-19 06:19:43] [INFO] UCI command: go perft 3
+[2025-05-19 06:19:43] [INFO] Starting 'go perft 3' on current board state.
+[2025-05-19 06:19:43] [INFO] Perft(3) result: 8902 nodes.
+[2025-05-19 06:19:52] [DEBUG] UCI Received: go perft 4
+[2025-05-19 06:19:52] [INFO] UCI command: go perft 4
+[2025-05-19 06:19:52] [INFO] Starting 'go perft 4' on current board state.
+[2025-05-19 06:19:52] [INFO] Perft(4) result: 47270 nodes.
+[2025-05-19 06:22:53] [INFO] Engine starting...
+[2025-05-19 06:22:53] [INFO] Precomputed attack tables initialized.
+[2025-05-19 06:22:53] [INFO] Magic bitboards initialized.
+[2025-05-19 06:22:53] [INFO] Global board initialized to starting position.
+[2025-05-19 06:22:53] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-19 06:22:53] [INFO] UCI input thread created successfully.
+[2025-05-19 06:22:53] [INFO] UCI input thread started.
+[2025-05-19 06:23:00] [DEBUG] UCI Received: position startpos
+[2025-05-19 06:23:00] [INFO] UCI command: position startpos
+[2025-05-19 06:23:00] [INFO] Position set to startpos.
+[2025-05-19 06:23:00] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-19 06:23:06] [DEBUG] UCI Received: go perft 4
+[2025-05-19 06:23:06] [INFO] UCI command: go perft 4
+[2025-05-19 06:23:06] [INFO] Starting 'go perft 4' on current board state.
+[2025-05-19 06:23:06] [INFO] Perft(4) result: 47270 nodes.
+[2025-05-19 06:23:42] [DEBUG] UCI Received: go perftdivide 4
+[2025-05-19 06:23:42] [INFO] UCI command: go perftdivide 4
+[2025-05-19 06:23:42] [INFO] Starting 'go perftdivide 4' on current board state.
+[2025-05-19 06:23:42] [INFO] PerftDivide(4) finished. Total nodes: 0. Time: 20.56 ms.
+[2025-05-22 00:49:11] [INFO] Engine starting...
+[2025-05-22 00:49:11] [INFO] Precomputed attack tables initialized.
+[2025-05-22 00:49:11] [INFO] Magic bitboards initialized.
+[2025-05-22 00:49:11] [INFO] Global board initialized to starting position.
+[2025-05-22 00:49:11] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-22 00:49:11] [INFO] UCI input thread created successfully.
+[2025-05-22 00:49:11] [INFO] UCI input thread started.
+[2025-05-22 00:49:25] [DEBUG] UCI Received: position startpos
+[2025-05-22 00:49:25] [INFO] UCI command: position startpos
+[2025-05-22 00:49:25] [INFO] Position set to startpos.
+[2025-05-22 00:49:25] [INFO] Board initialized. FEN: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'. Side to move: White
+[2025-05-22 00:49:29] [DEBUG] UCI Received: go perft 1
+[2025-05-22 00:49:29] [INFO] UCI command: go perft 1
+[2025-05-22 00:49:29] [INFO] Starting 'go perft 1' on current board state.
+[2025-05-22 00:49:29] [INFO] Perft(1) result: 20 nodes.
+[2025-05-22 00:49:32] [DEBUG] UCI Received: go perft 2
+[2025-05-22 00:49:32] [INFO] UCI command: go perft 2
+[2025-05-22 00:49:32] [INFO] Starting 'go perft 2' on current board state.
+[2025-05-22 00:49:32] [INFO] Perft(2) result: 400 nodes.
+[2025-05-22 00:49:35] [DEBUG] UCI Received: go perft 3
+[2025-05-22 00:49:35] [INFO] UCI command: go perft 3
+[2025-05-22 00:49:35] [INFO] Starting 'go perft 3' on current board state.
+[2025-05-22 00:49:35] [INFO] Perft(3) result: 8902 nodes.
+[2025-05-22 00:49:39] [DEBUG] UCI Received: go perft 4
+[2025-05-22 00:49:39] [INFO] UCI command: go perft 4
+[2025-05-22 00:49:39] [INFO] Starting 'go perft 4' on current board state.
+[2025-05-22 00:49:39] [INFO] Perft(4) result: 197281 nodes.
+[2025-05-22 00:50:08] [DEBUG] UCI Received: go perft 5
+[2025-05-22 00:50:08] [INFO] UCI command: go perft 5
+[2025-05-22 00:50:08] [INFO] Starting 'go perft 5' on current board state.
+[2025-05-22 00:50:10] [INFO] Perft(5) result: 4865609 nodes.
+[2025-05-22 00:50:25] [DEBUG] UCI Received: go perft 6
+[2025-05-22 00:50:25] [INFO] UCI command: go perft 6
+[2025-05-22 00:50:25] [INFO] Starting 'go perft 6' on current board state.
+[2025-05-22 00:51:02] [INFO] Perft(6) result: 119060324 nodes.
+[2025-05-22 00:51:54] [DEBUG] UCI Received: go perft 7
+[2025-05-22 00:51:54] [INFO] UCI command: go perft 7
+[2025-05-22 00:51:54] [INFO] Starting 'go perft 7' on current board state.
+[2025-05-22 01:07:01] [INFO] Engine starting...
+[2025-05-22 01:07:01] [INFO] Precomputed attack tables initialized.
+[2025-05-22 01:07:01] [INFO] Magic bitboards initialized.
+[2025-05-22 01:07:01] [INFO] Global board initialized to starting position.
+[2025-05-22 01:07:01] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-22 01:07:01] [INFO] UCI input thread created successfully.
+[2025-05-22 01:07:01] [INFO] UCI input thread started.
+[2025-05-22 01:07:15] [DEBUG] UCI Received: position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -
+[2025-05-22 01:07:15] [INFO] UCI command: position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -
+[2025-05-22 01:07:15] [DEBUG] FEN string to parse: 'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -'
+[2025-05-22 01:07:45] [INFO] Engine starting...
+[2025-05-22 01:07:45] [INFO] Precomputed attack tables initialized.
+[2025-05-22 01:07:45] [INFO] Magic bitboards initialized.
+[2025-05-22 01:07:45] [INFO] Global board initialized to starting position.
+[2025-05-22 01:07:45] [INFO] Gyatso by Gyatso Neesham. UCI mode initialized.
+[2025-05-22 01:07:45] [INFO] UCI input thread created successfully.
+[2025-05-22 01:07:45] [INFO] UCI input thread started.
+[2025-05-22 01:07:57] [DEBUG] UCI Received: position fen 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1
+[2025-05-22 01:07:57] [INFO] UCI command: position fen 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1
+[2025-05-22 01:07:57] [DEBUG] FEN string to parse: '8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1'
+[2025-05-22 01:07:57] [INFO] Board initialized. FEN: '8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1'. Side to move: White
+[2025-05-22 01:08:15] [DEBUG] UCI Received: go perft 1
+[2025-05-22 01:08:15] [INFO] UCI command: go perft 1
+[2025-05-22 01:08:15] [INFO] Starting 'go perft 1' on current board state.
+[2025-05-22 01:08:15] [INFO] Perft(1) result: 14 nodes.
+[2025-05-22 01:08:29] [DEBUG] UCI Received: go perft 6
+[2025-05-22 01:08:29] [INFO] UCI command: go perft 6
+[2025-05-22 01:08:29] [INFO] Starting 'go perft 6' on current board state.
+[2025-05-22 01:08:33] [INFO] Perft(6) result: 11030083 nodes.
