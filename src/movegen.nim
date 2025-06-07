@@ -1,317 +1,261 @@
-import coretypes, bitboard, board, move, lookups, utils, magicbitboards
+import position, bitboard, move, types, castling
 
-proc opponentColor(color: Color): Color {.inline.} =
-  ## Returns the opponent's color.
-  if color == White: Black else: White
-
-proc generatePawnMoves*(board: Board, ml: var MoveList) =
-  ## Generates all pseudo-legal pawn moves for the current side to move.
-  ## Includes single pushes, double pushes, captures, promotions, and en passant.
-
-  let us = board.sideToMove
-  let them = opponentColor(us)
-  
-  # Get the Piece enum value for the current side's pawns (e.g., WP or BP)
-  let ourPawnPieceEnum = makePiece(us, PieceType.Pawn)
-  # Get the bitboard of all pawns for the current side
-  let ourPawnsBB = board.pieceBB[ourPawnPieceEnum]
-
-  # Define the piece types pawns can promote to
-  const promotionTargets = [PieceType.Queen, PieceType.Rook, PieceType.Bishop, PieceType.Knight]
-
-  var tempPawnsBB = ourPawnsBB # Mutable copy to iterate with popBit
-  while tempPawnsBB != 0'u64:
-    let fromSq = popBit(tempPawnsBB) # Current pawn's square
-    let r = rankOf(fromSq)          # Current pawn's rank (0-7)
-    let f = fileOf(fromSq)          # Current pawn's file (0-7)
-
-    # 1. Single Pawn Pushes (including promotions)
-    var toSqSingle: Square 
-    var isValidSinglePushSquare = false # Flag to check if a single push destination square is on board
-
-    if us == White:
-      if r < 7: # White pawns not on the 8th rank (rank 7) can push
-        toSqSingle = squareFromCoords(r + 1, f)
-        isValidSinglePushSquare = true
-    else: # us == Black
-      if r > 0: # Black pawns not on the 1st rank (rank 0) can push
-        toSqSingle = squareFromCoords(r - 1, f)
-        isValidSinglePushSquare = true
-            
-    if isValidSinglePushSquare and not getBit(board.allPiecesBB, toSqSingle): # If dest square is on board and empty
-      let destRank = rankOf(toSqSingle)
-      # Check if this push results in a promotion
-      let isPromotion = (us == White and destRank == 7) or (us == Black and destRank == 0)
-      if isPromotion:
-        for promoPt in promotionTargets:
-          ml.addMove(fromSq, toSqSingle, promoPt)
-      else:
-        ml.addMove(fromSq, toSqSingle)
-
-    # 2. Double Pawn Pushes
-    if us == White:
-      if r == 1: # White pawn on its starting rank (2nd rank, index 1)
-        let oneStepSq = squareFromCoords(r + 1, f) # Square on rank 2 (index for 3rd rank)
-        let twoStepsSq = squareFromCoords(r + 2, f) # Square on rank 3 (index for 4th rank)
-        # Both squares must be empty for a double push
-        if not getBit(board.allPiecesBB, oneStepSq) and not getBit(board.allPiecesBB, twoStepsSq):
-          ml.addMove(fromSq, twoStepsSq)
-    else: # us == Black
-      if r == 6: # Black pawn on its starting rank (7th rank, index 6)
-        let oneStepSq = squareFromCoords(r - 1, f) # Square on rank 5 (index for 6th rank)
-        let twoStepsSq = squareFromCoords(r - 2, f) # Square on rank 4 (index for 5th rank)
-        # Both squares must be empty for a double push
-        if not getBit(board.allPiecesBB, oneStepSq) and not getBit(board.allPiecesBB, twoStepsSq):
-          ml.addMove(fromSq, twoStepsSq)
-
-    # 3. Pawn Captures (including promotion captures)
-    let pawnAttackTargetsBB = lookups.pawnAttacks[us][fromSq] # Precomputed attack squares for this pawn
-    var opponentPiecesOnAttackSquares = pawnAttackTargetsBB and board.occupiedBB[them] # Intersect with opponent's pieces
-    
-    while opponentPiecesOnAttackSquares != 0'u64:
-      let toSqCapture = popBit(opponentPiecesOnAttackSquares) # Square where capture occurs
-      let capturedToRank = rankOf(toSqCapture)
-      # Check if this capture results in a promotion
-      let isCapturePromotion = (us == White and capturedToRank == 7) or (us == Black and capturedToRank == 0)
-
-      if isCapturePromotion:
-        for promoPt in promotionTargets:
-          ml.addMove(fromSq, toSqCapture, promoPt, FlagCapture, board.pieceAt(toSqCapture))
-      else:
-        ml.addMove(fromSq, toSqCapture, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSqCapture))
-
-    # 4. En Passant Captures
-    if board.enPassantSquare != NoEnPassantSquareValue: # If an en passant square is set on the board
-      let epTargetSq = Square(board.enPassantSquare) # The square the capturing pawn moves TO
-      
-      if getBit(lookups.pawnAttacks[us][fromSq], epTargetSq):
-        let correctPawnRankForEpWhite = (us == White and r == 4) 
-        let correctEpTargetRankForWhite = (us == White and rankOf(epTargetSq) == 5) 
-        let correctPawnRankForEpBlack = (us == Black and r == 3) 
-        let correctEpTargetRankForBlack = (us == Black and rankOf(epTargetSq) == 2) 
-
-        if (correctPawnRankForEpWhite and correctEpTargetRankForWhite) or
-           (correctPawnRankForEpBlack and correctEpTargetRankForBlack):
-          # Determine the actual pawn being captured in EP
-          var capturedEpPawnSq: Square
-          if us == White: capturedEpPawnSq = epTargetSq - 8
-          else: capturedEpPawnSq = epTargetSq + 8
-          let capturedEpPawn = board.pieceAt(capturedEpPawnSq)
-          ml.addMove(fromSq, epTargetSq, PieceType.NoPieceType, FlagEnPassant or FlagCapture, capturedEpPawn)
-
-proc generateKnightMoves*(board: Board, ml: var MoveList) =
-  ## Generates all pseudo-legal knight moves for the current side to move.
-  let us = board.sideToMove
-  let ourKnightPieceEnum = makePiece(us, PieceType.Knight)
-  var ourKnightsBB = board.pieceBB[ourKnightPieceEnum]
-
-  while ourKnightsBB != 0'u64:
-    let fromSq = popBit(ourKnightsBB)
-    var knightAttackTargetsBB = lookups.knightAttacks[fromSq]
-    let validTargetsBB = knightAttackTargetsBB and not board.occupiedBB[us]
-    
-    var tempTargetsBB = validTargetsBB
-    while tempTargetsBB != 0'u64:
-      let toSq = popBit(tempTargetsBB)
-      if getBit(board.occupiedBB[opponentColor(us)], toSq):
-        ml.addMove(fromSq, toSq, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSq))
-      else:
-        ml.addMove(fromSq, toSq)
-
-proc generateKingMoves*(board: Board, ml: var MoveList) =
-  ## Generates all pseudo-legal king moves for the current side to move (excluding castling).
-  let us = board.sideToMove
-  let ourKingPieceEnum = makePiece(us, PieceType.King)
-  var ourKingBB = board.pieceBB[ourKingPieceEnum]
-
-  if ourKingBB != 0'u64: 
-    let fromSq = popBit(ourKingBB) 
-    var kingAttackTargetsBB = lookups.kingAttacks[fromSq]
-    let validTargetsBB = kingAttackTargetsBB and not board.occupiedBB[us]
-
-    var tempTargetsBB = validTargetsBB
-    while tempTargetsBB != 0'u64:
-      let toSq = popBit(tempTargetsBB)
-      if getBit(board.occupiedBB[opponentColor(us)], toSq):
-        ml.addMove(fromSq, toSq, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSq))
-      else:
-        ml.addMove(fromSq, toSq)
-  # Castling moves are handled separately. 
-
-proc generateSlidingMoves*(board: Board, ml: var MoveList) =
-  ## Generates all pseudo-legal sliding piece moves (Rooks, Bishops, Queens).
-  let us = board.sideToMove
-  let them = opponentColor(us)
-
-  # Generate moves for Rooks (using Magic Bitboards)
-  let ourRookPieceEnum = makePiece(us, PieceType.Rook)
-  var rooksBB = board.pieceBB[ourRookPieceEnum]
-  while rooksBB != 0'u64:
-    let fromSq = popBit(rooksBB)
-    let attackTargetsBB = magicbitboards.getRookAttacks(fromSq, board.allPiecesBB)
-    var validTargetsBB = attackTargetsBB and not board.occupiedBB[us]
-    while validTargetsBB != 0'u64:
-      let toSq = popBit(validTargetsBB)
-      if getBit(board.occupiedBB[them], toSq):
-        ml.addMove(fromSq, toSq, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSq))
-      else:
-        ml.addMove(fromSq, toSq)
-
-  # Generate moves for Bishops (using Magic Bitboards)
-  let ourBishopPieceEnum = makePiece(us, PieceType.Bishop)
-  var bishopsBB = board.pieceBB[ourBishopPieceEnum]
-  while bishopsBB != 0'u64:
-    let fromSq = popBit(bishopsBB)
-    let attackTargetsBB = magicbitboards.getBishopAttacks(fromSq, board.allPiecesBB)
-    var validTargetsBB = attackTargetsBB and not board.occupiedBB[us]
-    while validTargetsBB != 0'u64:
-      let toSq = popBit(validTargetsBB)
-      if getBit(board.occupiedBB[them], toSq):
-        ml.addMove(fromSq, toSq, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSq))
-      else:
-        ml.addMove(fromSq, toSq)
-
-  # Generate moves for Queens (using Magic Bitboards)
-  let ourQueenPieceEnum = makePiece(us, PieceType.Queen)
-  var queensBB = board.pieceBB[ourQueenPieceEnum]
-  while queensBB != 0'u64:
-    let fromSq = popBit(queensBB)
-    let attackTargetsBB = magicbitboards.getQueenAttacks(fromSq, board.allPiecesBB)
-    var validTargetsBB = attackTargetsBB and not board.occupiedBB[us]
-    while validTargetsBB != 0'u64:
-      let toSq = popBit(validTargetsBB)
-      if getBit(board.occupiedBB[them], toSq):
-        ml.addMove(fromSq, toSq, PieceType.NoPieceType, FlagCapture, board.pieceAt(toSq))
-      else:
-        ml.addMove(fromSq, toSq)
-
-# Removed the old generateIterativePieceMoves and its calls as it's fully replaced.
-
-# Constants for specific squares involved in castling.
-# Using coretypes.Square type for clarity, though direct integers would also work.
-const
-  E1: Square = 4
-  F1: Square = 5
-  G1: Square = 6
-  H1: Square = 7
-  C1: Square = 2
-  D1: Square = 3
-  B1: Square = 1
-  A1: Square = 0
-  E8: Square = 60
-  F8: Square = 61
-  G8: Square = 62
-  H8: Square = 63
-  C8: Square = 58
-  D8: Square = 59
-  B8: Square = 57
-  A8: Square = 56
-
-proc generateCastlingMoves*(board: Board, ml: var MoveList) =
-  ## Generates pseudo-legal castling moves.
-  ## Does NOT currently check if the king passes through or lands on an attacked square.
-  ## This check (isSquareAttacked) will be added later.
-  let us = board.sideToMove
-
-  if us == White:
-    # White King-Side Castling (O-O)
-    if (board.castlingRights and WKC) != 0: # Check if White King-Side castling right exists
-      # Check if squares F1 and G1 are empty
-      if (board.allPiecesBB and ((1'u64 shl F1) or (1'u64 shl G1))) == 0:
-        if not board.isSquareAttacked(E1, Black) and 
-           not board.isSquareAttacked(F1, Black) and 
-           not board.isSquareAttacked(G1, Black):
-          ml.addMove(E1, G1, PieceType.NoPieceType, FlagCastle)
-
-    # White Queen-Side Castling (O-O-O)
-    if (board.castlingRights and WQC) != 0: # Check if White Queen-Side castling right exists
-      # Check if squares D1, C1, and B1 are empty
-      if (board.allPiecesBB and ((1'u64 shl D1) or (1'u64 shl C1) or (1'u64 shl B1))) == 0:
-        if not board.isSquareAttacked(E1, Black) and 
-           not board.isSquareAttacked(D1, Black) and 
-           not board.isSquareAttacked(C1, Black):
-          ml.addMove(E1, C1, PieceType.NoPieceType, FlagCastle)
-  else: # us == Black
-    # Black King-Side Castling (o-o)
-    if (board.castlingRights and BKC) != 0: # Check if Black King-Side castling right exists
-      # Check if squares F8 and G8 are empty
-      if (board.allPiecesBB and ((1'u64 shl F8) or (1'u64 shl G8))) == 0:
-        if not board.isSquareAttacked(E8, White) and 
-           not board.isSquareAttacked(F8, White) and 
-           not board.isSquareAttacked(G8, White):
-          ml.addMove(E8, G8, PieceType.NoPieceType, FlagCastle)
-
-    # Black Queen-Side Castling (o-o-o)
-    if (board.castlingRights and BQC) != 0: # Check if Black Queen-Side castling right exists
-      # Check if squares D8, C8, and B8 are empty
-      if (board.allPiecesBB and ((1'u64 shl D8) or (1'u64 shl C8) or (1'u64 shl B8))) == 0:
-        if not board.isSquareAttacked(E8, White) and 
-           not board.isSquareAttacked(D8, White) and 
-           not board.isSquareAttacked(C8, White):
-          ml.addMove(E8, C8, PieceType.NoPieceType, FlagCastle)
-
-proc generatePseudoLegalMoves*(board: Board, ml: var MoveList) =
-  ## Generates all pseudo-legal moves for the current side to move.
-  ## This includes pawn, knight, king, sliding pieces (rooks, bishops, queens),
-  ## and castling moves.
-  ## The resulting list in 'ml' needs to be filtered for legality (king not in check).
-
-  ml.count = 0 # Clear the move list
-
-  generatePawnMoves(board, ml)
-  generateKnightMoves(board, ml)
-  generateKingMoves(board, ml)    # Generates king moves excluding castling
-  generateSlidingMoves(board, ml) # Generates rook, bishop, queen moves
-  generateCastlingMoves(board, ml) # Generates castling moves with attack checks
-
-proc generateLegalMoves*(board: Board, ml: var MoveList) =
-  ## Generates all strictly legal moves for the current side to move.
-  ## It does this by generating pseudo-legal moves and then filtering them
-  ## by making each move on a temporary board and checking if the king
-  ## of the player who moved is left in check.
-
-  var tempBoard = board # Create a copy of the board to make/unmake moves on
-  var pseudoLegalMoves: MoveList
-  
-  # 1. Generate all pseudo-legal moves for the current position on the tempBoard
-  generatePseudoLegalMoves(tempBoard, pseudoLegalMoves)
-  
-  # 2. Clear the output move list
-  ml.count = 0
-  
-  # 3. Iterate through pseudo-legal moves and filter for legality
-  for i in 0 ..< pseudoLegalMoves.count:
-    let currentPseudoMove = pseudoLegalMoves.moves[i]
-    
-    # a. Store original state from tempBoard BEFORE making the move
-    #    These are needed for unmakeMove.
-    let originalCastlingRights = tempBoard.castlingRights
-    let originalEnPassantSquare = tempBoard.enPassantSquare
-    let originalHalfMoveClock = tempBoard.halfMoveClock
-    let originalZobristKey = tempBoard.currentZobristKey
-    
-    # b. Call makeMove on tempBoard. 
-    #    makeMove will update tempBoard and return true if the king of the player
-    #    who made the move is NOT left in check.
-    let isLegalRegardingSelfCheck = tempBoard.makeMove(currentPseudoMove)
-    
-    # c. If makeMove returns true, the move is legal regarding self-check.
-    if isLegalRegardingSelfCheck:
-      ml.addMove(
-        currentPseudoMove.fromSquare, 
-        currentPseudoMove.toSquare, 
-        currentPseudoMove.promotionPiece, 
-        currentPseudoMove.flags,
-        currentPseudoMove.capturedPiece
-      )
-      
-    # d. Call unmakeMove to restore tempBoard to its state BEFORE currentPseudoMove was made.
-    #    This is crucial so the next pseudo-legal move is tested on the original state.
-    tempBoard.unmakeMove(
-      currentPseudoMove, 
-      originalCastlingRights, 
-      originalEnPassantSquare, 
-      originalHalfMoveClock, 
-      originalZobristKey
+func addMove(
+    moves: var openArray[Move],
+    index: var int,
+    source, target, enPassantTarget: Square,
+    moved, captured, promoted: Piece,
+    castled, capturedEnPassant: bool,
+) =
+  if moves.len > index:
+    moves[index].create(
+      source, target, enPassantTarget, moved, captured, promoted, castled,
+      capturedEnPassant,
     )
-    # After unmakeMove, tempBoard should be identical to its state at the start of this loop iteration.
+    index += 1
+
+func generateCaptures(
+    position: Position, piece: Piece, moves: var openArray[Move]
+): int =
+  result = 0
+  for source in position[position.us] and position[piece]:
+    for target in attackMask(piece, source, position.occupancy) and
+        position[position.enemy]:
+      for captured in pawn .. king:
+        if not empty(position[captured] and target.toBitboard):
+          moves.addMove(
+            result,
+            source = source,
+            target = target,
+            enPassantTarget = noSquare,
+            moved = piece,
+            captured = captured,
+            promoted = noPiece,
+            castled = false,
+            capturedEnPassant = false,
+          )
+          break
+
+func generateQuiets(position: Position, piece: Piece, moves: var openArray[Move]): int =
+  let occupancy = position.occupancy
+  result = 0
+  for source in position[position.us] and position[piece]:
+    for target in attackMask(piece, source, occupancy) and not occupancy:
+      moves.addMove(
+        result,
+        source = source,
+        target = target,
+        enPassantTarget = noSquare,
+        moved = piece,
+        captured = noPiece,
+        promoted = noPiece,
+        castled = false,
+        capturedEnPassant = false,
+      )
+
+func left(b: Bitboard): Bitboard =
+  b shr 1
+func right(b: Bitboard): Bitboard =
+  b shl 1
+func up(b: Bitboard, c: Color): Bitboard =
+  if c == white:
+    b shl 8
+  else:
+    b shr 8
+
+func pawnLeftAttack(pawns: Bitboard, color: Color): Bitboard =
+  (pawns and not files[a1]).up(color).left
+func pawnRightAttack(pawns: Bitboard, color: Color): Bitboard =
+  (pawns and not files[h1]).up(color).right
+
+const firstPawnPushRank = [
+  white: homeRank[white].up(white).up(white), black: homeRank[black].up(black).up(black)
+]
+
+func generatePawnCaptures(position: Position, moves: var openArray[Move]): int =
+  result = 0
+
+  proc addPromotions(
+      moves: var openArray[Move],
+      source, target: Square,
+      counter: var int,
+      captured = noPiece,
+  ) =
+    for promoted in knight .. queen:
+      moves.addMove(
+        counter,
+        source = source,
+        target = target,
+        enPassantTarget = noSquare,
+        moved = pawn,
+        captured = captured,
+        promoted = promoted,
+        castled = false,
+        capturedEnPassant = false,
+      )
+
+  let
+    us = position.us
+    enemy = position.enemy
+    potentialTargets = position[enemy] or position.enPassantTarget.toBitboard
+  for (targets, dir) in [
+    (position[pawn, us].pawnLeftAttack(us) and potentialTargets, 1),
+    (position[pawn, us].pawnRightAttack(us) and potentialTargets, -1),
+  ]:
+    for target in targets:
+      let source = (target.int + dir).Square.up(enemy)
+      var
+        captured = noPiece
+        capturedEnPassant = false
+
+      for piece in pawn .. king:
+        if not empty(position[enemy, piece] and target.toBitboard):
+          captured = piece
+          break
+
+      if captured == noPiece:
+        capturedEnPassant = true
+        captured = pawn
+
+      if target notin a2 .. h7:
+        moves.addPromotions(source, target, result, captured)
+      else:
+        moves.addMove(
+          result,
+          source = source,
+          target = target,
+          enPassantTarget = noSquare,
+          moved = pawn,
+          captured = captured,
+          promoted = noPiece,
+          castled = false,
+          capturedEnPassant = capturedEnPassant,
+        )
+
+  # quiet promotions
+  for target in position[pawn, us].up(us) and homeRank[enemy] and not position.occupancy:
+    let source = target.up(enemy)
+    moves.addPromotions(source, target, result)
+
+func generatePawnQuiets(position: Position, moves: var openArray[Move]): int =
+  result = 0
+
+  let
+    us = position.us
+    enemy = position.enemy
+    occupancy = position.occupancy
+
+  let targets = position[pawn, us].up(us) and not (occupancy or homeRank[enemy])
+  for target in targets:
+    let source = target.up(enemy)
+    moves.addMove(
+      result,
+      source = source,
+      target = target,
+      enPassantTarget = noSquare,
+      moved = pawn,
+      captured = noPiece,
+      promoted = noPiece,
+      castled = false,
+      capturedEnPassant = false,
+    )
+
+  let doubleTargets = (targets and firstPawnPushRank[us]).up(us) and not occupancy
+  for target in doubleTargets:
+    let
+      enPassantTarget = target.up(enemy)
+      source = enPassantTarget.up(enemy)
+    moves.addMove(
+      result,
+      source = source,
+      target = target,
+      enPassantTarget = enPassantTarget,
+      moved = pawn,
+      captured = noPiece,
+      promoted = noPiece,
+      castled = false,
+      capturedEnPassant = false,
+    )
+
+# movegen.nim
+func generateCastlingMoves(position: Position, moves: var openArray[Move]): int =
+  let
+    us = position.us
+    occupancy = position.occupancy
+    kingSource = (position[us] and position[king]).toSquare
+
+  result = 0
+
+  # ---->>>> ADD THIS CRUCIAL CHECK <<<<----
+  if kingSource == noSquare:
+    # This indicates a serious issue, like a missing king, or it's just the end of the game
+    # and no king is found (though a well-formed position should always have kings unless
+    # it's a test position specifically without one).
+    # For robustness, simply return 0 moves if the king isn't on the board.
+    # If this happens in a normal game, there's a deeper bug in makeMove/unmakeMove.
+    # You might want to add a debug assertion here if compiled with -d:debug:
+    # assert false, "kingSource is noSquare in generateCastlingMoves! Position: " & $position
+    return 0
+  # ---->>>> END OF ADDED CHECK <<<<----
+
+  for (castlingSide, rookSource) in position.rookSource[us].pairs:
+    # castling is still allowed
+    if rookSource == noSquare:
+      continue
+
+    # All necessary squares are empty
+    # Now kingSource is guaranteed not to be noSquare here.
+    # rookSource is also guaranteed not to be noSquare.
+    if not empty(blockSensitive(us, castlingSide, kingSource, rookSource) and occupancy):
+      continue
+
+    # king will never be in check
+    var kingInCheck = false
+    # ---->>>> ADD A CHECK FOR kingSource BEFORE THIS LOOP TOO <<<<----
+    # Although the above check should cover it, belt and braces for checkSensitive access.
+    # No, checkSensitive uses kingSource as an index, so the earlier check IS VITAL.
+    for checkSquare in checkSensitive[us][castlingSide][kingSource]: # kingSource used as index
+      # ---->>>> ADD A CHECK FOR checkSquare <<<<----
+      if checkSquare == noSquare: # Defensive check if checkSensitive could contain noSquare
+          # This would indicate an issue in checkSensitive initialization
+          # assert false, "checkSensitive table contains noSquare!"
+          continue 
+      if position.isAttacked(us, checkSquare):
+        kingInCheck = true
+        break
+    if kingInCheck:
+      continue
+
+    moves.addMove(
+      result,
+      source = kingSource, # Guaranteed valid
+      target = rookSource, # Guaranteed valid
+      enPassantTarget = noSquare,
+      moved = king,
+      captured = noPiece,
+      promoted = noPiece,
+      castled = true,
+      capturedEnPassant = false,
+    )
+  # result is implicitly returned
+
+func generateCaptures*(position: Position, moves: var openArray[Move]): int =
+  ## Generates pseudo-legal capture moves and writes the into the `moves` array, starting from index 0.
+  ## This function will silently stop generating moves if the `moves` array fills up.
+  result = position.generatePawnCaptures(moves)
+  for piece in knight .. king:
+    result += position.generateCaptures(piece, moves.toOpenArray(result, moves.len - 1))
+
+func generateQuiets*(position: Position, moves: var openArray[Move]): int =
+  ## Generates pseudo-legal quiet moves and writes the into the `moves` array, starting from index 0.
+  ## This function will silently stop generating moves if the `moves` array fills up.
+  result = position.generatePawnQuiets(moves)
+  result += position.generateCastlingMoves(moves.toOpenArray(result, moves.len - 1))
+  for piece in knight .. king:
+    result += position.generateQuiets(piece, moves.toOpenArray(result, moves.len - 1))
+
+func generateMoves*(position: Position, moves: var openArray[Move]): int =
+  ## Generates pseudo-legal moves and writes the into the `moves` array, starting from index 0.
+  ## This function will silently stop generating moves if the `moves` array fills up.
+  result = position.generateCaptures(moves)
+  result += position.generateQuiets(moves.toOpenArray(result, moves.len - 1))

@@ -1,169 +1,250 @@
-import coretypes
-import board
-import move
-import movegen
-import evaluation
-import bitboard
+# search.nim
 
-proc kingSquare(board: Board, color: Color): Square =
-  ## Finds the square of the king for the given color.
-  let kingPiece = makePiece(color, PieceType.King)
-  var kingBB = board.pieceBB[kingPiece]
-  if kingBB != 0'u64:
-    return popBit(kingBB)
+import std/[algorithm, times, sequtils] 
+import types, position, move, movegen, evaluation 
+
+# --- Type Definitions ---
+# Moved SearchResult to the top and export it
+type
+  SearchResult* = object # Exported for uci.nim
+    bestMove*: Move
+    score*: Value
+    pv*: seq[Move]
+    nodes*: uint64
+  InfoCallback* = proc(depth: Ply, score: Value, iterNodes: uint64, totalTimeMs: int, pv: seq[Move])
+  SearchStoppedError* = object of CatchableError # Inherit from CatchableError
+
+const
+  MaxSearchPly* = 64.Ply    # Max ply depth for search functions (not necessarily IDS depth)
+                            # Explicitly .Ply to ensure type
+  MaxMovesBuffer* = 320     # Max pseudo-legal moves buffer
+  NodeCheckInterval = 2048  # Check time/nodes every N nodes
+
+var
+  nodesSearchedGlobal*: uint64    # Exported for uci.nim
+  searchStopTimeEpochGlobal: float 
+  searchMaxNodesGlobal: uint64   
+  searchCancelledFlagGlobal*: bool # Exported for uci.nim 'stop'
+
+# --- Move Ordering ---
+proc getMoveOrderScore(m: Move): int =
+  if m.isCapture:
+    result = 2000 + pieceValues[m.captured].int - pieceValues[m.moved].int
+  elif m.isPromotion:
+    result = 1000 + pieceValues[m.promoted].int
   else:
-    # This should never happen in a valid position
-    return Square(0)
+    result = 0
 
-proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int = 0): int =
-  ## Negamax variant of Alpha-Beta search.
-  ## Returns the evaluation score from the perspective of the side to move.
-  
-  # Base Case: If depth == 0, call evaluate(board) and return the score
-  if depth == 0:
-    return evaluate(board)
-  
-  # Initialize maxEval = -Infinity (a very small number like -30000)
-  var maxEval = -30000
-  var currentAlpha = alpha
-  
-  # Generate legal moves for the current board state
-  var moveList: MoveList
-  generateLegalMoves(board, moveList)
-  
-  # If moveList.count == 0 (no legal moves)
-  if moveList.count == 0:
-    let kingSq = kingSquare(board, board.sideToMove)
-    let opponentColor = if board.sideToMove == White: Black else: White
+proc sortMoves(moves: var openArray[Move]; count: int; pvMove: Move = noMove) =
+  if count <= 1: return # No need to sort 0 or 1 elements
+
+  proc cmpMoves(a, b: Move): int =
+    if pvMove != noMove: 
+      if a == pvMove: return -1
+      if b == pvMove: return 1
     
-    # Check if king is in check
-    if isSquareAttacked(board, kingSq, opponentColor):
-      # It's checkmate. Return -KingValue + ply (score penalized by ply to prefer faster mates)
-      return -KingValue + ply
-    else:
-      # It's stalemate. Return 0
-      return 0
+    let scoreA = getMoveOrderScore(a)
+    let scoreB = getMoveOrderScore(b)
+    if scoreA > scoreB: return -1 
+    if scoreA < scoreB: return 1
+    return 0
   
-  # Iterate through each move in moveList
-  for i in 0 ..< moveList.count:
-    let currentMove = moveList.moves[i]
+  # Use system.sort for slices. moves[0 ..< count] creates a Slice.
+  algorithm.sort(moves.toOpenArray(0, count-1), cmpMoves)
+
+# --- Quiescence Search (QSearch) ---
+proc qSearch(pos: Position, plyFromRoot: Ply, alphaOrig: Value, beta: Value, currentPV: var seq[Move]): Value =
+  inc nodesSearchedGlobal
+  currentPV = @[] 
+
+  if (nodesSearchedGlobal mod NodeCheckInterval == 0):
+    if searchCancelledFlagGlobal or 
+       (epochTime() >= searchStopTimeEpochGlobal) or 
+       (nodesSearchedGlobal >= searchMaxNodesGlobal):
+      raise newException(SearchStoppedError, "QSearch: Time/nodes up or cancelled")
+
+  var alpha = alphaOrig
+  alpha = max(alpha, -valueInfinity + plyFromRoot.Value) 
+  var currentBeta = min(beta, valueInfinity - (plyFromRoot.Value + 1.Ply).Value) # Ensure Ply arithmetic
+  if alpha >= currentBeta:
+    return alpha
+
+  let standPatScore = evaluate(pos)
+
+  if standPatScore >= currentBeta:
+    return currentBeta 
+
+  if standPatScore > alpha:
+    alpha = standPatScore
+
+  var moveList: array[MaxMovesBuffer, Move]
+  let numMoves = generateCaptures(pos, moveList) 
+
+  sortMoves(moveList, numMoves) 
+
+  for i in 0 ..< numMoves:
+    let m = moveList[i]
     
-    # Store state for unmaking
-    let originalCastlingRights = board.castlingRights
-    let originalEnPassantSquare = board.enPassantSquare
-    let originalHalfMoveClock = board.halfMoveClock
-    let originalZobristKey = board.currentZobristKey
+    if not pos.isLegal(m): 
+      continue
+
+    var childPV: seq[Move]
+    let newPos = pos.doMove(m) 
+    let score = -qSearch(newPos, plyFromRoot + 1.Ply, -currentBeta, -alpha, childPV) # Ensure Ply arithmetic
+
+    if score >= currentBeta:
+      return currentBeta 
+
+    if score > alpha:
+      alpha = score
+      currentPV = @[m] & childPV 
+  
+  return alpha
+
+# --- Negamax with Alpha-Beta Pruning ---
+proc negamax(pos: Position, depth: Ply, plyFromRoot: Ply, alphaOrig: Value, beta: Value, currentPV: var seq[Move]): Value =
+  inc nodesSearchedGlobal
+  currentPV = @[] 
+
+  if depth <= 0.Ply: # Explicitly check against Ply(0)
+    return qSearch(pos, plyFromRoot, alphaOrig, beta, currentPV)
+
+  if (nodesSearchedGlobal mod NodeCheckInterval == 0):
+    if searchCancelledFlagGlobal or 
+       (epochTime() >= searchStopTimeEpochGlobal) or 
+       (nodesSearchedGlobal >= searchMaxNodesGlobal):
+      raise newException(SearchStoppedError, "Negamax: Time/nodes up or cancelled")
+
+  var alpha = alphaOrig
+  alpha = max(alpha, -valueInfinity + plyFromRoot.Value)
+  var currentBeta = min(beta, valueInfinity - (plyFromRoot.Value + 1.Ply).Value) # Ensure Ply arithmetic
+  if alpha >= currentBeta:
+    return alpha
+
+  var moveList: array[MaxMovesBuffer, Move]
+  let numMoves = generateMoves(pos, moveList) 
+  sortMoves(moveList, numMoves)
+
+  var bestScore = -valueInfinity
+  var foundLegalMove = false
+
+  for i in 0 ..< numMoves:
+    let m = moveList[i]
+
+    if not pos.isLegal(m):
+      continue
     
-    # Make the move
-    if board.makeMove(currentMove):
-      # Recursive call: eval = -negamax(board, depth - 1, -beta, -alpha)
-      # (Negating alpha/beta and result for negamax)
-      let eval = -negamax(board, depth - 1, -beta, -currentAlpha, ply + 1)
-      
-      # Unmake the move
-      board.unmakeMove(
-        currentMove,
-        originalCastlingRights,
-        originalEnPassantSquare,
-        originalHalfMoveClock,
-        originalZobristKey
-      )
-      
-      # maxEval = max(maxEval, eval)
-      if eval > maxEval:
-        maxEval = eval
-      
-      # alpha = max(alpha, eval)
-      if eval > currentAlpha:
-        currentAlpha = eval
-      
-      # If alpha >= beta, break the loop (beta cutoff)
-      if currentAlpha >= beta:
-        break
-    else:
-      # Move was illegal (shouldn't happen with generateLegalMoves, but handle gracefully)
-      board.unmakeMove(
-        currentMove,
-        originalCastlingRights,
-        originalEnPassantSquare,
-        originalHalfMoveClock,
-        originalZobristKey
-      )
+    foundLegalMove = true
+    var childPV: seq[Move]
+    let newPos = pos.doMove(m)
+    # Ensure Ply arithmetic for depth and plyFromRoot
+    let score = -negamax(newPos, depth - 1.Ply, plyFromRoot + 1.Ply, -currentBeta, -alpha, childPV)
+
+    if score > bestScore:
+      bestScore = score
+      currentPV = @[m] & childPV 
+
+    if bestScore > alpha:
+      alpha = bestScore
+    
+    if alpha >= currentBeta: 
+      return currentBeta 
   
-  # Return maxEval
-  return maxEval
-
-proc searchRoot*(board: var Board, depth: int): (Move, int) =
-  ## Orchestrates the search from the root position.
-  ## Returns the best move found and its score.
-
-  var bestScore = -30001 # Slightly lower than negamax's -Infinity to ensure any valid score is better
-  var bestMove: Move 
-  # Initialize bestMove to a default/invalid state. 
-  # Nim's default object initialization should be fine.
-  # bestMove.fromSquare, bestMove.toSquare will be 0 (A1) by default.
-  # bestMove.flags will be 0.
-
-  var currentAlpha = -30000
-  let currentBeta = 30000 # Beta is constant for the root search over all moves
-
-  var rootMoves: MoveList
-  generateLegalMoves(board, rootMoves)
-
-  if rootMoves.count == 0:
-    # No legal moves (checkmate or stalemate)
-    # The negamax function itself handles scoring for these terminal nodes.
-    # Here, we just indicate no move can be made.
-    # The score could be determined by calling negamax at depth 0 or a shallow depth.
-    # For simplicity, as per prompt "return invalid move, 0 score" for no moves.
-    # However, it's better to reflect the actual game outcome.
-    # Let's call negamax with current depth to get the terminal score.
-    let terminalScore = negamax(board, depth, currentAlpha, currentBeta, 0) # ply 0 for root
-    return (bestMove, terminalScore) # bestMove is still the default invalid one
-
-  # If only one move, the loop will execute once and pick it.
-  # No special handling needed for "if only one move, play it".
-
-  for i in 0 ..< rootMoves.count:
-    let currentRootMove = rootMoves.moves[i]
-
-    let originalCastlingRights = board.castlingRights
-    let originalEnPassantSquare = board.enPassantSquare
-    let originalHalfMoveClock = board.halfMoveClock
-    let originalZobristKey = board.currentZobristKey
-
-    if board.makeMove(currentRootMove):
-      # Call negamax for the opponent. Depth is depth-1.
-      # Ply starts at 1 for children of the root.
-      let score = -negamax(board, depth - 1, -currentBeta, -currentAlpha, 1)
-      
-      board.unmakeMove(
-        currentRootMove,
-        originalCastlingRights,
-        originalEnPassantSquare,
-        originalHalfMoveClock,
-        originalZobristKey
-      )
-
-      if score > bestScore:
-        bestScore = score
-        bestMove = currentRootMove
-      
-      if score > currentAlpha: # Update alpha for subsequent sibling nodes
-        currentAlpha = score
-      
-      # No beta cutoff at root, as we want to search all root moves to find the absolute best.
-      # The alpha update helps narrow the window for deeper searches in subsequent root moves.
-
+  if not foundLegalMove:
+    let kingSq = firstOne(pos[king] and pos[pos.us])
+    if kingSq != noSquare and pos.isAttacked(pos.us, kingSq): 
+      return -checkmateValue(plyFromRoot) 
     else:
-      # This should not happen if generateLegalMoves is correct.
-      # If it does, unmake and continue.
-      board.unmakeMove(
-        currentRootMove,
-        originalCastlingRights,
-        originalEnPassantSquare,
-        originalHalfMoveClock,
-        originalZobristKey
-      )
+      return 0 # Stalemate
   
-  return (bestMove, bestScore)
+  return bestScore
+
+
+# --- Iterative Deepening Search (IDS) ---
+proc iterativeDeepening*(initialPos: Position, maxSearchDepthUci: Ply, timeForMoveSec: float, 
+                         maxNodesAllowed: uint64, infoCb: InfoCallback): SearchResult =
+  
+  nodesSearchedGlobal = 0
+  searchCancelledFlagGlobal = false 
+  searchMaxNodesGlobal = if maxNodesAllowed == 0: high(uint64) else: maxNodesAllowed
+  
+  let searchStartTimeEpoch = epochTime()
+  searchStopTimeEpochGlobal = searchStartTimeEpoch + timeForMoveSec
+
+  var overallBestMove = noMove # from types.nim (via move.nim export)
+  var overallBestScore = -valueInfinity
+  var overallPV: seq[Move] = @[]
+  
+  let effectiveMaxDepth = min(maxSearchDepthUci, MaxSearchPly)
+
+  for currentDepthIter in 1.Ply .. effectiveMaxDepth: # Changed var name to avoid confusion
+    var iterationBestScore = -valueInfinity 
+    var iterationBestMoveAtRoot = noMove
+    var iterationPV: seq[Move] = @[] # PV for this specific iteration/depth
+    
+    var nodesAtIterationStart = nodesSearchedGlobal
+
+    try:
+      var rootAlpha = -valueInfinity
+      var rootBeta = valueInfinity 
+
+      var rootMoveList: array[MaxMovesBuffer, Move]
+      let numRootMoves = generateMoves(initialPos, rootMoveList)
+
+      var pvMoveForThisIteration = noMove
+      if overallPV.len > 0:
+        pvMoveForThisIteration = overallPV[0]
+      
+      sortMoves(rootMoveList, numRootMoves, pvMoveForThisIteration)
+
+      for i in 0 ..< numRootMoves:
+        let mRoot = rootMoveList[i]
+        
+        if not initialPos.isLegal(mRoot):
+          continue
+
+        var childPV: seq[Move]
+        let newPos = initialPos.doMove(mRoot)
+        
+        # Explicit Ply type for subtractions/additions if direct arithmetic was problematic
+        let depthForNegamax = currentDepthIter - 1.Ply 
+        let plyFromRootForNegamax = 1.Ply 
+        let currentMoveScore = -negamax(newPos, depthForNegamax, plyFromRootForNegamax, -rootBeta, -rootAlpha, childPV)
+        
+        if searchCancelledFlagGlobal or 
+           (epochTime() >= searchStopTimeEpochGlobal) or 
+           (nodesSearchedGlobal >= searchMaxNodesGlobal):
+            if iterationBestMoveAtRoot != noMove: 
+                overallBestMove = iterationBestMoveAtRoot
+                overallBestScore = iterationBestScore 
+                overallPV = iterationPV 
+            raise newException(SearchStoppedError, "IDS: Interrupted mid-root-search")
+
+        if currentMoveScore > rootAlpha:
+          rootAlpha = currentMoveScore
+          iterationBestMoveAtRoot = mRoot
+          iterationPV = @[mRoot] & childPV # This is the PV for the current best root move at this depth
+
+          # Update overall bests, as this is the best line found *so far* at any depth
+          overallBestMove = iterationBestMoveAtRoot
+          overallBestScore = rootAlpha # rootAlpha is the score for this iteration's best line
+          overallPV = iterationPV      # Store the PV from this iteration
+        
+      iterationBestScore = rootAlpha 
+
+      let timeTakenMs = ((epochTime() - searchStartTimeEpoch) * 1000.0).int
+      if iterationBestMoveAtRoot != noMove: 
+        # Pass currentDepthIter as Ply. Iteration nodes are nodes for this iteration only.
+        infoCb(currentDepthIter, iterationBestScore, nodesSearchedGlobal - nodesAtIterationStart, timeTakenMs, overallPV) # Use overallPV for info string
+      
+      if searchCancelledFlagGlobal or 
+         (epochTime() >= searchStopTimeEpochGlobal) or 
+         (nodesSearchedGlobal >= searchMaxNodesGlobal):
+        break 
+
+      if abs(overallBestScore) >= valueCheckmate - effectiveMaxDepth.Value :
+        break 
+    except SearchStoppedError:
+      break 
+    
+  return SearchResult(bestMove: overallBestMove, score: overallBestScore, pv: overallPV, nodes: nodesSearchedGlobal)
