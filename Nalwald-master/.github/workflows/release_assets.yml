@@ -1,0 +1,78 @@
+name: Release Assets
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  release_assets:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        branch: [master]
+        target:
+          - os: linux
+            cpu: amd64
+            nim_branch: devel
+          - os: windows
+            cpu: amd64
+            nim_branch: devel
+          - os: macos
+            cpu: amd64
+            nim_branch: devel
+        include:
+          - target:
+              os: linux
+            builder: ubuntu-22.04
+          - target:
+              os: windows
+            builder: windows-2022
+          - target:
+              os: macos
+            builder: macos-14
+
+    name: '${{ matrix.target.os }}-${{ matrix.target.cpu }}-nim-${{ matrix.target.nim_branch }} (${{ matrix.branch }})'
+    runs-on: ${{ matrix.builder }}
+    env:
+      NIM_DIR: nim-${{ matrix.target.nim_branch }}-${{ matrix.target.cpu }}
+      NIM_BRANCH: ${{ matrix.target.nim_branch }}
+      NIM_ARCH: ${{ matrix.target.cpu }}
+    steps:
+      - name: Checkout Nalwald
+        uses: actions/checkout@v4
+        with:
+          path: Nalwald
+          submodules: false
+
+      - name: Setup Nim
+        uses: alaviss/setup-nim@f81f2a6d1505ab32f440ec9d8adbb81e949d3bf0 # 0.1.1
+        with:
+          path: 'nim'
+          version: ${{ matrix.target.nim_branch }}
+          architecture: ${{ matrix.target.cpu }}
+
+      - name: Build binary
+        shell: bash
+        run: |
+          cd Nalwald
+          nimble install malebolgia@1.3.2
+          nimble install zippy@0.10.16
+          if [ ${{ runner.os }} = 'macOS' ]; then
+            nim default Nalwald
+            nim modern Nalwald
+          else
+            nim default --passL:"-static" Nalwald
+            nim modern --passL:"-static" Nalwald
+          fi
+          mv bin/Nalwald${{ runner.os == 'Windows' && '.exe' || '' }} bin/Nalwald-${{ github.event.release.tag_name }}-${{ matrix.target.os }}-${{ matrix.target.cpu }}${{ runner.os == 'Windows' && '.exe' || '' }}
+          mv bin/Nalwald-modern${{ runner.os == 'Windows' && '.exe' || '' }} bin/Nalwald-${{ github.event.release.tag_name }}-${{ matrix.target.os }}-${{ matrix.target.cpu }}-modern${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # 2.2.1
+        with:
+          files: |
+            ./Nalwald/bin/Nalwald-${{ github.event.release.tag_name }}-${{ matrix.target.os }}-${{ matrix.target.cpu }}${{ runner.os == 'Windows' && '.exe' || '' }}
+            ./Nalwald/bin/Nalwald-${{ github.event.release.tag_name }}-${{ matrix.target.os }}-${{ matrix.target.cpu }}-modern${{ runner.os == 'Windows' && '.exe' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

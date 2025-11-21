@@ -1,0 +1,49 @@
+# Nim specific
+nimcache/
+nimblecache/
+htmldocs/
+
+# Binaries
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+
+# Nim compiler generated files
+*.nim.c
+*.nim.h
+*.nim.o
+*.nim.cfg
+*.nim.cpp
+*.nim.js
+
+# Nimble generated files
+
+
+# Editor specific files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Profiling and debugging files
+*.prof
+*.trace
+*.log
+
+# Test artifacts
+tests/nimcache/
+tests/*.out
+
+# Custom build directories
+build/
+dist/
