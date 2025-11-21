@@ -210,6 +210,37 @@ proc isSquareAttacked*(board: Board, sq: Square, attacker: Color): bool {.gcsafe
   if (getBishopAttacks(sq, board.allPiecesBB) and bishopQueens) != 0: return true
 
   if (getBishopAttacks(sq, board.allPiecesBB) and bishopQueens) != 0: return true
+  
+proc hasSufficientMaterial*(board: Board, color: Color): bool =
+  let nonPawn = board.pieceBB[makePiece(color, Knight)] or
+                board.pieceBB[makePiece(color, Bishop)] or
+                board.pieceBB[makePiece(color, Rook)] or
+                board.pieceBB[makePiece(color, Queen)]
+  return nonPawn != 0
+
+proc makeNullMove*(board: var Board) =
+  let state = GameState(
+    castlingRights: board.castlingRights,
+    enPassantSquare: board.enPassantSquare,
+    halfMoveClock: board.halfMoveClock,
+    zobristKey: board.currentZobristKey,
+    capturedPiece: NoPiece
+  )
+  board.history.add(state)
+  
+  board.enPassantSquare = NoSquare
+  board.sideToMove = if board.sideToMove == White: Black else: White
+  
+  # Update Zobrist Key (Incremental would be faster, but full regen is safer for now)
+  board.currentZobristKey = board.generateZobristKey()
+
+proc unmakeNullMove*(board: var Board) =
+  let state = board.history.pop()
+  board.castlingRights = state.castlingRights
+  board.enPassantSquare = state.enPassantSquare
+  board.halfMoveClock = state.halfMoveClock
+  board.currentZobristKey = state.zobristKey
+  board.sideToMove = if board.sideToMove == White: Black else: White
 
 proc unmakeMove*(board: var Board, move: Move) =
   # Restore State

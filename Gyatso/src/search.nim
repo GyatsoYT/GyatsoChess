@@ -9,6 +9,7 @@ type
     stopFlag*: ptr bool
 
 var searchTimeLimit*: TimeLimit
+var killerMoves* {.threadvar.}: array[MaxPly, array[2, Move]]
 
 proc checkTime*() =
   if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return
@@ -87,6 +88,24 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int): int
     return qSearch(board, alpha, beta, ply)
     
   var ml: MoveList
+  
+  # Null Move Pruning
+  if depth >= 3 and (searchTimeLimit.stopFlag == nil or not searchTimeLimit.stopFlag[]):
+    let us = board.sideToMove
+    let them = if us == White: Black else: White
+    let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
+    
+    if not isSquareAttacked(board, kingSq.Square, them) and hasSufficientMaterial(board, us):
+      board.makeNullMove()
+      let R = 2
+      let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1)
+      board.unmakeNullMove()
+      
+      if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return 0
+      
+      if score >= beta:
+        return beta
+        
   generateLegalMoves(board, ml)
   
   if ml.count == 0:
@@ -108,6 +127,13 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int): int
   # Score Moves
   for i in 0 ..< ml.count:
     ml.scores[i] = scoreMove(board, ml.moves[i], ttMove)
+    
+    # Killer Moves
+    if ml.scores[i] == 0: # Only boost quiet moves (score 0 from scoreMove)
+      if ml.moves[i] == killerMoves[ply][0]:
+        ml.scores[i] = 900
+      elif ml.moves[i] == killerMoves[ply][1]:
+        ml.scores[i] = 850
   
   for i in 0 ..< ml.count:
     let m = pickMove(ml, i)
@@ -123,6 +149,11 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int): int
       alpha = maxEval
       
     if alpha >= beta:
+      # Killer Move Heuristic
+      if not m.isCapture and not m.isPromotion:
+        if killerMoves[ply][0] != m:
+          killerMoves[ply][1] = killerMoves[ply][0]
+          killerMoves[ply][0] = m
       break # Beta Cutoff
   
   # TT Store
@@ -135,6 +166,11 @@ proc iterativeDeepening*(board: var Board, timeLimit: TimeLimit): (Move, int) =
   searchTimeLimit.startTime = getMonoTime()
   searchTimeLimit.nodes = 0
   # stopFlag is managed by caller
+  
+  # Clear Killer Moves
+  for i in 0 ..< MaxPly:
+    killerMoves[i][0] = Move(0)
+    killerMoves[i][1] = Move(0)
   
   var bestMove = Move(0)
   var bestScore = -Infinity
