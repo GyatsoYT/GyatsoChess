@@ -2,6 +2,8 @@
 import coretypes, utils, bitboard, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, search, tt
 import std/strutils
 import std/times
+import std/atomics
+import std/monotimes
 
 # Global flag to control the engine loop
 var quitEngine = false
@@ -55,40 +57,47 @@ proc parseMove(board: var Board, moveStr: string): Move =
 type
   SearchThreadData = object
     board: Board
-    limit: TimeLimit
-    stopFlag: ptr bool
+    info: SearchInfo
 
 var searchThread: ptr Thread[SearchThreadData]
 var searchRunning = false
-var stopFlag: ptr bool
+var stopFlag: ptr Atomic[bool]
 
 proc searchDriver(data: SearchThreadData) {.thread.} =
   initThreadMagics()
   var b = data.board
-  var limit = data.limit
-  limit.stopFlag = data.stopFlag
-  if limit.stopFlag != nil:
-    limit.stopFlag[] = false
-  let (bestMove, _) = iterativeDeepening(b, limit)
+  var info = data.info
+  
+  # Ensure stop flag is reset before starting (though it should be handled by main thread)
+  if info.stopFlag != nil:
+    info.stopFlag[].store(false, moRelaxed)
+    
+  let (bestMove, _) = iterativeDeepening(b, info)
   echo "bestmove ", bestMove.toAlgebraic()
   flushFile(stdout)
 
-proc startSearch(board: Board, limit: TimeLimit) {.gcsafe.} =
+proc startSearch(board: Board, info: SearchInfo) {.gcsafe.} =
   if searchRunning:
-    if stopFlag != nil: stopFlag[] = true
+    if stopFlag != nil: stopFlag[].store(true, moRelaxed)
     joinThread(searchThread[])
     searchRunning = false
+    
   var data: SearchThreadData
   data.board = board
-  data.limit = limit
-  data.stopFlag = stopFlag
+  data.info = info
+  data.info.stopFlag = stopFlag # Ensure it points to the shared flag
+  
+  # Reset stop flag
+  if stopFlag != nil:
+    stopFlag[].store(false, moRelaxed)
+    
   createThread(searchThread[], searchDriver, data)
   searchRunning = true
 
 proc stopSearch() {.gcsafe.} =
   if searchRunning:
     if stopFlag != nil:
-      stopFlag[] = true
+      stopFlag[].store(true, moRelaxed)
     joinThread(searchThread[])
     searchRunning = false
 
@@ -97,7 +106,7 @@ proc uciLoop() {.thread, gcsafe.} =
   var b = initializeBoard()
   
   # Allocate shared stop flag and thread
-  stopFlag = cast[ptr bool](allocShared0(sizeof(bool)))
+  stopFlag = cast[ptr Atomic[bool]](allocShared0(sizeof(Atomic[bool])))
   searchThread = createShared(Thread[SearchThreadData])
   
   while not quitEngine:
@@ -217,11 +226,12 @@ proc uciLoop() {.thread, gcsafe.} =
            # Fixed depth search, no time limit
            discard
            
-        var limit: TimeLimit
-        limit.allocatedTime = allocatedTime
-        limit.depthLimit = depth
+        var info: SearchInfo
+        info.allocatedTime = allocatedTime
+        info.depthLimit = depth
+        info.stopFlag = stopFlag
         
-        startSearch(b, limit)
+        startSearch(b, info)
       of "d":
         b.printBoard()
       of "position":
