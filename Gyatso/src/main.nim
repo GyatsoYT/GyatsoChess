@@ -232,6 +232,10 @@ proc uciLoop() {.thread, gcsafe.} =
         info.stopFlag = stopFlag
         
         startSearch(b, info)
+      of "eval":
+        let score = evaluate(b)
+        echo "evaluation ", score, " cp"
+        flushFile(stdout)
       of "d":
         b.printBoard()
       of "position":

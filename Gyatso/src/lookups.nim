@@ -150,9 +150,53 @@ proc initLineBetween() =
           f += df
         lineBetweenBB[s1][s2] = bb
 
+  
+
+var
+  FileMasks*: array[0..7, Bitboard]
+  RankMasks*: array[0..7, Bitboard]
+  IsolatedPawnMasks*: array[0..7, Bitboard]
+  PassedPawnMasks*: array[Color, array[Square, Bitboard]]
+
+proc initEvaluationMasks() =
+  # File and Rank Masks
+  for r in 0..7:
+    for f in 0..7:
+      let sq = squareFromCoords(r, f)
+      FileMasks[f].setBit(sq)
+      RankMasks[r].setBit(sq)
+      
+  # Isolated Pawn Masks (adjacent files)
+  for f in 0..7:
+    if f > 0: IsolatedPawnMasks[f] = IsolatedPawnMasks[f] or FileMasks[f-1]
+    if f < 7: IsolatedPawnMasks[f] = IsolatedPawnMasks[f] or FileMasks[f+1]
+    
+  # Passed Pawn Masks
+  for sqInt in 0..63:
+    let sq = sqInt.Square
+    let r = rankOf(sq)
+    let f = fileOf(sq)
+    
+    # White Passed Pawn: Files f-1, f, f+1, Ranks > r
+    var whitePassed: Bitboard = 0
+    for r2 in r+1..7:
+      whitePassed.setBit(squareFromCoords(r2, f))
+      if f > 0: whitePassed.setBit(squareFromCoords(r2, f-1))
+      if f < 7: whitePassed.setBit(squareFromCoords(r2, f+1))
+    PassedPawnMasks[White][sq] = whitePassed
+    
+    # Black Passed Pawn: Files f-1, f, f+1, Ranks < r
+    var blackPassed: Bitboard = 0
+    for r2 in countdown(r-1, 0):
+      blackPassed.setBit(squareFromCoords(r2, f))
+      if f > 0: blackPassed.setBit(squareFromCoords(r2, f-1))
+      if f < 7: blackPassed.setBit(squareFromCoords(r2, f+1))
+    PassedPawnMasks[Black][sq] = blackPassed
+
 proc precomputeAttackTables*() =
   initRayAttacks()
   initKnightAttacks()
   initKingAttacks()
   initPawnAttacks()
-  initLineBetween()
+  initLineBetween() # Disabled due to hang/performance issue and lack of usage
+  initEvaluationMasks()

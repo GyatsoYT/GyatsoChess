@@ -1,4 +1,4 @@
-import coretypes, bitboard, board
+import coretypes, bitboard, board, lookups, magicbitboards, utils
 
 const
   PawnValue* = 100
@@ -78,6 +78,16 @@ const
      20, 20,  0,  0,  0,  0, 20, 20,
      20, 30, 10,  0,  0, 10, 30, 20
   ]
+  
+  # Evaluation Constants
+  DoubledPawnPenalty = -10
+  IsolatedPawnPenalty = -10
+  PassedPawnBonus: array[0..7, int] = [0, 5, 10, 20, 35, 60, 100, 0] # Bonus by rank
+  
+  MobilityBonusKnight = 4
+  MobilityBonusBishop = 3
+  MobilityBonusRook = 2
+  MobilityBonusQueen = 1
 
 # Helper to mirror square for Black (flip rank)
 # Square 0 (a1) -> 56 (a8)
@@ -85,6 +95,109 @@ const
 # Formula: sq xor 56
 func mirrorSquare(sq: Square): Square {.inline.} =
   (sq.int xor 56).Square
+
+proc evaluatePawnStructure(board: Board, whiteScore, blackScore: var int) =
+  # White Pawns
+  var bb = board.pieceBB[WhitePawn]
+  while bb != 0:
+    let sq = popBit(bb)
+    let f = fileOf(sq)
+    let r = rankOf(sq)
+    
+    # Doubled Pawns
+    if (FileMasks[f] and board.pieceBB[WhitePawn] and not (1'u64 shl sq)) != 0:
+      whiteScore += DoubledPawnPenalty
+      
+    # Isolated Pawns
+    if (IsolatedPawnMasks[f] and board.pieceBB[WhitePawn]) == 0:
+      whiteScore += IsolatedPawnPenalty
+      
+    # Passed Pawns
+    if (PassedPawnMasks[White][sq] and board.pieceBB[BlackPawn]) == 0:
+      whiteScore += PassedPawnBonus[r]
+      
+  # Black Pawns
+  bb = board.pieceBB[BlackPawn]
+  while bb != 0:
+    let sq = popBit(bb)
+    let f = fileOf(sq)
+    let r = rankOf(sq) # 0-7, but for black passed pawn bonus we want relative rank
+    let relativeRank = 7 - r
+    
+    # Doubled Pawns
+    if (FileMasks[f] and board.pieceBB[BlackPawn] and not (1'u64 shl sq)) != 0:
+      blackScore += DoubledPawnPenalty
+      
+    # Isolated Pawns
+    if (IsolatedPawnMasks[f] and board.pieceBB[BlackPawn]) == 0:
+      blackScore += IsolatedPawnPenalty
+      
+    # Passed Pawns
+    if (PassedPawnMasks[Black][sq] and board.pieceBB[WhitePawn]) == 0:
+      blackScore += PassedPawnBonus[relativeRank]
+
+proc evaluateMobility(board: Board, whiteScore, blackScore: var int) =
+  let whiteOccupied = board.occupiedBB[White]
+  let blackOccupied = board.occupiedBB[Black]
+  let allPieces = board.allPiecesBB
+  
+  # White Mobility
+  # Knights
+  var bb = board.pieceBB[WhiteKnight]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = knightAttacks[sq] and not whiteOccupied
+    whiteScore += countBits(attacks) * MobilityBonusKnight
+    
+  # Bishops
+  bb = board.pieceBB[WhiteBishop]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getBishopAttacks(sq, allPieces) and not whiteOccupied
+    whiteScore += countBits(attacks) * MobilityBonusBishop
+    
+  # Rooks
+  bb = board.pieceBB[WhiteRook]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getRookAttacks(sq, allPieces) and not whiteOccupied
+    whiteScore += countBits(attacks) * MobilityBonusRook
+    
+  # Queens
+  bb = board.pieceBB[WhiteQueen]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getQueenAttacks(sq, allPieces) and not whiteOccupied
+    whiteScore += countBits(attacks) * MobilityBonusQueen
+    
+  # Black Mobility
+  # Knights
+  bb = board.pieceBB[BlackKnight]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = knightAttacks[sq] and not blackOccupied
+    blackScore += countBits(attacks) * MobilityBonusKnight
+    
+  # Bishops
+  bb = board.pieceBB[BlackBishop]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getBishopAttacks(sq, allPieces) and not blackOccupied
+    blackScore += countBits(attacks) * MobilityBonusBishop
+    
+  # Rooks
+  bb = board.pieceBB[BlackRook]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getRookAttacks(sq, allPieces) and not blackOccupied
+    blackScore += countBits(attacks) * MobilityBonusRook
+    
+  # Queens
+  bb = board.pieceBB[BlackQueen]
+  while bb != 0:
+    let sq = popBit(bb)
+    let attacks = getQueenAttacks(sq, allPieces) and not blackOccupied
+    blackScore += countBits(attacks) * MobilityBonusQueen
 
 proc evaluate*(board: Board): int =
   var whiteScore = 0
@@ -155,6 +268,12 @@ proc evaluate*(board: Board): int =
   if bb != 0:
     let sq = popBit(bb)
     blackScore += KingValue + KingPST[mirrorSquare(sq)]
+    
+  # Pawn Structure
+  evaluatePawnStructure(board, whiteScore, blackScore)
+  
+  # Mobility
+  evaluateMobility(board, whiteScore, blackScore)
     
   # Return score from perspective of side to move
   if board.sideToMove == White:
