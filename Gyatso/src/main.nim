@@ -1,4 +1,3 @@
-
 import coretypes, utils, bitboard, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, search, tt
 import std/strutils
 import std/times
@@ -7,6 +6,7 @@ import std/monotimes
 
 # Global flag to control the engine loop
 var quitEngine = false
+var uciChess960 = false
 
 proc calculateSearchTime(wtime, btime, winc, binc, movestogo: int, sideToMove: Color): Duration =
   let timeAvailable = if sideToMove == White: wtime else: btime
@@ -122,10 +122,53 @@ proc uciLoop() {.thread, gcsafe.} =
       case command
       of "uci":
         echo "id name Gyatso"
-        echo "id author Antigravity"
+        echo "id author Gyatso Neesham"
+        echo "option name Hash type spin default 64 min 1 max 1024"
+        echo "option name Threads type spin default 1 min 1 max 1"
+        echo "option name UCI_Chess960 type check default false"
         echo "uciok"
       of "isready":
         echo "readyok"
+      of "setoption":
+        # setoption name <Name> value <Value>
+        var name = ""
+        var value = ""
+        var parsingName = false
+        var parsingValue = false
+        
+        for i in 1 ..< parts.len:
+          if parts[i] == "name":
+            parsingName = true
+            parsingValue = false
+            continue
+          elif parts[i] == "value":
+            parsingName = false
+            parsingValue = true
+            continue
+            
+          if parsingName:
+            if name.len > 0: name.add(" ")
+            name.add(parts[i])
+          elif parsingValue:
+            if value.len > 0: value.add(" ")
+            value.add(parts[i])
+            
+        if name == "Hash":
+          try:
+            let mb = parseInt(value)
+            initTT(mb)
+            log("TT resized to " & $mb & " MB", Info)
+          except ValueError:
+            log("Invalid Hash value: " & value, Warn)
+        elif name == "UCI_Chess960":
+          if value == "true":
+            uciChess960 = true
+          else:
+            uciChess960 = false
+          log("UCI_Chess960 set to " & $uciChess960, Info)
+        elif name == "Threads":
+          log("Threads option not yet supported", Info)
+          
       of "stop":
         stopSearch()
       of "quit":

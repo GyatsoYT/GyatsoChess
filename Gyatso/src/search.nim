@@ -9,6 +9,7 @@ type
     stopFlag*: ptr Atomic[bool]
 
 var killerMoves* {.threadvar.}: array[MaxPly, array[2, Move]]
+var historyTable* {.threadvar.}: array[Color, array[Square, array[Square, int]]]
 
 proc checkTime*(info: var SearchInfo) =
   if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): return
@@ -127,33 +128,88 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info
   for i in 0 ..< ml.count:
     ml.scores[i] = scoreMove(board, ml.moves[i], ttMove)
     
-    # Killer Moves
+    # Killer Moves & History Heuristic
     if ml.scores[i] == 0: # Only boost quiet moves (score 0 from scoreMove)
       if ml.moves[i] == killerMoves[ply][0]:
         ml.scores[i] = 900
       elif ml.moves[i] == killerMoves[ply][1]:
         ml.scores[i] = 850
+      else:
+        # History Heuristic
+        let m = ml.moves[i]
+        let histScore = historyTable[board.sideToMove][m.fromSquare][m.toSquare]
+        # Cap history score to avoid overflowing or dominating killers too much? 
+        # Usually history scores can be large, but let's scale or cap if needed.
+        # For now, just add it.
+        ml.scores[i] += histScore
+  
+  var movesSearched = 0
   
   for i in 0 ..< ml.count:
     let m = pickMove(ml, i)
     discard board.makeMove(m)
-    let eval = -negamax(board, depth - 1, -beta, -alpha, ply + 1, info)
-    board.unmakeMove(m)
     
-    if eval > maxEval:
-      maxEval = eval
+    var score = -Infinity
+    
+    if movesSearched == 0:
+      # PVS: First move (PV move) - Full Window
+      score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, info)
+    else:
+      # PVS: Late moves
+      
+      # LMR (Late Move Reductions)
+      var reduction = 0
+      if depth >= 3 and movesSearched >= 4 and not m.isCapture and not m.isPromotion:
+        let us = board.sideToMove
+        let them = if us == White: Black else: White
+        let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
+        # Don't reduce if in check
+        if not isSquareAttacked(board, kingSq.Square, them):
+          reduction = 1
+          if movesSearched > 10: reduction += 1
+          # Cap reduction?
+          if reduction > depth - 2: reduction = depth - 2
+          if reduction < 0: reduction = 0
+      
+      # Null Window Search (with LMR)
+      score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, info)
+      
+      # Re-search if LMR failed (score > alpha)
+      if reduction > 0 and score > alpha:
+         score = -negamax(board, depth - 1, -alpha - 1, -alpha, ply + 1, info)
+      
+      # PVS Re-search (Full Window) if Null Window failed high
+      if score > alpha and score < beta:
+        score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, info)
+    
+    board.unmakeMove(m)
+    movesSearched.inc
+    
+    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): return 0
+    
+    if score > maxEval:
+      maxEval = score
       bestMove = m
       
     if maxEval > alpha:
       alpha = maxEval
       
     if alpha >= beta:
-      # Killer Move Heuristic
+      # Beta Cutoff
       if not m.isCapture and not m.isPromotion:
+        # Killer Move Heuristic
         if killerMoves[ply][0] != m:
           killerMoves[ply][1] = killerMoves[ply][0]
           killerMoves[ply][0] = m
-      break # Beta Cutoff
+          
+        # History Heuristic Update
+        let bonus = depth * depth
+        historyTable[board.sideToMove][m.fromSquare][m.toSquare] += bonus
+        # Cap?
+        if historyTable[board.sideToMove][m.fromSquare][m.toSquare] > 20000:
+           historyTable[board.sideToMove][m.fromSquare][m.toSquare] = 20000
+           
+      break 
   
   # TT Store
   storeTT(board, depth, maxEval, originalAlpha, beta, bestMove, ply)
@@ -165,10 +221,19 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
   info.nodes = 0
   # stopFlag is managed by caller
   
-  # Clear Killer Moves
+  # Clear Killer Moves & History Table
   for i in 0 ..< MaxPly:
     killerMoves[i][0] = Move(0)
     killerMoves[i][1] = Move(0)
+    
+  # We don't necessarily clear History Table every ID, but maybe decay it?
+  # For now, let's clear it to be safe/simple, or decay.
+  # Prompt says: "Periodically (e.g., at the end of each iterativeDeepeningSearch iteration or less frequently), decay all history scores"
+  # Let's clear for now or decay at start of search.
+  for c in White .. Black:
+    for f in 0.Square .. 63.Square:
+      for t in 0.Square .. 63.Square:
+        historyTable[c][f][t] = 0
   
   var bestMove = Move(0)
   var bestScore = -Infinity
@@ -189,17 +254,30 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
     var currentBestScore = -Infinity
     
     # Get TT Move for ordering
-    # Get TT Move for ordering
     let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, 0)
     
     # Score Moves
     for i in 0 ..< ml.count:
       ml.scores[i] = scoreMove(board, ml.moves[i], ttMove)
+      # Root moves history?
+      if ml.scores[i] == 0:
+         let m = ml.moves[i]
+         ml.scores[i] += historyTable[board.sideToMove][m.fromSquare][m.toSquare]
     
     for i in 0 ..< ml.count:
       let m = pickMove(ml, i)
       discard board.makeMove(m)
-      let score = -negamax(board, depth - 1, -beta, -alpha, 1, info)
+      
+      # Root PVS:
+      var score = -Infinity
+      if i == 0:
+        score = -negamax(board, depth - 1, -beta, -alpha, 1, info)
+      else:
+        # Null window
+        score = -negamax(board, depth - 1, -alpha - 1, -alpha, 1, info)
+        if score > alpha:
+          score = -negamax(board, depth - 1, -beta, -alpha, 1, info)
+          
       board.unmakeMove(m)
       
       if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): break
@@ -221,6 +299,12 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
     let nps = if elapsed > 0: (info.nodes.float / (elapsed.float / 1000.0)).int else: 0
     
     echo "info depth ", depth, " score cp ", bestScore, " nodes ", info.nodes, " nps ", nps, " time ", elapsed, " pv ", bestMove.toAlgebraic()
+    
+    # Decay History
+    for c in White .. Black:
+      for f in 0.Square .. 63.Square:
+        for t in 0.Square .. 63.Square:
+          historyTable[c][f][t] = historyTable[c][f][t] div 2
     
     # Check if we used up too much time (soft limit check could go here)
     
