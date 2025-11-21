@@ -6,6 +6,26 @@ import std/times
 # Global flag to control the engine loop
 var quitEngine = false
 
+proc calculateSearchTime(wtime, btime, winc, binc, movestogo: int, sideToMove: Color): Duration =
+  let timeAvailable = if sideToMove == White: wtime else: btime
+  let inc = if sideToMove == White: winc else: binc
+  
+  var timeForMove = 0
+  
+  if movestogo > 0:
+    timeForMove = timeAvailable div movestogo
+  else:
+    # Default time management if movestogo not specified (e.g. sudden death or unknown)
+    # Allocate ~1/30th of remaining time + increment
+    timeForMove = (timeAvailable div 30) + inc
+    
+  # Safety margin: ensure we don't run out of time completely
+  # Subtract some overhead (e.g. 50ms) but keep at least a minimum
+  if timeForMove > 50:
+    timeForMove -= 50
+    
+  return initDuration(milliseconds = timeForMove)
+
 proc perftDriver(board: var Board, depth: int): uint64 =
   if depth == 0: return 1
   
@@ -32,9 +52,53 @@ proc parseMove(board: var Board, moveStr: string): Move =
       
   return Move(0)
 
+type
+  SearchThreadData = object
+    board: Board
+    limit: TimeLimit
+    stopFlag: ptr bool
+
+var searchThread: ptr Thread[SearchThreadData]
+var searchRunning = false
+var stopFlag: ptr bool
+
+proc searchDriver(data: SearchThreadData) {.thread.} =
+  initThreadMagics()
+  var b = data.board
+  var limit = data.limit
+  limit.stopFlag = data.stopFlag
+  if limit.stopFlag != nil:
+    limit.stopFlag[] = false
+  let (bestMove, _) = iterativeDeepening(b, limit)
+  echo "bestmove ", bestMove.toAlgebraic()
+  flushFile(stdout)
+
+proc startSearch(board: Board, limit: TimeLimit) {.gcsafe.} =
+  if searchRunning:
+    if stopFlag != nil: stopFlag[] = true
+    joinThread(searchThread[])
+    searchRunning = false
+  var data: SearchThreadData
+  data.board = board
+  data.limit = limit
+  data.stopFlag = stopFlag
+  createThread(searchThread[], searchDriver, data)
+  searchRunning = true
+
+proc stopSearch() {.gcsafe.} =
+  if searchRunning:
+    if stopFlag != nil:
+      stopFlag[] = true
+    joinThread(searchThread[])
+    searchRunning = false
+
 proc uciLoop() {.thread, gcsafe.} =
   initThreadMagics() # Initialize thread-local magic bitboards
   var b = initializeBoard()
+  
+  # Allocate shared stop flag and thread
+  stopFlag = cast[ptr bool](allocShared0(sizeof(bool)))
+  searchThread = createShared(Thread[SearchThreadData])
   
   while not quitEngine:
     try:
@@ -53,7 +117,10 @@ proc uciLoop() {.thread, gcsafe.} =
         echo "uciok"
       of "isready":
         echo "readyok"
+      of "stop":
+        stopSearch()
       of "quit":
+        stopSearch()
         quitEngine = true
       of "testmoves":
         var ml: MoveList
@@ -103,11 +170,13 @@ proc uciLoop() {.thread, gcsafe.} =
           except ValueError:
             echo "Invalid depth"
       of "go":
-        # go depth <x> wtime <x> btime <x> movestogo <x> movetime <x>
+        # go depth <x> wtime <x> btime <x> winc <x> binc <x> movestogo <x> movetime <x>
         var depth = 0
         var wtime = 0
         var btime = 0
-        var movestogo = 30
+        var winc = 0
+        var binc = 0
+        var movestogo = 0 # 0 means not specified
         var movetime = 0
         var infinite = false
         
@@ -120,6 +189,10 @@ proc uciLoop() {.thread, gcsafe.} =
             inc i; wtime = parseInt(parts[i])
           of "btime":
             inc i; btime = parseInt(parts[i])
+          of "winc":
+            inc i; winc = parseInt(parts[i])
+          of "binc":
+            inc i; binc = parseInt(parts[i])
           of "movestogo":
             inc i; movestogo = parseInt(parts[i])
           of "movetime":
@@ -135,22 +208,20 @@ proc uciLoop() {.thread, gcsafe.} =
         if movetime > 0:
           allocatedTime = initDuration(milliseconds = movetime)
         elif wtime > 0 or btime > 0:
-          let timeAvailable = if b.sideToMove == White: wtime else: btime
-          let timePerMove = timeAvailable div movestogo
-          allocatedTime = initDuration(milliseconds = timePerMove)
+          allocatedTime = calculateSearchTime(wtime, btime, winc, binc, movestogo, b.sideToMove)
           
         if infinite:
           allocatedTime = DurationZero
           
         if depth > 0 and allocatedTime == DurationZero and not infinite:
+           # Fixed depth search, no time limit
            discard
            
         var limit: TimeLimit
         limit.allocatedTime = allocatedTime
         limit.depthLimit = depth
         
-        let (bestMove, score) = iterativeDeepening(b, limit)
-        echo "bestmove ", bestMove.toAlgebraic()
+        startSearch(b, limit)
       of "d":
         b.printBoard()
       of "position":

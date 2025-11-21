@@ -6,16 +6,17 @@ type
     allocatedTime*: Duration
     depthLimit*: int
     nodes*: uint64
-    stopped*: bool
+    stopFlag*: ptr bool
 
 var searchTimeLimit*: TimeLimit
 
 proc checkTime*() =
-  if searchTimeLimit.stopped: return
+  if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return
   if searchTimeLimit.nodes mod 2048 == 0:
     let elapsed = getMonoTime() - searchTimeLimit.startTime
     if elapsed > searchTimeLimit.allocatedTime and searchTimeLimit.allocatedTime != DurationZero:
-      searchTimeLimit.stopped = true
+      if searchTimeLimit.stopFlag != nil:
+        searchTimeLimit.stopFlag[] = true
 
 const
   Infinity* = 30000
@@ -25,7 +26,7 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int): int =
   searchTimeLimit.nodes.inc
   if searchTimeLimit.nodes mod 2048 == 0:
     checkTime()
-  if searchTimeLimit.stopped: return 0
+  if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return 0
 
   var alpha = alpha
   let standPat = evaluate(board)
@@ -58,7 +59,7 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int): int =
     let score = -qSearch(board, -beta, -alpha, ply + 1)
     board.unmakeMove(m)
     
-    if searchTimeLimit.stopped: return 0
+    if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return 0
     
     if score >= beta:
       return beta
@@ -72,7 +73,7 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int): int
   searchTimeLimit.nodes.inc
   if searchTimeLimit.nodes mod 2048 == 0:
     checkTime()
-  if searchTimeLimit.stopped: return 0
+  if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: return 0
 
   var alpha = alpha
   var beta = beta
@@ -133,7 +134,7 @@ proc iterativeDeepening*(board: var Board, timeLimit: TimeLimit): (Move, int) =
   searchTimeLimit = timeLimit
   searchTimeLimit.startTime = getMonoTime()
   searchTimeLimit.nodes = 0
-  searchTimeLimit.stopped = false
+  # stopFlag is managed by caller
   
   var bestMove = Move(0)
   var bestScore = -Infinity
@@ -167,7 +168,7 @@ proc iterativeDeepening*(board: var Board, timeLimit: TimeLimit): (Move, int) =
       let score = -negamax(board, depth - 1, -beta, -alpha, 1)
       board.unmakeMove(m)
       
-      if searchTimeLimit.stopped: break
+      if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]: break
       
       if score > currentBestScore:
         currentBestScore = score
@@ -176,7 +177,7 @@ proc iterativeDeepening*(board: var Board, timeLimit: TimeLimit): (Move, int) =
       if currentBestScore > alpha:
         alpha = currentBestScore
         
-    if searchTimeLimit.stopped:
+    if searchTimeLimit.stopFlag != nil and searchTimeLimit.stopFlag[]:
       break
       
     bestMove = currentBestMove
