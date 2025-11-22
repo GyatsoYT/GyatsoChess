@@ -157,6 +157,8 @@ var
   RankMasks*: array[0..7, Bitboard]
   IsolatedPawnMasks*: array[0..7, Bitboard]
   PassedPawnMasks*: array[Color, array[Square, Bitboard]]
+  KingShieldMasks*: array[Color, array[Square, Bitboard]]
+  KingAttackZoneMasks*: array[Square, Bitboard]
 
 proc initEvaluationMasks() =
   # File and Rank Masks
@@ -192,6 +194,59 @@ proc initEvaluationMasks() =
       if f > 0: blackPassed.setBit(squareFromCoords(r2, f-1))
       if f < 7: blackPassed.setBit(squareFromCoords(r2, f+1))
     PassedPawnMasks[Black][sq] = blackPassed
+
+  # King Shield Masks
+  # Shield is defined as the 3 squares in front of the king (rank+1) and the 3 squares on rank+2.
+  # For White: r+1, r+2. For Black: r-1, r-2.
+  for sqInt in 0..63:
+    let sq = sqInt.Square
+    let r = rankOf(sq)
+    let f = fileOf(sq)
+    
+    # White Shield
+    var whiteShield: Bitboard = 0
+    if r < 7:
+      # Rank + 1
+      whiteShield.setBit(squareFromCoords(r+1, f))
+      if f > 0: whiteShield.setBit(squareFromCoords(r+1, f-1))
+      if f < 7: whiteShield.setBit(squareFromCoords(r+1, f+1))
+      
+      # Rank + 2
+      if r < 6:
+        whiteShield.setBit(squareFromCoords(r+2, f))
+        if f > 0: whiteShield.setBit(squareFromCoords(r+2, f-1))
+        if f < 7: whiteShield.setBit(squareFromCoords(r+2, f+1))
+    KingShieldMasks[White][sq] = whiteShield
+    
+    # Black Shield
+    var blackShield: Bitboard = 0
+    if r > 0:
+      # Rank - 1
+      blackShield.setBit(squareFromCoords(r-1, f))
+      if f > 0: blackShield.setBit(squareFromCoords(r-1, f-1))
+      if f < 7: blackShield.setBit(squareFromCoords(r-1, f+1))
+      
+      # Rank - 2
+      if r > 1:
+        blackShield.setBit(squareFromCoords(r-2, f))
+        if f > 0: blackShield.setBit(squareFromCoords(r-2, f-1))
+        if f < 7: blackShield.setBit(squareFromCoords(r-2, f+1))
+    KingShieldMasks[Black][sq] = blackShield
+
+  # King Attack Zone Masks (3x3 area around the king, including king square)
+  for sqInt in 0..63:
+    let sq = sqInt.Square
+    let r = rankOf(sq)
+    let f = fileOf(sq)
+    
+    var attackZone: Bitboard = 0
+    for rOffset in -1..1:
+      for fOffset in -1..1:
+        let nr = r + rOffset
+        let nf = f + fOffset
+        if nr >= 0 and nr <= 7 and nf >= 0 and nf <= 7:
+          attackZone.setBit(squareFromCoords(nr, nf))
+    KingAttackZoneMasks[sq] = attackZone
 
 proc precomputeAttackTables*() =
   initRayAttacks()
