@@ -70,7 +70,7 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
       
   return alpha
 
-proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info: var SearchInfo): int =
+proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info: var SearchInfo, totalExtensions: int = 0): int =
   info.nodes.inc
   if info.nodes mod 2048 == 0:
     checkTime(info)
@@ -98,7 +98,7 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info
     if not isSquareAttacked(board, kingSq.Square, them) and hasSufficientMaterial(board, us):
       board.makeNullMove()
       let R = 2
-      let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1, info)
+      let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1, info, totalExtensions)
       board.unmakeNullMove()
       
       if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): return 0
@@ -149,17 +149,30 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info
     let m = pickMove(ml, i)
     discard board.makeMove(m)
     
+    # Check Extension
+    let opponent = board.sideToMove
+    let us = if opponent == White: Black else: White
+    let kingSq = bitScanForward(board.pieceBB[makePiece(opponent, King)])
+    let givesCheck = isSquareAttacked(board, kingSq.Square, us)
+    
+    var extension = 0
+    if givesCheck and totalExtensions < 16:
+      extension = 1
+      
+    var newDepth = depth - 1 + extension
+    if newDepth <= 0: newDepth = 0 # Ensure we don't extend into negative if not intended, though 0 goes to qsearch
+
     var score = -Infinity
     
     if movesSearched == 0:
       # PVS: First move (PV move) - Full Window
-      score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, info)
+      score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info, totalExtensions + extension)
     else:
       # PVS: Late moves
       
       # LMR (Late Move Reductions)
       var reduction = 0
-      if depth >= 3 and movesSearched >= 4 and not m.isCapture and not m.isPromotion:
+      if depth >= 3 and movesSearched >= 4 and not m.isCapture and not m.isPromotion and not givesCheck:
         let us = board.sideToMove
         let them = if us == White: Black else: White
         let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
@@ -172,15 +185,20 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info
           if reduction < 0: reduction = 0
       
       # Null Window Search (with LMR)
-      score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, info)
+      # Note: If we extended, newDepth includes extension. If we reduced, we subtract from newDepth?
+      # Usually LMR applies to the base depth.
+      # But here we simplified newDepth. 
+      # If reduced, we want (depth - 1 - reduction + extension).
+      # So: newDepth - reduction.
+      score = -negamax(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1, info, totalExtensions + extension)
       
       # Re-search if LMR failed (score > alpha)
       if reduction > 0 and score > alpha:
-         score = -negamax(board, depth - 1, -alpha - 1, -alpha, ply + 1, info)
+         score = -negamax(board, newDepth, -alpha - 1, -alpha, ply + 1, info, totalExtensions + extension)
       
       # PVS Re-search (Full Window) if Null Window failed high
       if score > alpha and score < beta:
-        score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, info)
+        score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info, totalExtensions + extension)
     
     board.unmakeMove(m)
     movesSearched.inc
