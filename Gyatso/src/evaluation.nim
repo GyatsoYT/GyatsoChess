@@ -83,6 +83,7 @@ const
   DoubledPawnPenalty = -10
   IsolatedPawnPenalty = -10
   PassedPawnBonus: array[0..7, int] = [0, 5, 10, 20, 35, 60, 100, 0] # Bonus by rank
+  TempoBonus = 15
   
   MobilityBonusKnight = 4
   MobilityBonusBishop = 3
@@ -410,7 +411,8 @@ proc evaluate*(board: Board): int =
   evaluateKingSafety(board, whiteScore, blackScore)
     
   # Return score from perspective of side to move
+  # Return score from perspective of side to move
   if board.sideToMove == White:
-    return whiteScore - blackScore
+    return (whiteScore - blackScore) + TempoBonus
   else:
-    return blackScore - whiteScore
+    return (blackScore - whiteScore) + TempoBonus
