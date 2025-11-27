@@ -22,6 +22,8 @@ proc checkTime*(info: var SearchInfo) =
 const
   Infinity* = 30000
   MateValue* = 29000 # Slightly less than Infinity to allow for mate distance logic
+  Contempt* = 20 # Contempt factor for draw detection in search
+
 
 proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var SearchInfo): int =
   info.nodes.inc
@@ -70,7 +72,7 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
       
   return alpha
 
-proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info: var SearchInfo, totalExtensions: int = 0): int =
+proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, info: var SearchInfo, totalExtensions: int = 0): int =
   info.nodes.inc
   if info.nodes mod 2048 == 0:
     checkTime(info)
@@ -79,6 +81,16 @@ proc negamax(board: var Board, depth: int, alpha: int, beta: int, ply: int, info
   var alpha = alpha
   var beta = beta
   
+  # Draw Detection
+  # Check for Repetition, 50-Move Rule, and Insufficient Material
+  # We check repetition first as it's most common in drawish endgames to avoid
+  if board.isRepetition() or board.halfMoveClock >= 100 or board.isInsufficientMaterial():
+    # At root, return 0 to avoid false mate lines
+    if ply == 0: return 0
+    # In search, return Contempt to avoid entering drawish lines when winning
+    # Note: If we are losing, we might want to return -Contempt or 0, but for now fixed Contempt
+    return Contempt
+
   # TT Probe
   let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, ply)
   if hit:

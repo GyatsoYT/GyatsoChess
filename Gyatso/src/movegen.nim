@@ -194,10 +194,10 @@ proc generateLegalMoves*(board: var Board, ml: var MoveList) {.gcsafe.} =
       board.unmakeMove(m)
 
 proc getPieceTypeAt(board: Board, sq: Square): PieceType =
-  for p in WhitePawn .. BlackKing:
-    if board.pieceBB[p].getBit(sq):
-      return pieceType(p)
-  return NoPieceType
+  let p = board.pieces[sq]
+  if p == NoPiece: return NoPieceType
+  return pieceType(p)
+
 
 proc getPieceValue(pt: PieceType): int =
   case pt
@@ -215,14 +215,10 @@ proc scoreMove*(board: Board, move: Move, ttMove: Move): int =
     
   if move.isCapture:
     let victim = getPieceTypeAt(board, move.toSquare)
-    var attacker = NoPieceType
-    
     # Find attacker
     let us = board.sideToMove
-    for p in makePiece(us, Pawn) .. makePiece(us, King):
-      if board.pieceBB[p].getBit(move.fromSquare):
-        attacker = pieceType(p)
-        break
+    let attacker = pieceType(board.pieces[move.fromSquare])
+
         
     if move.isEnPassant:
       return 105 # Pawn captures Pawn (100 + 10*1 - 1) approx

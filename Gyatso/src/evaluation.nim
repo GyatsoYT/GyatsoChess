@@ -90,6 +90,32 @@ const
   MobilityBonusRook = 2
   MobilityBonusQueen = 1
 
+  # King Safety Constants
+  ShieldPawnBonus = 15
+  ShieldPawnAdvancedPenalty = -10 # Penalty for pawn being far (Rank+2 instead of Rank+1)
+  
+  AttackWeightQueen = 4
+  AttackWeightRook = 3
+  AttackWeightBishop = 2
+  AttackWeightKnight = 2
+  
+  # Safety Table (Non-linear penalty based on attack units)
+  # Index is attack units (0..99). Value is penalty in cp.
+  # Formula approx: (units^2) / 1.5
+  SafetyTable: array[0..100, int] = [
+    0, 0, 1, 2, 3, 5, 7, 9, 12, 15,
+    18, 22, 26, 30, 35, 40, 45, 50, 56, 62,
+    68, 75, 82, 89, 97, 105, 113, 122, 131, 140,
+    150, 160, 170, 181, 192, 204, 216, 228, 241, 254,
+    267, 281, 295, 309, 324, 339, 355, 371, 387, 404,
+    421, 439, 457, 475, 494, 513, 533, 553, 574, 595,
+    617, 639, 661, 684, 708, 732, 757, 782, 808, 834,
+    861, 888, 916, 944, 973, 1002, 1032, 1062, 1093, 1124,
+    1156, 1188, 1221, 1254, 1288, 1322, 1357, 1392, 1428, 1464,
+    1501, 1538, 1576, 1614, 1653, 1692, 1732, 1772, 1813, 1854, 1896
+  ]
+
+
 # Helper to mirror square for Black (flip rank)
 # Square 0 (a1) -> 56 (a8)
 # Square 7 (h1) -> 63 (h8)
@@ -137,214 +163,65 @@ proc evaluatePawnStructure(board: Board, whiteScore, blackScore: var int) =
     if (PassedPawnMasks[Black][sq] and board.pieceBB[WhitePawn]) == 0:
       blackScore += PassedPawnBonus[relativeRank]
 
-proc evaluateMobility(board: Board, whiteScore, blackScore: var int) =
-  let whiteOccupied = board.occupiedBB[White]
-  let blackOccupied = board.occupiedBB[Black]
-  let allPieces = board.allPiecesBB
-  
-  # White Mobility
-  # Knights
-  var bb = board.pieceBB[WhiteKnight]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = knightAttacks[sq] and not whiteOccupied
-    whiteScore += countBits(attacks) * MobilityBonusKnight
-    
-  # Bishops
-  bb = board.pieceBB[WhiteBishop]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getBishopAttacks(sq, allPieces) and not whiteOccupied
-    whiteScore += countBits(attacks) * MobilityBonusBishop
-    
-  # Rooks
-  bb = board.pieceBB[WhiteRook]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getRookAttacks(sq, allPieces) and not whiteOccupied
-    whiteScore += countBits(attacks) * MobilityBonusRook
-    
-  # Queens
-  bb = board.pieceBB[WhiteQueen]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getQueenAttacks(sq, allPieces) and not whiteOccupied
-    whiteScore += countBits(attacks) * MobilityBonusQueen
-    
-  # Black Mobility
-  # Knights
-  bb = board.pieceBB[BlackKnight]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = knightAttacks[sq] and not blackOccupied
-    blackScore += countBits(attacks) * MobilityBonusKnight
-    
-  # Bishops
-  bb = board.pieceBB[BlackBishop]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getBishopAttacks(sq, allPieces) and not blackOccupied
-    blackScore += countBits(attacks) * MobilityBonusBishop
-    
-  # Rooks
-  bb = board.pieceBB[BlackRook]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getRookAttacks(sq, allPieces) and not blackOccupied
-    blackScore += countBits(attacks) * MobilityBonusRook
-    
-  # Queens
-  bb = board.pieceBB[BlackQueen]
-  while bb != 0:
-    let sq = popBit(bb)
-    let attacks = getQueenAttacks(sq, allPieces) and not blackOccupied
-    blackScore += countBits(attacks) * MobilityBonusQueen
+# Removed evaluateMobility and evaluateKingSafety as they are now inlined
 
-const
-  # King Safety Constants
-  ShieldPawnBonus = 15
-  ShieldPawnAdvancedPenalty = -10 # Penalty for pawn being far (Rank+2 instead of Rank+1)
-  
-  AttackWeightQueen = 4
-  AttackWeightRook = 3
-  AttackWeightBishop = 2
-  AttackWeightKnight = 2
-  
-  # Safety Table (Non-linear penalty based on attack units)
-  # Index is attack units (0..99). Value is penalty in cp.
-  # Formula approx: (units^2) / 1.5
-  SafetyTable: array[0..100, int] = [
-    0, 0, 1, 2, 3, 5, 7, 9, 12, 15,
-    18, 22, 26, 30, 35, 40, 45, 50, 56, 62,
-    68, 75, 82, 89, 97, 105, 113, 122, 131, 140,
-    150, 160, 170, 181, 192, 204, 216, 228, 241, 254,
-    267, 281, 295, 309, 324, 339, 355, 371, 387, 404,
-    421, 439, 457, 475, 494, 513, 533, 553, 574, 595,
-    617, 639, 661, 684, 708, 732, 757, 782, 808, 834,
-    861, 888, 916, 944, 973, 1002, 1032, 1062, 1093, 1124,
-    1156, 1188, 1221, 1254, 1288, 1322, 1357, 1392, 1428, 1464,
-    1501, 1538, 1576, 1614, 1653, 1692, 1732, 1772, 1813, 1854, 1896
-  ]
-
-proc evaluateKingSafety(board: Board, whiteScore, blackScore: var int) =
-  var whiteKingBB = board.pieceBB[WhiteKing]
-  var blackKingBB = board.pieceBB[BlackKing]
-  
-  if whiteKingBB != 0:
-    let ksq = popBit(whiteKingBB)
-    
-    # Pawn Shield
-    # Check pawns in shield zone
-    let shieldMask = KingShieldMasks[White][ksq]
-    var shieldPawns = shieldMask and board.pieceBB[WhitePawn]
-    while shieldPawns != 0:
-      let psq = popBit(shieldPawns)
-      var bonus = ShieldPawnBonus
-      # If pawn is on Rank+2 (relative to king), apply penalty
-      if rankOf(psq) > rankOf(ksq) + 1:
-        bonus += ShieldPawnAdvancedPenalty
-      whiteScore += bonus
-      
-    # King Attack Zone
-    let attackZone = KingAttackZoneMasks[ksq]
-    var attackUnits = 0
-    
-    # Enemy pieces attacking the zone
-    # Knights
-    var bb = board.pieceBB[BlackKnight]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = knightAttacks[sq] and attackZone
-      attackUnits += countBits(attacks) * AttackWeightKnight
-      
-    # Bishops
-    bb = board.pieceBB[BlackBishop]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getBishopAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightBishop
-      
-    # Rooks
-    bb = board.pieceBB[BlackRook]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getRookAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightRook
-      
-    # Queens
-    bb = board.pieceBB[BlackQueen]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getQueenAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightQueen
-      
-    if attackUnits > 100: attackUnits = 100
-    whiteScore -= SafetyTable[attackUnits]
-
-  if blackKingBB != 0:
-    let ksq = popBit(blackKingBB)
-    
-    # Pawn Shield
-    let shieldMask = KingShieldMasks[Black][ksq]
-    var shieldPawns = shieldMask and board.pieceBB[BlackPawn]
-    while shieldPawns != 0:
-      let psq = popBit(shieldPawns)
-      var bonus = ShieldPawnBonus
-      # If pawn is on Rank-2 (relative to king), apply penalty
-      if rankOf(psq) < rankOf(ksq) - 1:
-        bonus += ShieldPawnAdvancedPenalty
-      blackScore += bonus
-      
-    # King Attack Zone
-    let attackZone = KingAttackZoneMasks[ksq]
-    var attackUnits = 0
-    
-    # Enemy pieces attacking the zone
-    # Knights
-    var bb = board.pieceBB[WhiteKnight]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = knightAttacks[sq] and attackZone
-      attackUnits += countBits(attacks) * AttackWeightKnight
-      
-    # Bishops
-    bb = board.pieceBB[WhiteBishop]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getBishopAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightBishop
-      
-    # Rooks
-    bb = board.pieceBB[WhiteRook]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getRookAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightRook
-      
-    # Queens
-    bb = board.pieceBB[WhiteQueen]
-    while bb != 0:
-      let sq = popBit(bb)
-      let attacks = getQueenAttacks(sq, board.allPiecesBB) and attackZone
-      attackUnits += countBits(attacks) * AttackWeightQueen
-      
-    if attackUnits > 100: attackUnits = 100
-    blackScore -= SafetyTable[attackUnits]
 
 proc evaluate*(board: Board): int =
   var whiteScore = 0
   var blackScore = 0
+  
+  # 1. King Zones & Pawn Shield (Pre-calculation)
+  var whiteKingZone: Bitboard = 0
+  var blackKingZone: Bitboard = 0
+  
+  if board.pieceBB[WhiteKing] != 0:
+    let ksq = bitScanForward(board.pieceBB[WhiteKing])
+    whiteKingZone = KingAttackZoneMasks[ksq.Square]
+    whiteScore += KingValue + KingPST[ksq.Square]
+    
+    # Pawn Shield
+    let shieldMask = KingShieldMasks[White][ksq.Square]
+    var shieldPawns = shieldMask and board.pieceBB[WhitePawn]
+    while shieldPawns != 0:
+      let psq = popBit(shieldPawns)
+      var bonus = ShieldPawnBonus
+      if rankOf(psq) > rankOf(ksq.Square) + 1: bonus += ShieldPawnAdvancedPenalty
+      whiteScore += bonus
+
+  if board.pieceBB[BlackKing] != 0:
+    let ksq = bitScanForward(board.pieceBB[BlackKing])
+    blackKingZone = KingAttackZoneMasks[ksq.Square]
+    blackScore += KingValue + KingPST[mirrorSquare(ksq.Square)]
+    
+    # Pawn Shield
+    let shieldMask = KingShieldMasks[Black][ksq.Square]
+    var shieldPawns = shieldMask and board.pieceBB[BlackPawn]
+    while shieldPawns != 0:
+      let psq = popBit(shieldPawns)
+      var bonus = ShieldPawnBonus
+      if rankOf(psq) < rankOf(ksq.Square) - 1: bonus += ShieldPawnAdvancedPenalty
+      blackScore += bonus
+
+  # Attack Units for King Safety
+  var whiteAttackUnits = 0 # Attacks BY White against Black King
+  var blackAttackUnits = 0 # Attacks BY Black against White King
+  
+  let whiteOccupied = board.occupiedBB[White]
+  let blackOccupied = board.occupiedBB[Black]
+  let allPieces = board.allPiecesBB
+  
+  # 2. Piece Loop (Material, PST, Mobility, King Safety)
+  
+  # --- WHITE PIECES ---
   
   # Pawns
   var bb = board.pieceBB[WhitePawn]
   while bb != 0:
     let sq = popBit(bb)
     whiteScore += PawnValue + PawnPST[sq]
-    
-  bb = board.pieceBB[BlackPawn]
-  while bb != 0:
-    let sq = popBit(bb)
-    blackScore += PawnValue + PawnPST[mirrorSquare(sq)]
+    # Pawn structure (doubled/isolated/passed) handled separately or inline?
+    # Keeping separate for now to avoid complexity explosion in this loop, 
+    # as pawn structure relies on file masks, not attacks.
     
   # Knights
   bb = board.pieceBB[WhiteKnight]
@@ -352,67 +229,111 @@ proc evaluate*(board: Board): int =
     let sq = popBit(bb)
     whiteScore += KnightValue + KnightPST[sq]
     
-  bb = board.pieceBB[BlackKnight]
-  while bb != 0:
-    let sq = popBit(bb)
-    blackScore += KnightValue + KnightPST[mirrorSquare(sq)]
-    
+    let attacks = knightAttacks[sq]
+    # Mobility
+    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusKnight
+    # King Safety (Attacking Black King)
+    if (attacks and blackKingZone) != 0:
+      whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightKnight
+
   # Bishops
   bb = board.pieceBB[WhiteBishop]
   while bb != 0:
     let sq = popBit(bb)
     whiteScore += BishopValue + BishopPST[sq]
     
-  bb = board.pieceBB[BlackBishop]
-  while bb != 0:
-    let sq = popBit(bb)
-    blackScore += BishopValue + BishopPST[mirrorSquare(sq)]
-    
+    let attacks = getBishopAttacks(sq, allPieces)
+    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusBishop
+    if (attacks and blackKingZone) != 0:
+      whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightBishop
+
   # Rooks
   bb = board.pieceBB[WhiteRook]
   while bb != 0:
     let sq = popBit(bb)
     whiteScore += RookValue + RookPST[sq]
     
-  bb = board.pieceBB[BlackRook]
-  while bb != 0:
-    let sq = popBit(bb)
-    blackScore += RookValue + RookPST[mirrorSquare(sq)]
-    
+    let attacks = getRookAttacks(sq, allPieces)
+    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusRook
+    if (attacks and blackKingZone) != 0:
+      whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightRook
+
   # Queens
   bb = board.pieceBB[WhiteQueen]
   while bb != 0:
     let sq = popBit(bb)
     whiteScore += QueenValue + QueenPST[sq]
     
+    let attacks = getQueenAttacks(sq, allPieces)
+    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusQueen
+    if (attacks and blackKingZone) != 0:
+      whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightQueen
+
+  # --- BLACK PIECES ---
+  
+  # Pawns
+  bb = board.pieceBB[BlackPawn]
+  while bb != 0:
+    let sq = popBit(bb)
+    blackScore += PawnValue + PawnPST[mirrorSquare(sq)]
+    
+  # Knights
+  bb = board.pieceBB[BlackKnight]
+  while bb != 0:
+    let sq = popBit(bb)
+    blackScore += KnightValue + KnightPST[mirrorSquare(sq)]
+    
+    let attacks = knightAttacks[sq]
+    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusKnight
+    if (attacks and whiteKingZone) != 0:
+      blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightKnight
+
+  # Bishops
+  bb = board.pieceBB[BlackBishop]
+  while bb != 0:
+    let sq = popBit(bb)
+    blackScore += BishopValue + BishopPST[mirrorSquare(sq)]
+    
+    let attacks = getBishopAttacks(sq, allPieces)
+    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusBishop
+    if (attacks and whiteKingZone) != 0:
+      blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightBishop
+
+  # Rooks
+  bb = board.pieceBB[BlackRook]
+  while bb != 0:
+    let sq = popBit(bb)
+    blackScore += RookValue + RookPST[mirrorSquare(sq)]
+    
+    let attacks = getRookAttacks(sq, allPieces)
+    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusRook
+    if (attacks and whiteKingZone) != 0:
+      blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightRook
+
+  # Queens
   bb = board.pieceBB[BlackQueen]
   while bb != 0:
     let sq = popBit(bb)
     blackScore += QueenValue + QueenPST[mirrorSquare(sq)]
     
-  # Kings
-  bb = board.pieceBB[WhiteKing]
-  if bb != 0:
-    let sq = popBit(bb)
-    whiteScore += KingValue + KingPST[sq]
-    
-  bb = board.pieceBB[BlackKing]
-  if bb != 0:
-    let sq = popBit(bb)
-    blackScore += KingValue + KingPST[mirrorSquare(sq)]
-    
-  # Pawn Structure
+    let attacks = getQueenAttacks(sq, allPieces)
+    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusQueen
+    if (attacks and whiteKingZone) != 0:
+      blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightQueen
+
+  # 3. Apply King Safety Penalties
+  if blackAttackUnits > 100: blackAttackUnits = 100
+  whiteScore -= SafetyTable[blackAttackUnits] # White penalized by Black attacks
+  
+  if whiteAttackUnits > 100: whiteAttackUnits = 100
+  blackScore -= SafetyTable[whiteAttackUnits] # Black penalized by White attacks
+
+  # 4. Pawn Structure (Still separate for now, but could be integrated)
   evaluatePawnStructure(board, whiteScore, blackScore)
-  
-  # Mobility
-  evaluateMobility(board, whiteScore, blackScore)
-  
-  # King Safety
-  evaluateKingSafety(board, whiteScore, blackScore)
     
-  # Return score from perspective of side to move
   # Return score from perspective of side to move
   if board.sideToMove == White:
     return (whiteScore - blackScore) + TempoBonus
   else:
     return (blackScore - whiteScore) + TempoBonus
+
