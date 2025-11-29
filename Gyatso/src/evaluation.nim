@@ -12,7 +12,17 @@ const
   # Tables are from White's perspective. Black's are mirrored.
   # Values are in centipawns.
   
-  PawnPST: array[Square, int] = [
+  # Phase Constants
+  PhaseTotal = 24
+  PhaseKnight = 1
+  PhaseBishop = 1
+  PhaseRook = 2
+  PhaseQueen = 4
+
+  # Piece-Square Tables (Middlegame and Endgame)
+  
+  # Pawns
+  PawnPST_MG: array[Square, int] = [
       0,  0,  0,  0,  0,  0,  0,  0,
      50, 50, 50, 50, 50, 50, 50, 50,
      10, 10, 20, 30, 30, 20, 10, 10,
@@ -22,8 +32,31 @@ const
       5, 10, 10,-20,-20, 10, 10,  5,
       0,  0,  0,  0,  0,  0,  0,  0
   ]
+  
+  PawnPST_EG: array[Square, int] = [
+      0,  0,  0,  0,  0,  0,  0,  0,
+     80, 80, 80, 80, 80, 80, 80, 80,
+     50, 50, 50, 50, 50, 50, 50, 50,
+     30, 30, 30, 30, 30, 30, 30, 30,
+     20, 20, 20, 20, 20, 20, 20, 20,
+     10, 10, 10, 10, 10, 10, 10, 10,
+     10, 10, 10, 10, 10, 10, 10, 10,
+      0,  0,  0,  0,  0,  0,  0,  0
+  ]
 
-  KnightPST: array[Square, int] = [
+  # Knights (Mainly centralized)
+  KnightPST_MG: array[Square, int] = [
+    -50,-40,-30,-30,-30,-30,-40,-50,
+    -40,-20,  0,  0,  0,  0,-20,-40,
+    -30,  0, 10, 15, 15, 10,  0,-30,
+    -30,  5, 15, 20, 20, 15,  5,-30,
+    -30,  0, 15, 20, 20, 15,  0,-30,
+    -30,  5, 10, 15, 15, 10,  5,-30,
+    -40,-20,  0,  5,  5,  0,-20,-40,
+    -50,-40,-30,-30,-30,-30,-40,-50
+  ]
+  
+  KnightPST_EG: array[Square, int] = [
     -50,-40,-30,-30,-30,-30,-40,-50,
     -40,-20,  0,  0,  0,  0,-20,-40,
     -30,  0, 10, 15, 15, 10,  0,-30,
@@ -34,7 +67,19 @@ const
     -50,-40,-30,-30,-30,-30,-40,-50
   ]
 
-  BishopPST: array[Square, int] = [
+  # Bishops
+  BishopPST_MG: array[Square, int] = [
+    -20,-10,-10,-10,-10,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5, 10, 10,  5,  0,-10,
+    -10,  5,  5, 10, 10,  5,  5,-10,
+    -10,  0, 10, 10, 10, 10,  0,-10,
+    -10, 10, 10, 10, 10, 10, 10,-10,
+    -10,  5,  0,  0,  0,  0,  5,-10,
+    -20,-10,-10,-10,-10,-10,-10,-20
+  ]
+  
+  BishopPST_EG: array[Square, int] = [
     -20,-10,-10,-10,-10,-10,-10,-20,
     -10,  0,  0,  0,  0,  0,  0,-10,
     -10,  0,  5, 10, 10,  5,  0,-10,
@@ -45,7 +90,19 @@ const
     -20,-10,-10,-10,-10,-10,-10,-20
   ]
 
-  RookPST: array[Square, int] = [
+  # Rooks
+  RookPST_MG: array[Square, int] = [
+      0,  0,  0,  0,  0,  0,  0,  0,
+      5, 10, 10, 10, 10, 10, 10,  5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+      0,  0,  0,  5,  5,  0,  0,  0
+  ]
+  
+  RookPST_EG: array[Square, int] = [
       0,  0,  0,  0,  0,  0,  0,  0,
       5, 10, 10, 10, 10, 10, 10,  5,
      -5,  0,  0,  0,  0,  0,  0, -5,
@@ -56,7 +113,19 @@ const
       0,  0,  0,  5,  5,  0,  0,  0
   ]
 
-  QueenPST: array[Square, int] = [
+  # Queens
+  QueenPST_MG: array[Square, int] = [
+    -20,-10,-10, -5, -5,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5,  5,  5,  5,  0,-10,
+     -5,  0,  5,  5,  5,  5,  0, -5,
+      0,  0,  5,  5,  5,  5,  0, -5,
+    -10,  5,  5,  5,  5,  5,  0,-10,
+    -10,  0,  5,  0,  0,  0,  0,-10,
+    -20,-10,-10, -5, -5,-10,-10,-20
+  ]
+  
+  QueenPST_EG: array[Square, int] = [
     -20,-10,-10, -5, -5,-10,-10,-20,
     -10,  0,  0,  0,  0,  0,  0,-10,
     -10,  0,  5,  5,  5,  5,  0,-10,
@@ -67,8 +136,8 @@ const
     -20,-10,-10, -5, -5,-10,-10,-20
   ]
 
-  # King Middle Game PST
-  KingPST: array[Square, int] = [
+  # King
+  KingPST_MG: array[Square, int] = [
     -30,-40,-40,-50,-50,-40,-40,-30,
     -30,-40,-40,-50,-50,-40,-40,-30,
     -30,-40,-40,-50,-50,-40,-40,-30,
@@ -78,6 +147,18 @@ const
      20, 20,  0,  0,  0,  0, 20, 20,
      20, 30, 10,  0,  0, 10, 30, 20
   ]
+  
+  KingPST_EG: array[Square, int] = [
+    -50,-40,-30,-20,-20,-30,-40,-50,
+    -30,-20,-10,  0,  0,-10,-20,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-30,  0,  0,  0,  0,-30,-30,
+    -50,-30,-30,-30,-30,-30,-30,-50
+  ]
+
   
   # Evaluation Constants
   DoubledPawnPenalty = -10
@@ -123,7 +204,7 @@ const
 func mirrorSquare(sq: Square): Square {.inline.} =
   (sq.int xor 56).Square
 
-proc evaluatePawnStructure(board: Board, whiteScore, blackScore: var int) =
+proc evaluatePawnStructure(board: Board, mgWhite, egWhite, mgBlack, egBlack: var int) =
   # White Pawns
   var bb = board.pieceBB[WhitePawn]
   while bb != 0:
@@ -133,74 +214,83 @@ proc evaluatePawnStructure(board: Board, whiteScore, blackScore: var int) =
     
     # Doubled Pawns
     if (FileMasks[f] and board.pieceBB[WhitePawn] and not (1'u64 shl sq)) != 0:
-      whiteScore += DoubledPawnPenalty
+      mgWhite += DoubledPawnPenalty
+      egWhite += DoubledPawnPenalty
       
     # Isolated Pawns
     if (IsolatedPawnMasks[f] and board.pieceBB[WhitePawn]) == 0:
-      whiteScore += IsolatedPawnPenalty
+      mgWhite += IsolatedPawnPenalty
+      egWhite += IsolatedPawnPenalty
       
-    # Passed Pawns
+    # Passed Pawns (Endgame Bonus)
     if (PassedPawnMasks[White][sq] and board.pieceBB[BlackPawn]) == 0:
-      whiteScore += PassedPawnBonus[r]
+      egWhite += PassedPawnBonus[r]
       
   # Black Pawns
   bb = board.pieceBB[BlackPawn]
   while bb != 0:
     let sq = popBit(bb)
     let f = fileOf(sq)
-    let r = rankOf(sq) # 0-7, but for black passed pawn bonus we want relative rank
+    let r = rankOf(sq) 
     let relativeRank = 7 - r
     
     # Doubled Pawns
     if (FileMasks[f] and board.pieceBB[BlackPawn] and not (1'u64 shl sq)) != 0:
-      blackScore += DoubledPawnPenalty
+      mgBlack += DoubledPawnPenalty
+      egBlack += DoubledPawnPenalty
       
     # Isolated Pawns
     if (IsolatedPawnMasks[f] and board.pieceBB[BlackPawn]) == 0:
-      blackScore += IsolatedPawnPenalty
+      mgBlack += IsolatedPawnPenalty
+      egBlack += IsolatedPawnPenalty
       
-    # Passed Pawns
+    # Passed Pawns (Endgame Bonus)
     if (PassedPawnMasks[Black][sq] and board.pieceBB[WhitePawn]) == 0:
-      blackScore += PassedPawnBonus[relativeRank]
+      egBlack += PassedPawnBonus[relativeRank]
 
 # Removed evaluateMobility and evaluateKingSafety as they are now inlined
 
 
 proc evaluate*(board: Board): int =
-  var whiteScore = 0
-  var blackScore = 0
+  var mgWhite = 0
+  var egWhite = 0
+  var mgBlack = 0
+  var egBlack = 0
+  var gamePhase = 0
   
-  # 1. King Zones & Pawn Shield (Pre-calculation)
+  # 1. King Zones & Pawn Shield (Pre-calculation for Safety)
   var whiteKingZone: Bitboard = 0
   var blackKingZone: Bitboard = 0
   
   if board.pieceBB[WhiteKing] != 0:
     let ksq = bitScanForward(board.pieceBB[WhiteKing])
     whiteKingZone = KingAttackZoneMasks[ksq.Square]
-    whiteScore += KingValue + KingPST[ksq.Square]
+    mgWhite += KingValue + KingPST_MG[ksq.Square]
+    egWhite += KingValue + KingPST_EG[ksq.Square]
     
-    # Pawn Shield
+    # Pawn Shield (MG only)
     let shieldMask = KingShieldMasks[White][ksq.Square]
     var shieldPawns = shieldMask and board.pieceBB[WhitePawn]
     while shieldPawns != 0:
       let psq = popBit(shieldPawns)
       var bonus = ShieldPawnBonus
       if rankOf(psq) > rankOf(ksq.Square) + 1: bonus += ShieldPawnAdvancedPenalty
-      whiteScore += bonus
+      mgWhite += bonus
 
   if board.pieceBB[BlackKing] != 0:
     let ksq = bitScanForward(board.pieceBB[BlackKing])
     blackKingZone = KingAttackZoneMasks[ksq.Square]
-    blackScore += KingValue + KingPST[mirrorSquare(ksq.Square)]
+    mgBlack += KingValue + KingPST_MG[mirrorSquare(ksq.Square)]
+    egBlack += KingValue + KingPST_EG[mirrorSquare(ksq.Square)]
     
-    # Pawn Shield
+    # Pawn Shield (MG only)
     let shieldMask = KingShieldMasks[Black][ksq.Square]
     var shieldPawns = shieldMask and board.pieceBB[BlackPawn]
     while shieldPawns != 0:
       let psq = popBit(shieldPawns)
       var bonus = ShieldPawnBonus
       if rankOf(psq) < rankOf(ksq.Square) - 1: bonus += ShieldPawnAdvancedPenalty
-      blackScore += bonus
+      mgBlack += bonus
 
   # Attack Units for King Safety
   var whiteAttackUnits = 0 # Attacks BY White against Black King
@@ -210,7 +300,7 @@ proc evaluate*(board: Board): int =
   let blackOccupied = board.occupiedBB[Black]
   let allPieces = board.allPiecesBB
   
-  # 2. Piece Loop (Material, PST, Mobility, King Safety)
+  # 2. Piece Loop (Material, PST, Mobility, King Safety, Phase)
   
   # --- WHITE PIECES ---
   
@@ -218,20 +308,23 @@ proc evaluate*(board: Board): int =
   var bb = board.pieceBB[WhitePawn]
   while bb != 0:
     let sq = popBit(bb)
-    whiteScore += PawnValue + PawnPST[sq]
-    # Pawn structure (doubled/isolated/passed) handled separately or inline?
-    # Keeping separate for now to avoid complexity explosion in this loop, 
-    # as pawn structure relies on file masks, not attacks.
+    mgWhite += PawnValue + PawnPST_MG[sq]
+    egWhite += PawnValue + PawnPST_EG[sq]
     
   # Knights
   bb = board.pieceBB[WhiteKnight]
   while bb != 0:
     let sq = popBit(bb)
-    whiteScore += KnightValue + KnightPST[sq]
+    mgWhite += KnightValue + KnightPST_MG[sq]
+    egWhite += KnightValue + KnightPST_EG[sq]
+    gamePhase += PhaseKnight
     
     let attacks = knightAttacks[sq]
-    # Mobility
-    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusKnight
+    # Mobility (Both)
+    let mob = countBits(attacks and not whiteOccupied) * MobilityBonusKnight
+    mgWhite += mob
+    egWhite += mob
+    
     # King Safety (Attacking Black King)
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightKnight
@@ -240,10 +333,15 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[WhiteBishop]
   while bb != 0:
     let sq = popBit(bb)
-    whiteScore += BishopValue + BishopPST[sq]
+    mgWhite += BishopValue + BishopPST_MG[sq]
+    egWhite += BishopValue + BishopPST_EG[sq]
+    gamePhase += PhaseBishop
     
     let attacks = getBishopAttacks(sq, allPieces)
-    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusBishop
+    let mob = countBits(attacks and not whiteOccupied) * MobilityBonusBishop
+    mgWhite += mob
+    egWhite += mob
+    
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightBishop
 
@@ -251,10 +349,15 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[WhiteRook]
   while bb != 0:
     let sq = popBit(bb)
-    whiteScore += RookValue + RookPST[sq]
+    mgWhite += RookValue + RookPST_MG[sq]
+    egWhite += RookValue + RookPST_EG[sq]
+    gamePhase += PhaseRook
     
     let attacks = getRookAttacks(sq, allPieces)
-    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusRook
+    let mob = countBits(attacks and not whiteOccupied) * MobilityBonusRook
+    mgWhite += mob
+    egWhite += mob
+    
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightRook
 
@@ -262,10 +365,15 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[WhiteQueen]
   while bb != 0:
     let sq = popBit(bb)
-    whiteScore += QueenValue + QueenPST[sq]
+    mgWhite += QueenValue + QueenPST_MG[sq]
+    egWhite += QueenValue + QueenPST_EG[sq]
+    gamePhase += PhaseQueen
     
     let attacks = getQueenAttacks(sq, allPieces)
-    whiteScore += countBits(attacks and not whiteOccupied) * MobilityBonusQueen
+    let mob = countBits(attacks and not whiteOccupied) * MobilityBonusQueen
+    mgWhite += mob
+    egWhite += mob
+    
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightQueen
 
@@ -275,16 +383,22 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[BlackPawn]
   while bb != 0:
     let sq = popBit(bb)
-    blackScore += PawnValue + PawnPST[mirrorSquare(sq)]
+    mgBlack += PawnValue + PawnPST_MG[mirrorSquare(sq)]
+    egBlack += PawnValue + PawnPST_EG[mirrorSquare(sq)]
     
   # Knights
   bb = board.pieceBB[BlackKnight]
   while bb != 0:
     let sq = popBit(bb)
-    blackScore += KnightValue + KnightPST[mirrorSquare(sq)]
+    mgBlack += KnightValue + KnightPST_MG[mirrorSquare(sq)]
+    egBlack += KnightValue + KnightPST_EG[mirrorSquare(sq)]
+    gamePhase += PhaseKnight
     
     let attacks = knightAttacks[sq]
-    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusKnight
+    let mob = countBits(attacks and not blackOccupied) * MobilityBonusKnight
+    mgBlack += mob
+    egBlack += mob
+    
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightKnight
 
@@ -292,10 +406,15 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[BlackBishop]
   while bb != 0:
     let sq = popBit(bb)
-    blackScore += BishopValue + BishopPST[mirrorSquare(sq)]
+    mgBlack += BishopValue + BishopPST_MG[mirrorSquare(sq)]
+    egBlack += BishopValue + BishopPST_EG[mirrorSquare(sq)]
+    gamePhase += PhaseBishop
     
     let attacks = getBishopAttacks(sq, allPieces)
-    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusBishop
+    let mob = countBits(attacks and not blackOccupied) * MobilityBonusBishop
+    mgBlack += mob
+    egBlack += mob
+    
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightBishop
 
@@ -303,10 +422,15 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[BlackRook]
   while bb != 0:
     let sq = popBit(bb)
-    blackScore += RookValue + RookPST[mirrorSquare(sq)]
+    mgBlack += RookValue + RookPST_MG[mirrorSquare(sq)]
+    egBlack += RookValue + RookPST_EG[mirrorSquare(sq)]
+    gamePhase += PhaseRook
     
     let attacks = getRookAttacks(sq, allPieces)
-    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusRook
+    let mob = countBits(attacks and not blackOccupied) * MobilityBonusRook
+    mgBlack += mob
+    egBlack += mob
+    
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightRook
 
@@ -314,23 +438,36 @@ proc evaluate*(board: Board): int =
   bb = board.pieceBB[BlackQueen]
   while bb != 0:
     let sq = popBit(bb)
-    blackScore += QueenValue + QueenPST[mirrorSquare(sq)]
+    mgBlack += QueenValue + QueenPST_MG[mirrorSquare(sq)]
+    egBlack += QueenValue + QueenPST_EG[mirrorSquare(sq)]
+    gamePhase += PhaseQueen
     
     let attacks = getQueenAttacks(sq, allPieces)
-    blackScore += countBits(attacks and not blackOccupied) * MobilityBonusQueen
+    let mob = countBits(attacks and not blackOccupied) * MobilityBonusQueen
+    mgBlack += mob
+    egBlack += mob
+    
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightQueen
 
-  # 3. Apply King Safety Penalties
+  # 3. Apply King Safety Penalties (MG Only)
   if blackAttackUnits > 100: blackAttackUnits = 100
-  whiteScore -= SafetyTable[blackAttackUnits] # White penalized by Black attacks
+  mgWhite -= SafetyTable[blackAttackUnits]
   
   if whiteAttackUnits > 100: whiteAttackUnits = 100
-  blackScore -= SafetyTable[whiteAttackUnits] # Black penalized by White attacks
+  mgBlack -= SafetyTable[whiteAttackUnits]
 
-  # 4. Pawn Structure (Still separate for now, but could be integrated)
-  evaluatePawnStructure(board, whiteScore, blackScore)
+  # 4. Pawn Structure
+  evaluatePawnStructure(board, mgWhite, egWhite, mgBlack, egBlack)
     
+  # 5. Tapered Interpolation
+  if gamePhase > PhaseTotal: gamePhase = PhaseTotal
+  let mgPhase = gamePhase
+  let egPhase = PhaseTotal - mgPhase
+  
+  let whiteScore = (mgWhite * mgPhase + egWhite * egPhase) div PhaseTotal
+  let blackScore = (mgBlack * mgPhase + egBlack * egPhase) div PhaseTotal
+  
   # Return score from perspective of side to move
   if board.sideToMove == White:
     return (whiteScore - blackScore) + TempoBonus

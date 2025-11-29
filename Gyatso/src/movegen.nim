@@ -182,8 +182,121 @@ proc generatePseudoLegalMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   generateKingMoves(board, ml)
   generateSlidingMoves(board, ml)
 
+proc generatePawnCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
+  let us = board.sideToMove
+  let them = if us == White: Black else: White
+  let pawns = board.pieceBB[makePiece(us, Pawn)]
+  let promotionRank = if us == White: 6 else: 1
+  
+  # Captures
+  var bb = pawns
+  while bb != 0:
+    let fromSq = popBit(bb)
+    var attacks = pawnAttacks[us][fromSq] and board.occupiedBB[them]
+    
+    while attacks != 0:
+      let toSq = popBit(attacks)
+      if rankOf(fromSq) == promotionRank:
+        # Capture Promotions
+        ml.addMove(makeMove(fromSq, toSq, Queen, CapturePromotion.int))
+        ml.addMove(makeMove(fromSq, toSq, Rook, CapturePromotion.int))
+        ml.addMove(makeMove(fromSq, toSq, Bishop, CapturePromotion.int))
+        ml.addMove(makeMove(fromSq, toSq, Knight, CapturePromotion.int))
+      else:
+        ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
+        
+  # Quiet Promotions
+  var singlePush = if us == White: (pawns shl 8) else: (pawns shr 8)
+  singlePush = singlePush and not board.allPiecesBB
+  
+  var bbProm = singlePush
+  while bbProm != 0:
+    let toSq = popBit(bbProm)
+    let fromSq = (toSq.int - (if us == White: 8 else: -8)).Square
+    if rankOf(fromSq) == promotionRank:
+      ml.addMove(makeMove(fromSq, toSq, Queen, Promotion.int))
+      ml.addMove(makeMove(fromSq, toSq, Rook, Promotion.int))
+      ml.addMove(makeMove(fromSq, toSq, Bishop, Promotion.int))
+      ml.addMove(makeMove(fromSq, toSq, Knight, Promotion.int))
+        
+  # En Passant
+  if board.enPassantSquare != NoSquare:
+    let epSq = board.enPassantSquare.Square
+    var epAttackers = pawnAttacks[them][epSq] and pawns
+    while epAttackers != 0:
+      let fromSq = popBit(epAttackers)
+      ml.addMove(makeMove(fromSq, epSq, NoPieceType, EpCapture.int))
+
+proc generateKnightCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
+  let us = board.sideToMove
+  var knights = board.pieceBB[makePiece(us, Knight)]
+  let themBB = board.occupiedBB[if us == White: Black else: White]
+  
+  while knights != 0:
+    let fromSq = popBit(knights)
+    var moves = knightAttacks[fromSq] and themBB
+    while moves != 0:
+      let toSq = popBit(moves)
+      ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
+
+proc generateKingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
+  let us = board.sideToMove
+  let themBB = board.occupiedBB[if us == White: Black else: White]
+  var king = board.pieceBB[makePiece(us, King)]
+  
+  if king != 0:
+    let fromSq = popBit(king)
+    var moves = kingAttacks[fromSq] and themBB
+    while moves != 0:
+      let toSq = popBit(moves)
+      ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
+
+proc generateSlidingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
+  let us = board.sideToMove
+  let themBB = board.occupiedBB[if us == White: Black else: White]
+  let occupied = board.allPiecesBB
+  
+  # Rooks & Queens
+  var rooks = board.pieceBB[makePiece(us, Rook)] or board.pieceBB[makePiece(us, Queen)]
+  while rooks != 0:
+    let fromSq = popBit(rooks)
+    var moves = getRookAttacks(fromSq, occupied) and themBB
+    while moves != 0:
+      let toSq = popBit(moves)
+      ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
+
+  # Bishops & Queens
+  var bishops = board.pieceBB[makePiece(us, Bishop)] or board.pieceBB[makePiece(us, Queen)]
+  while bishops != 0:
+    let fromSq = popBit(bishops)
+    var moves = getBishopAttacks(fromSq, occupied) and themBB
+    while moves != 0:
+      let toSq = popBit(moves)
+      ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
+
+proc generatePseudoLegalCaptures*(board: Board, ml: var MoveList) {.gcsafe.} =
+  ml.clear()
+  generatePawnCaptures(board, ml)
+  generateKnightCaptures(board, ml)
+  generateKingCaptures(board, ml)
+  generateSlidingCaptures(board, ml)
+
+proc generateLegalCaptures*(board: var Board, ml: var MoveList) {.gcsafe.} =
+  var pseudo {.noinit.}: MoveList
+  pseudo.count = 0
+  generatePseudoLegalCaptures(board, pseudo)
+  ml.clear()
+  
+  for i in 0 ..< pseudo.count:
+    let m = pseudo.moves[i]
+    if board.makeMove(m):
+      ml.addMove(m)
+      board.unmakeMove(m)
+
+
 proc generateLegalMoves*(board: var Board, ml: var MoveList) {.gcsafe.} =
-  var pseudo: MoveList
+  var pseudo {.noinit.}: MoveList
+  pseudo.count = 0
   generatePseudoLegalMoves(board, pseudo)
   ml.clear()
   

@@ -3,13 +3,7 @@ nimcache/
 nimblecache/
 htmldocs/
 
-# Binaries
-*.exe
-*.out
-*.app
-*.dll
-*.so
-*.dylib
+
 
 # Nim compiler generated files
 *.nim.c

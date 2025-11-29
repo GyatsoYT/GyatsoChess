@@ -40,8 +40,10 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
   if standPat > alpha:
     alpha = standPat
     
-  var ml: MoveList
-  generateLegalMoves(board, ml)
+  var ml {.noinit.}: MoveList
+  ml.count = 0
+  generateLegalCaptures(board, ml)
+
   
   # Score Moves (only captures/promotions relevant, but we score all for simplicity of reuse)
   # Optimization: Could have a specialized generateCaptures
@@ -54,9 +56,8 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
   for i in 0 ..< ml.count:
     let m = pickMove(ml, i)
     
-    # Only consider captures and promotions
-    if not m.isCapture and not m.isPromotion:
-      continue
+    # Only consider captures and promotions (already filtered by generateLegalCaptures)
+
       
     discard board.makeMove(m)
     let score = -qSearch(board, -beta, -alpha, ply + 1, info)
