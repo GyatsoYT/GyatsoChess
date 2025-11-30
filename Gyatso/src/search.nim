@@ -1,12 +1,6 @@
 import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times, std/monotimes, std/atomics
 
-type
-  SearchInfo* = object
-    startTime*: MonoTime
-    allocatedTime*: Duration
-    depthLimit*: int
-    nodes*: uint64
-    stopFlag*: ptr Atomic[bool]
+
 
 var killerMoves* {.threadvar.}: array[MaxPly, array[2, Move]]
 var historyTable* {.threadvar.}: array[Color, array[Square, array[Square, int]]]
@@ -247,7 +241,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
       
   return maxEval
 
-proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
+proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int = 0): (Move, int) =
   info.startTime = getMonoTime()
   info.nodes = 0
   # stopFlag is managed by caller
@@ -326,10 +320,11 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
     bestMove = currentBestMove
     bestScore = currentBestScore
     
-    let elapsed = (getMonoTime() - info.startTime).inMilliseconds
-    let nps = if elapsed > 0: (info.nodes.float / (elapsed.float / 1000.0)).int else: 0
-    
-    echo "info depth ", depth, " score cp ", bestScore, " nodes ", info.nodes, " nps ", nps, " time ", elapsed, " pv ", bestMove.toAlgebraic()
+    if threadID == 0:
+      let elapsed = (getMonoTime() - info.startTime).inMilliseconds
+      let nps = if elapsed > 0: (info.nodes.float / (elapsed.float / 1000.0)).int else: 0
+      
+      echo "info depth ", depth, " score cp ", bestScore, " nodes ", info.nodes, " nps ", nps, " time ", elapsed, " pv ", bestMove.toAlgebraic()
     
     # Decay History
     for c in White .. Black:
@@ -340,3 +335,4 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo): (Move, int) =
     # Check if we used up too much time (soft limit check could go here)
     
   return (bestMove, bestScore)
+

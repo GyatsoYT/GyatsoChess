@@ -54,60 +54,11 @@ proc parseMove(board: var Board, moveStr: string): Move =
       
   return Move(0)
 
-type
-  SearchThreadData = object
-    board: Board
-    info: SearchInfo
-
-var searchThread: ptr Thread[SearchThreadData]
-var searchRunning = false
-var stopFlag: ptr Atomic[bool]
-
-proc searchDriver(data: SearchThreadData) {.thread.} =
-  initThreadMagics()
-  var b = data.board
-  var info = data.info
-  
-  # Ensure stop flag is reset before starting (though it should be handled by main thread)
-  if info.stopFlag != nil:
-    info.stopFlag[].store(false, moRelaxed)
-    
-  let (bestMove, _) = iterativeDeepening(b, info)
-  echo "bestmove ", bestMove.toAlgebraic()
-  flushFile(stdout)
-
-proc startSearch(board: Board, info: SearchInfo) {.gcsafe.} =
-  if searchRunning:
-    if stopFlag != nil: stopFlag[].store(true, moRelaxed)
-    joinThread(searchThread[])
-    searchRunning = false
-    
-  var data: SearchThreadData
-  data.board = board
-  data.info = info
-  data.info.stopFlag = stopFlag # Ensure it points to the shared flag
-  
-  # Reset stop flag
-  if stopFlag != nil:
-    stopFlag[].store(false, moRelaxed)
-    
-  createThread(searchThread[], searchDriver, data)
-  searchRunning = true
-
-proc stopSearch() {.gcsafe.} =
-  if searchRunning:
-    if stopFlag != nil:
-      stopFlag[].store(true, moRelaxed)
-    joinThread(searchThread[])
-    searchRunning = false
-
 proc uciLoop() {.thread, gcsafe.} =
   initThreadMagics() # Initialize thread-local magic bitboards
   var b = initializeBoard()
   
-  # Allocate shared stop flag and thread
-  stopFlag = cast[ptr Atomic[bool]](allocShared0(sizeof(Atomic[bool])))
-  searchThread = createShared(Thread[SearchThreadData])
+  initThreadPool(1) # Default to 1 thread
   
   while not quitEngine:
     try:
@@ -124,7 +75,7 @@ proc uciLoop() {.thread, gcsafe.} =
         echo "id name Gyatso"
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
-        echo "option name Threads type spin default 1 min 1 max 1"
+        echo "option name Threads type spin default 1 min 1 max 128"
         echo "option name UCI_Chess960 type check default false"
         echo "uciok"
       of "isready":
@@ -167,7 +118,15 @@ proc uciLoop() {.thread, gcsafe.} =
             uciChess960 = false
           log("UCI_Chess960 set to " & $uciChess960, Info)
         elif name == "Threads":
-          log("Threads option not yet supported", Info)
+          try:
+            let t = parseInt(value)
+            if t >= 1:
+              initThreadPool(t)
+              log("Threads set to " & $t, Info)
+            else:
+              log("Invalid Threads value: " & value, Warn)
+          except ValueError:
+            log("Invalid Threads value: " & value, Warn)
           
       of "stop":
         stopSearch()
@@ -272,7 +231,7 @@ proc uciLoop() {.thread, gcsafe.} =
         var info: SearchInfo
         info.allocatedTime = allocatedTime
         info.depthLimit = depth
-        info.stopFlag = stopFlag
+        # info.stopFlag is set by startSearch
         
         startSearch(b, info)
       of "eval":

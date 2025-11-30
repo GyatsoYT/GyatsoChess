@@ -2,6 +2,7 @@
 import threading
 import std/strutils
 import std/times
+import std/locks
 
 type
   LogLevel* = enum

@@ -1,5 +1,13 @@
+import std/monotimes, std/times, std/atomics
 
 type
+  SearchInfo* = object
+    startTime*: MonoTime
+    allocatedTime*: Duration
+    depthLimit*: int
+    nodes*: uint64
+    stopFlag*: ptr Atomic[bool]
+
   Color* = enum
     White, Black, NoColor
 

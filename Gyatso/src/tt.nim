@@ -1,11 +1,12 @@
 import coretypes, zobrist, move, board
+import std/locks
 
 type
   TTEntryFlag* = enum
+    InvalidEntry, # 0, so allocShared0 sets this by default
     ExactScore,
     LowerBound,
-    UpperBound,
-    InvalidEntry
+    UpperBound
 
   TTEntry* = object
     zobristKey*: ZobristKey
@@ -14,30 +15,32 @@ type
     flag*: TTEntryFlag
     bestMove*: Move
 
-
-
 var transpositionTable*: ptr UncheckedArray[TTEntry]
 var ttSize*: int
+
+const NumTTLocks = 8192
+var ttLocks: array[NumTTLocks, Lock]
 
 proc initTT*(sizeMB: int) =
   let entrySize = sizeof(TTEntry)
   let numEntries = (sizeMB * 1024 * 1024) div entrySize
   
   ttSize = numEntries
+  if transpositionTable != nil:
+    deallocShared(transpositionTable)
+    
   transpositionTable = cast[ptr UncheckedArray[TTEntry]](allocShared0(sizeof(TTEntry) * ttSize))
   
-  # Clear table (allocShared0 already zeroes it, but we can set flags if needed)
-  # For now, 0 flag is ExactScore (if enum starts at 0).
-  # Let's make InvalidEntry 0 to be safe with allocShared0?
-  # Or just loop and set.
-  for i in 0 ..< ttSize:
-    transpositionTable[i].flag = InvalidEntry
+  # Initialize locks
+  for i in 0 ..< NumTTLocks:
+    initLock(ttLocks[i])
 
 proc ttIndex(key: ZobristKey): int {.inline.} =
   int(key mod ttSize.uint64)
 
 proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, originalBeta: int, bestMove: Move, plyFromRoot: int) {.gcsafe.} =
   let index = ttIndex(board.currentZobristKey)
+  let lockIdx = index mod NumTTLocks
   
   var flag = ExactScore
   if score <= originalAlpha:
@@ -55,6 +58,7 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
   # Replacement strategy: Always replace for now (simplest)
   # Could add depth check: if entry.depth <= depth or entry.flag == InvalidEntry
   
+  acquire(ttLocks[lockIdx])
   transpositionTable[index] = TTEntry(
     zobristKey: board.currentZobristKey,
     depth: depth.int8,
@@ -62,10 +66,15 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
     flag: flag,
     bestMove: bestMove
   )
+  release(ttLocks[lockIdx])
 
 proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int, plyFromRoot: int): (bool, int, Move) {.gcsafe.} =
   let index = ttIndex(zobristKey)
+  let lockIdx = index mod NumTTLocks
+  
+  acquire(ttLocks[lockIdx])
   let entry = transpositionTable[index]
+  release(ttLocks[lockIdx])
   
   if entry.zobristKey == zobristKey:
     if entry.depth >= depth.int8:
@@ -82,19 +91,6 @@ proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
       elif entry.flag == LowerBound:
         if score >= beta:
           return (true, score, entry.bestMove)
-        # Can update alpha?
-        # alpha = max(alpha, score) 
-        # The prompt says: If entry.flag == LowerBound, alpha = max(alpha, retrievedScore).
-        # But we return hit only if cutoff.
-        # Actually, standard TT probing updates alpha/beta for the current search context if not cutting off immediately?
-        # The prompt says: 
-        # iii. If entry.flag == LowerBound, alpha = max(alpha, retrievedScore).
-        # iv. If entry.flag == UpperBound, beta = min(beta, retrievedScore).
-        # v. If alpha >= beta, return (true, retrievedScore, entry.bestMove)
-        
-        # Let's follow the prompt logic exactly in the return values or side effects?
-        # The function signature is `probeTT(..., alpha: var int, beta: var int, ...)` so it can modify alpha/beta.
-        
         alpha = max(alpha, score)
       elif entry.flag == UpperBound:
         beta = min(beta, score)
@@ -102,17 +98,6 @@ proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
       if alpha >= beta:
         return (true, score, entry.bestMove)
         
-    # Even if depth is not sufficient for cutoff, we might return the move for ordering?
-    # The prompt says "Return (false, 0, defaultMove) if no usable hit."
-    # But usually we want the move even if we don't cut off.
-    # For now, let's stick to the prompt's "usable hit" for cutoff/score return.
-    # Wait, prompt says "If hit is true, return ttScore." in negamax.
-    # So this function is primarily for retrieving a score to return immediately.
-    # However, for move ordering (Task 14), we will need the move regardless of depth.
-    # We can return (false, 0, entry.bestMove) if key matches but depth insufficient?
-    # Prompt says: "Return (false, 0, defaultMove) if no usable hit."
-    # Let's follow that for now.
-    
     return (false, 0, entry.bestMove) # Return move even if false? Useful for ordering.
     
   return (false, 0, Move(0))
