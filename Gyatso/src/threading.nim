@@ -17,6 +17,7 @@ type
 var pool* {.threadvar.}: ThreadPool 
 var searchRunning*: bool = false
 var mainStopFlag*: ptr Atomic[bool]
+var sharedNodeCounts*: ptr UncheckedArray[uint64]
 
 proc worker(data: ThreadData) {.thread.} =
   initThreadMagics()
@@ -38,6 +39,11 @@ proc initThreadPool*(numThreads: int) =
   # Allocate shared stop flag if not already
   if mainStopFlag == nil:
     mainStopFlag = cast[ptr Atomic[bool]](allocShared0(sizeof(Atomic[bool])))
+    
+  # Allocate shared node counters
+  if sharedNodeCounts != nil:
+    deallocShared(sharedNodeCounts)
+  sharedNodeCounts = cast[ptr UncheckedArray[uint64]](allocShared0(sizeof(uint64) * numThreads))
 
 proc stopSearch*() =
   if searchRunning:
@@ -57,12 +63,20 @@ proc startSearch*(board: Board, info: SearchInfo) {.gcsafe.} =
   if mainStopFlag != nil:
     mainStopFlag[].store(false, moRelaxed)
     
+  # Reset node counts
+  if sharedNodeCounts != nil:
+    for i in 0 ..< pool.numThreads:
+      sharedNodeCounts[i] = 0
+    
   for i in 0 ..< pool.numThreads:
     var data: ThreadData
     data.threadID = i
     data.board = board
     data.info = info
     data.info.stopFlag = mainStopFlag
+    data.info.threadID = i
+    data.info.numThreads = pool.numThreads
+    data.info.nodeCounts = sharedNodeCounts
     
     createThread(pool.threads[i], worker, data)
 

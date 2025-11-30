@@ -8,10 +8,18 @@ var historyTable* {.threadvar.}: array[Color, array[Square, array[Square, int]]]
 proc checkTime*(info: var SearchInfo) =
   if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): return
   if info.nodes mod 2048 == 0:
+    # Sync node count to shared array
+    if info.nodeCounts != nil:
+      info.nodeCounts[info.threadID] = info.nodes
+      
     let elapsed = getMonoTime() - info.startTime
     if info.allocatedTime != DurationZero and elapsed > info.allocatedTime:
       if info.stopFlag != nil:
         info.stopFlag[].store(true, moRelaxed)
+
+
+
+
 
 const
   Infinity* = 30000
@@ -321,10 +329,21 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
     bestScore = currentBestScore
     
     if threadID == 0:
+      # Aggregate total nodes
+      var totalNodes = info.nodes # Start with our own
+      if info.nodeCounts != nil:
+        # Sum other threads (skip ourselves if we want, but array has our old value)
+        # Actually, info.nodeCounts[0] is our old value (synced every 2048).
+        # info.nodes is our current value (more accurate).
+        # So sum others.
+        for i in 0 ..< info.numThreads:
+          if i != threadID:
+            totalNodes += info.nodeCounts[i]
+            
       let elapsed = (getMonoTime() - info.startTime).inMilliseconds
-      let nps = if elapsed > 0: (info.nodes.float / (elapsed.float / 1000.0)).int else: 0
+      let nps = if elapsed > 0: (totalNodes.float / (elapsed.float / 1000.0)).int else: 0
       
-      echo "info depth ", depth, " score cp ", bestScore, " nodes ", info.nodes, " nps ", nps, " time ", elapsed, " pv ", bestMove.toAlgebraic()
+      echo "info depth ", depth, " score cp ", bestScore, " nodes ", totalNodes, " nps ", nps, " time ", elapsed, " pv ", bestMove.toAlgebraic()
     
     # Decay History
     for c in White .. Black:

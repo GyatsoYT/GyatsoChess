@@ -1202,3 +1202,84 @@
 [2025-11-30 17:27:03] [Debug] UCI Input: go depth 3
 [2025-11-30 17:27:03] [Debug] UCI Input: quit
 [2025-11-30 17:27:03] [Info] Engine exiting.
+[2025-11-30 17:52:12] [Info] Gyatso Chess Engine Started
+[2025-11-30 17:52:12] [Info] Attack tables precomputed.
+[2025-11-30 17:52:14] [Info] Magic bitboards initialized.
+[2025-11-30 17:52:14] [Info] Zobrist keys initialized.
+[2025-11-30 17:52:14] [Info] Transposition Table initialized.
+[2025-11-30 17:52:16] [Debug] UCI Input: perft 5
+[2025-11-30 17:52:22] [Debug] UCI Input: perft 5
+[2025-11-30 17:52:29] [Debug] UCI Input: go depth 12
+[2025-11-30 17:52:53] [Debug] UCI Input: quit
+[2025-11-30 17:52:53] [Info] Engine exiting.
+[2025-11-30 18:01:32] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:01:32] [Info] Attack tables precomputed.
+[2025-11-30 18:01:35] [Info] Magic bitboards initialized.
+[2025-11-30 18:01:35] [Info] Zobrist keys initialized.
+[2025-11-30 18:01:35] [Info] Transposition Table initialized.
+[2025-11-30 18:01:39] [Debug] UCI Input: uci
+[2025-11-30 18:01:39] [Debug] UCI Input: setoption name Threads value 4
+[2025-11-30 18:01:39] [Info] Threads set to 4
+[2025-11-30 18:01:39] [Debug] UCI Input: go depth 5
+[2025-11-30 18:01:39] [Debug] UCI Input: quit
+[2025-11-30 18:01:39] [Info] Engine exiting.
+[2025-11-30 18:01:58] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:01:58] [Info] Attack tables precomputed.
+[2025-11-30 18:02:01] [Info] Magic bitboards initialized.
+[2025-11-30 18:02:01] [Info] Zobrist keys initialized.
+[2025-11-30 18:02:01] [Info] Transposition Table initialized.
+[2025-11-30 18:02:11] [Debug] UCI Input: uci
+[2025-11-30 18:02:45] [Debug] UCI Input: setoption name Threads value 4
+[2025-11-30 18:02:45] [Info] Threads set to 4
+[2025-11-30 18:02:52] [Debug] UCI Input: go depth 12
+[2025-11-30 18:03:04] [Debug] UCI Input: quit
+[2025-11-30 18:03:04] [Info] Engine exiting.
+[2025-11-30 18:03:11] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:03:11] [Info] Attack tables precomputed.
+[2025-11-30 18:03:14] [Info] Magic bitboards initialized.
+[2025-11-30 18:03:14] [Info] Zobrist keys initialized.
+[2025-11-30 18:03:14] [Info] Transposition Table initialized.
+[2025-11-30 18:03:38] [Debug] UCI Input: setoption name Threads value 4
+[2025-11-30 18:03:38] [Info] Threads set to 4
+[2025-11-30 18:03:40] [Debug] UCI Input: perft 5
+[2025-11-30 18:03:46] [Debug] UCI Input: go depth 15
+[2025-11-30 18:05:10] [Debug] UCI Input: stop
+[2025-11-30 18:05:31] [Debug] UCI Input: quit
+[2025-11-30 18:05:31] [Info] Engine exiting.
+[2025-11-30 18:06:08] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:06:08] [Info] Attack tables precomputed.
+[2025-11-30 18:06:11] [Info] Magic bitboards initialized.
+[2025-11-30 18:06:11] [Info] Zobrist keys initialized.
+[2025-11-30 18:06:11] [Info] Transposition Table initialized.
+[2025-11-30 18:06:11] [Debug] UCI Input: uci
+[2025-11-30 18:06:25] [Debug] UCI Input: setoption name Threads value 4 
+[2025-11-30 18:06:25] [Warn] Invalid Threads value: 4 
+[2025-11-30 18:06:28] [Debug] UCI Input: perft 5
+[2025-11-30 18:06:35] [Debug] UCI Input: go depth 15
+[2025-11-30 18:07:07] [Debug] UCI Input: stop
+[2025-11-30 18:07:08] [Debug] UCI Input: 
+[2025-11-30 18:07:08] [Warn] Unknown command: 
+[2025-11-30 18:07:29] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:07:29] [Info] Attack tables precomputed.
+[2025-11-30 18:07:32] [Info] Magic bitboards initialized.
+[2025-11-30 18:07:32] [Info] Zobrist keys initialized.
+[2025-11-30 18:07:32] [Info] Transposition Table initialized.
+[2025-11-30 18:07:32] [Debug] UCI Input: uci
+[2025-11-30 18:07:45] [Debug] UCI Input: setoption name Threads value 4
+[2025-11-30 18:07:45] [Info] Threads set to 4
+[2025-11-30 18:07:49] [Debug] UCI Input: go depth 15
+[2025-11-30 18:08:20] [Debug] UCI Input: stop
+[2025-11-30 18:08:27] [Debug] UCI Input: perft 5
+[2025-11-30 18:08:33] [Debug] UCI Input: quit
+[2025-11-30 18:08:33] [Info] Engine exiting.
+[2025-11-30 18:13:41] [Info] Gyatso Chess Engine Started
+[2025-11-30 18:13:41] [Info] Attack tables precomputed.
+[2025-11-30 18:13:44] [Info] Magic bitboards initialized.
+[2025-11-30 18:13:44] [Info] Zobrist keys initialized.
+[2025-11-30 18:13:44] [Info] Transposition Table initialized.
+[2025-11-30 18:13:52] [Debug] UCI Input: uci
+[2025-11-30 18:14:05] [Debug] UCI Input: setoption name Threads value 4
+[2025-11-30 18:14:05] [Info] Threads set to 4
+[2025-11-30 18:14:09] [Debug] UCI Input: go depth 5
+[2025-11-30 18:14:15] [Debug] UCI Input: quit
+[2025-11-30 18:14:15] [Info] Engine exiting.

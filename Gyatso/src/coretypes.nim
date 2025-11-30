@@ -7,6 +7,9 @@ type
     depthLimit*: int
     nodes*: uint64
     stopFlag*: ptr Atomic[bool]
+    threadID*: int
+    numThreads*: int
+    nodeCounts*: ptr UncheckedArray[uint64]
 
   Color* = enum
     White, Black, NoColor
