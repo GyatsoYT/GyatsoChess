@@ -1,4 +1,4 @@
-import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times, std/monotimes, std/atomics
+import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times, std/monotimes, std/atomics, see
 
 
 
@@ -39,6 +39,16 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
   if standPat >= beta:
     return beta
     
+  # Delta Pruning
+  # If standing pat is far below alpha, we might not need to search captures
+  # Safety margin: Queen Value + some buffer
+  const DeltaMargin = 975
+  if standPat < alpha - DeltaMargin:
+    # If we are not promoting, we can't possibly raise alpha
+    # But we need to be careful about promotions.
+    # For now, let's just use it as a heuristic to return alpha if very bad.
+    return alpha
+
   if standPat > alpha:
     alpha = standPat
     
@@ -58,8 +68,11 @@ proc qSearch(board: var Board, alpha: int, beta: int, ply: int, info: var Search
   for i in 0 ..< ml.count:
     let m = pickMove(ml, i)
     
-    # Only consider captures and promotions (already filtered by generateLegalCaptures)
-
+    # SEE Pruning for Captures
+    # If the capture loses material, don't search it in qSearch (unless very important?)
+    # We skip bad captures.
+    if not m.isPromotion and see(board, m) < 0:
+      continue
       
     discard board.makeMove(m)
     let score = -qSearch(board, -beta, -alpha, ply + 1, info)
@@ -104,13 +117,28 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
     
   var ml: MoveList
   
+  # Static Evaluation for Pruning
+  var staticEval = -Infinity
+  if depth < 7:
+    staticEval = evaluate(board)
+    
+  # Reverse Futility Pruning (Static Null Move Pruning)
+  # If we are way above beta, we can prune.
+  if depth < 7 and ply > 0 and abs(beta) < MateValue and staticEval - (100 * depth) >= beta:
+    return staticEval
+
   # Null Move Pruning
   if depth >= 3 and (info.stopFlag == nil or not info.stopFlag[].load(moRelaxed)):
     let us = board.sideToMove
     let them = if us == White: Black else: White
     let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
     
-    if not isSquareAttacked(board, kingSq.Square, them) and hasSufficientMaterial(board, us):
+    # Only if static eval is good enough (>= beta) or we just try it?
+    # Standard NMP: if staticEval >= beta (or close), try null move.
+    # We use a relaxed condition or just try it.
+    # Current implementation didn't check staticEval, which is risky.
+    # Let's add staticEval check.
+    if staticEval >= beta and not isSquareAttacked(board, kingSq.Square, them) and hasSufficientMaterial(board, us):
       board.makeNullMove()
       let R = 2
       let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1, info, totalExtensions)
@@ -146,22 +174,28 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
     # Killer Moves & History Heuristic
     if ml.scores[i] == 0: # Only boost quiet moves (score 0 from scoreMove)
       if ml.moves[i] == killerMoves[ply][0]:
-        ml.scores[i] = 900
+        ml.scores[i] = 80_000
       elif ml.moves[i] == killerMoves[ply][1]:
-        ml.scores[i] = 850
+        ml.scores[i] = 70_000
       else:
         # History Heuristic
         let m = ml.moves[i]
         let histScore = historyTable[board.sideToMove][m.fromSquare][m.toSquare]
-        # Cap history score to avoid overflowing or dominating killers too much? 
-        # Usually history scores can be large, but let's scale or cap if needed.
-        # For now, just add it.
-        ml.scores[i] += histScore
+        # Cap history score
+        ml.scores[i] += min(histScore, 10_000)
   
   var movesSearched = 0
   
   for i in 0 ..< ml.count:
     let m = pickMove(ml, i)
+    
+    # Futility Pruning (in loop)
+    # Prune quiet moves if static eval is too low
+    if depth < 7 and not m.isCapture and not m.isPromotion and not isSquareAttacked(board, bitScanForward(board.pieceBB[makePiece(board.sideToMove, King)]).Square, if board.sideToMove == White: Black else: White):
+       let margin = 100 * depth
+       if staticEval + margin < alpha:
+         continue
+         
     discard board.makeMove(m)
     
     # Check Extension
@@ -281,6 +315,12 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
     # Root search logic inside ID loop
     var ml: MoveList
     generateLegalMoves(board, ml)
+    
+    # Debug Logging
+    # let f2 = open("debug.log", fmAppend)
+    # f2.writeLine("Depth " & $depth & " Moves: " & $ml.count)
+    # f2.close()
+    
     if ml.count == 0: break # Game over
     
     var currentBestMove = Move(0)
@@ -296,6 +336,18 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
       if ml.scores[i] == 0:
          let m = ml.moves[i]
          ml.scores[i] += historyTable[board.sideToMove][m.fromSquare][m.toSquare]
+
+    # Fallback for Depth 1: Select best static move to ensure we have a move if we timeout immediately
+    if depth == 1 and ml.count > 0:
+       var bestStaticIdx = 0
+       var bestStaticScore = ml.scores[0]
+       for i in 1 ..< ml.count:
+         if ml.scores[i] > bestStaticScore:
+           bestStaticScore = ml.scores[i]
+           bestStaticIdx = i
+       bestMove = ml.moves[bestStaticIdx]
+       # echo "info string debug fallback selected ", bestMove.toAlgebraic()
+
     
     for i in 0 ..< ml.count:
       let m = pickMove(ml, i)
@@ -325,10 +377,15 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
     if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
       break
       
-    bestMove = currentBestMove
-    bestScore = currentBestScore
+    if currentBestMove != Move(0):
+      bestMove = currentBestMove
+      bestScore = currentBestScore
     
     if threadID == 0:
+      # Final safety check: If bestMove is still Move(0) (should be impossible with fallback), pick first move
+      if bestMove == Move(0) and ml.count > 0:
+        bestMove = ml.moves[0]
+        
       # Aggregate total nodes
       var totalNodes = info.nodes # Start with our own
       if info.nodeCounts != nil:

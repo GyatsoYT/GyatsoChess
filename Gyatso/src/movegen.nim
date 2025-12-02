@@ -324,23 +324,22 @@ proc getPieceValue(pt: PieceType): int =
 
 proc scoreMove*(board: Board, move: Move, ttMove: Move): int =
   if move == ttMove:
-    return 20000 # Highest priority
+    return 1_000_000 # Highest priority
     
   if move.isCapture:
     let victim = getPieceTypeAt(board, move.toSquare)
     # Find attacker
-    let us = board.sideToMove
     let attacker = pieceType(board.pieces[move.fromSquare])
-
-        
+    
     if move.isEnPassant:
-      return 105 # Pawn captures Pawn (100 + 10*1 - 1) approx
+      return 100_105 # Captures start at 100,000
       
+    # MVV-LVA: Victim * 10 - Attacker
     let score = (getPieceValue(victim) * 10) - getPieceValue(attacker)
-    return score + 1000 # Offset for captures
+    return 100_000 + score
     
   if move.isPromotion:
-    return getPieceValue(move.promotion) + 500
+    return 90_000 + getPieceValue(move.promotion)
     
   return 0
 
