@@ -285,6 +285,9 @@ proc getPV(board: Board, depth: int): string =
     pv.add(move.toAlgebraic() & " ")
     discard b.makeMove(move)
     
+    if b.halfMoveClock >= 100: break
+    
+    if b.isRepetition(): break
     if b.currentZobristKey in seenKeys: break
     seenKeys.add(b.currentZobristKey)
     
