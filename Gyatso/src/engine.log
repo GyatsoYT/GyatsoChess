@@ -1302,3 +1302,36 @@
 [2025-12-07 18:35:00] [Debug] UCI Input: go depth 15
 [2025-12-07 18:35:21] [Debug] UCI Input: quit
 [2025-12-07 18:35:21] [Info] Engine exiting.
+[2025-12-08 11:30:54] [Info] Gyatso Chess Engine Started
+[2025-12-08 11:30:54] [Info] Attack tables precomputed.
+[2025-12-08 11:30:56] [Info] Magic bitboards initialized.
+[2025-12-08 11:30:56] [Info] Zobrist keys initialized.
+[2025-12-08 11:30:56] [Info] Transposition Table initialized.
+[2025-12-08 11:30:57] [Debug] UCI Input: uci
+[2025-12-08 11:31:01] [Debug] UCI Input: position startpos
+[2025-12-08 11:31:04] [Debug] UCI Input: go depth 20
+[2025-12-08 11:31:35] [Debug] UCI Input: stop
+[2025-12-08 11:31:37] [Debug] UCI Input: quit
+[2025-12-08 11:31:37] [Info] Engine exiting.
+[2025-12-08 11:36:57] [Info] Gyatso Chess Engine Started
+[2025-12-08 11:36:57] [Info] Attack tables precomputed.
+[2025-12-08 11:37:00] [Info] Magic bitboards initialized.
+[2025-12-08 11:37:00] [Info] Zobrist keys initialized.
+[2025-12-08 11:37:00] [Info] Transposition Table initialized.
+[2025-12-08 11:37:39] [Debug] UCI Input: position fen rnbqk1nr/pppppppp/8/8/8/8/PPPPPPPP/RN1QKBNR w KQkq - 0 1
+[2025-12-08 11:37:39] [Debug] UCI Input: eval
+[2025-12-08 11:38:21] [Debug] UCI Input: d
+[2025-12-08 11:38:29] [Debug] UCI Input: position startpos
+[2025-12-08 11:38:29] [Debug] UCI Input: eval
+[2025-12-08 11:38:29] [Debug] UCI Input: position fen rnbqk1nr/pppppppp/8/8/8/8/PPPPPPPP/RN1QKBNR w KQkq - 0 1
+[2025-12-08 11:38:29] [Debug] UCI Input: eval
+[2025-12-08 11:38:29] [Debug] UCI Input: position fen 7k/8/8/8/8/8/4R3/7K w - - 0 1
+[2025-12-08 11:38:29] [Debug] UCI Input: eval
+[2025-12-08 11:38:29] [Debug] UCI Input: position fen 7k/8/8/8/4P3/8/4R3/7K w - - 0 1
+[2025-12-08 11:38:29] [Debug] UCI Input: eval
+[2025-12-08 11:39:33] [Debug] UCI Input: position fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQK1NR w KQkq - 0 1
+[2025-12-08 11:39:33] [Debug] UCI Input: eval
+[2025-12-08 11:39:33] [Debug] UCI Input: position fen 4k3/4p3/8/8/8/8/4R3/4K3 w - - 0 1
+[2025-12-08 11:39:33] [Debug] UCI Input: eval
+[2025-12-08 11:41:09] [Debug] UCI Input: 
+[2025-12-08 11:41:09] [Warn] Unknown command: 

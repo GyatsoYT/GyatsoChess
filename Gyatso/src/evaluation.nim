@@ -166,6 +166,10 @@ const
   PassedPawnBonus: array[0..7, int] = [0, 5, 10, 20, 35, 60, 100, 0] # Bonus by rank
   TempoBonus = 15
   
+  BishopPairBonus = 40
+  RookOnOpenFileBonus = 25
+  RookOnSemiOpenFileBonus = 12
+  
   MobilityBonusKnight = 4
   MobilityBonusBishop = 3
   MobilityBonusRook = 2
@@ -344,6 +348,10 @@ proc evaluate*(board: Board): int =
     
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightBishop
+      
+  if (board.pieceBB[WhiteBishop] and (board.pieceBB[WhiteBishop] - 1)) != 0:
+    mgWhite += BishopPairBonus
+    egWhite += BishopPairBonus
 
   # Rooks
   bb = board.pieceBB[WhiteRook]
@@ -360,6 +368,20 @@ proc evaluate*(board: Board): int =
     
     if (attacks and blackKingZone) != 0:
       whiteAttackUnits += countBits(attacks and blackKingZone) * AttackWeightRook
+
+    # Rook on Open/Semi-Open File
+    let f = fileOf(sq)
+    let fileMask = FileMasks[f]
+    let whitePawnsOnFile = (board.pieceBB[WhitePawn] and fileMask) != 0
+    let blackPawnsOnFile = (board.pieceBB[BlackPawn] and fileMask) != 0
+    
+    if not whitePawnsOnFile:
+      if not blackPawnsOnFile:
+        mgWhite += RookOnOpenFileBonus
+        egWhite += RookOnOpenFileBonus
+      else:
+        mgWhite += RookOnSemiOpenFileBonus
+        egWhite += RookOnSemiOpenFileBonus
 
   # Queens
   bb = board.pieceBB[WhiteQueen]
@@ -418,6 +440,10 @@ proc evaluate*(board: Board): int =
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightBishop
 
+  if (board.pieceBB[BlackBishop] and (board.pieceBB[BlackBishop] - 1)) != 0:
+    mgBlack += BishopPairBonus
+    egBlack += BishopPairBonus
+
   # Rooks
   bb = board.pieceBB[BlackRook]
   while bb != 0:
@@ -433,6 +459,20 @@ proc evaluate*(board: Board): int =
     
     if (attacks and whiteKingZone) != 0:
       blackAttackUnits += countBits(attacks and whiteKingZone) * AttackWeightRook
+
+    # Rook on Open/Semi-Open File
+    let f = fileOf(sq)
+    let fileMask = FileMasks[f]
+    let whitePawnsOnFile = (board.pieceBB[WhitePawn] and fileMask) != 0
+    let blackPawnsOnFile = (board.pieceBB[BlackPawn] and fileMask) != 0
+    
+    if not blackPawnsOnFile:
+      if not whitePawnsOnFile:
+        mgBlack += RookOnOpenFileBonus
+        egBlack += RookOnOpenFileBonus
+      else:
+        mgBlack += RookOnSemiOpenFileBonus
+        egBlack += RookOnSemiOpenFileBonus
 
   # Queens
   bb = board.pieceBB[BlackQueen]
