@@ -49,14 +49,7 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
     flag = LowerBound
     
   var adjustedScore = score
-  if abs(score) > 20000: # Mate score threshold (KingValue)
-    # Convert from search-relative to game-absolute
-    # Search returns: MATE_VALUE - plyFromRoot (for mate by us)
-    # Store as: MATE_VALUE - totalPlyFromGameRoot
-    if score > 0:
-      adjustedScore = score - board.gamePly
-    else:
-      adjustedScore = score + board.gamePly
+  
       
   # Replacement strategy: Always replace for now (simplest)
   # Could add depth check: if entry.depth <= depth or entry.flag == InvalidEntry
@@ -83,14 +76,7 @@ proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
     if entry.depth >= depth.int8:
       var score = entry.score.int
       
-      if abs(score) > 20000:
-        # Convert from game-absolute back to search-relative
-        # Stored as: MATE_VALUE - totalPlyFromGameRoot
-        # Return as: MATE_VALUE - plyFromRoot (for current search)
-        if score > 0:
-          score = score + gamePly
-        else:
-          score = score - gamePly
+      
           
       if entry.flag == ExactScore:
         return (true, score, entry.bestMove)

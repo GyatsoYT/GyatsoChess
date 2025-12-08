@@ -10,6 +10,8 @@ type
     threadID*: int
     numThreads*: int
     nodeCounts*: ptr UncheckedArray[uint64]
+    ponderFlag*: ptr Atomic[bool]  # Shared flag for pondering state
+    ponderMove*: uint16  # Store as uint16 to match Move type
 
   Color* = enum
     White, Black, NoColor

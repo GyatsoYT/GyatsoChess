@@ -7,6 +7,9 @@ import std/monotimes
 # Global flag to control the engine loop
 var quitEngine = false
 var uciChess960 = false
+var uciPonder = false
+var isPondering = false
+var lastPonderMove = Move(0)
 
 proc calculateSearchTime(wtime, btime, winc, binc, movestogo: int, sideToMove: Color): Duration =
   let timeAvailable = if sideToMove == White: wtime else: btime
@@ -77,6 +80,7 @@ proc uciLoop() {.thread, gcsafe.} =
         echo "option name Hash type spin default 64 min 1 max 1024"
         echo "option name Threads type spin default 1 min 1 max 128"
         echo "option name UCI_Chess960 type check default false"
+        echo "option name Ponder type check default false"
         echo "uciok"
       of "isready":
         echo "readyok"
@@ -127,9 +131,27 @@ proc uciLoop() {.thread, gcsafe.} =
               log("Invalid Threads value: " & value, Warn)
           except ValueError:
             log("Invalid Threads value: " & value, Warn)
+        elif name == "Ponder":
+          if value == "true":
+            uciPonder = true
+          else:
+            uciPonder = false
+          log("Ponder set to " & $uciPonder, Info)
           
       of "stop":
         stopSearch()
+        if isPondering:
+          isPondering = false
+          if mainPonderFlag != nil:
+            mainPonderFlag[].store(false, moRelaxed)
+          log("Stop received - clearing ponder state", Info)
+      of "ponderhit":
+        # Transition from pondering to regular search
+        if isPondering:
+          isPondering = false
+          if mainPonderFlag != nil:
+            mainPonderFlag[].store(false, moRelaxed)
+          log("Ponderhit received - transitioning to regular search", Info)
       of "quit":
         stopSearch()
         quitEngine = true
@@ -181,7 +203,7 @@ proc uciLoop() {.thread, gcsafe.} =
           except ValueError:
             echo "Invalid depth"
       of "go":
-        # go depth <x> wtime <x> btime <x> winc <x> binc <x> movestogo <x> movetime <x>
+        # go depth <x> wtime <x> btime <x> winc <x> binc <x> movestogo <x> movetime <x> ponder
         var depth = 0
         var wtime = 0
         var btime = 0
@@ -190,6 +212,7 @@ proc uciLoop() {.thread, gcsafe.} =
         var movestogo = 0 # 0 means not specified
         var movetime = 0
         var infinite = false
+        var ponder = false
         
         var i = 1
         while i < parts.len:
@@ -210,6 +233,8 @@ proc uciLoop() {.thread, gcsafe.} =
             inc i; movetime = parseInt(parts[i])
           of "infinite":
             infinite = true
+          of "ponder":
+            ponder = true
           else:
             discard
           inc i
@@ -220,17 +245,30 @@ proc uciLoop() {.thread, gcsafe.} =
           allocatedTime = initDuration(milliseconds = movetime)
         elif wtime > 0 or btime > 0:
           allocatedTime = calculateSearchTime(wtime, btime, winc, binc, movestogo, b.sideToMove)
+
+        if ponder:
+          # Pondering mode: set flag but KEEP the allocated time for when ponderhit arrives
+          isPondering = true
+          if mainPonderFlag != nil:
+            mainPonderFlag[].store(true, moRelaxed)
+          log("Starting ponder search", Info)
+        else:
+          # Regular search: ensure ponder flag is OFF
+          isPondering = false
+          if mainPonderFlag != nil:
+            mainPonderFlag[].store(false, moRelaxed)
           
         if infinite:
           allocatedTime = DurationZero
           
-        if depth > 0 and allocatedTime == DurationZero and not infinite:
+        if depth > 0 and allocatedTime == DurationZero and not infinite and not ponder:
            # Fixed depth search, no time limit
            discard
            
         var info: SearchInfo
         info.allocatedTime = allocatedTime
         info.depthLimit = depth
+        info.ponderFlag = mainPonderFlag
         # info.stopFlag is set by startSearch
         
         startSearch(b, info)
@@ -241,6 +279,12 @@ proc uciLoop() {.thread, gcsafe.} =
       of "d":
         b.printBoard()
       of "position":
+        # Stop pondering if we receive a position command
+        if isPondering:
+          stopSearch()
+          isPondering = false
+          log("Stopping ponder search due to position change", Info)
+        
         # position [startpos | fen <fen>] [moves <moves>]
         if parts.len > 1:
           var moveIdx = -1

@@ -9,8 +9,12 @@ proc checkTime*(info: var SearchInfo) =
     if info.nodeCounts != nil:
       info.nodeCounts[info.threadID] = info.nodes
       
-    # Then check time and stop flag
+    # Then check stop flag
     if info.stopFlag != nil and info.stopFlag[].load(moRelaxed): 
+      return
+    
+    # If pondering, don't check time - search infinitely until ponderhit or stop
+    if info.ponderFlag != nil and info.ponderFlag[].load(moRelaxed):
       return
       
     let elapsed = getMonoTime() - info.startTime
@@ -95,14 +99,14 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
   
   # Mate distance pruning
   # If we can already force a mate in X plies, don't search for longer mates
-  let mateInPly = MateValue - (board.gamePly + ply)
+  let mateInPly = MateValue - ply
   if mateInPly < beta:
     beta = mateInPly
     if alpha >= mateInPly:
       return mateInPly
 
   # If opponent can force mate against us in X plies, don't bother with worse positions
-  let matedInPly = -MateValue + (board.gamePly + ply) + 1
+  let matedInPly = -MateValue + ply + 1
   if matedInPly > alpha:
     alpha = matedInPly
     if beta <= matedInPly:
