@@ -135,3 +135,31 @@
 [2025-12-06 17:17:40] [Debug] UCI Input: go depth 15
 [2025-12-06 17:18:16] [Debug] UCI Input: quit
 [2025-12-06 17:18:16] [Info] Engine exiting.
+[2025-12-08 13:30:02] [Info] Gyatso Chess Engine Started
+[2025-12-08 13:30:02] [Info] Attack tables precomputed.
+[2025-12-08 13:30:06] [Info] Magic bitboards initialized.
+[2025-12-08 13:30:06] [Info] Zobrist keys initialized.
+[2025-12-08 13:30:06] [Info] Transposition Table initialized.
+[2025-12-08 13:30:06] [Debug] UCI Input: position fen 3k4/R7/3K4/8/8/8/8/8 w - - 0 1
+[2025-12-08 13:30:06] [Debug] UCI Input: go depth 3
+[2025-12-08 13:30:06] [Debug] UCI Input: quit
+[2025-12-08 13:30:06] [Info] Engine exiting.
+[2025-12-08 13:30:46] [Info] Gyatso Chess Engine Started
+[2025-12-08 13:30:46] [Info] Attack tables precomputed.
+[2025-12-08 13:30:49] [Info] Magic bitboards initialized.
+[2025-12-08 13:30:49] [Info] Zobrist keys initialized.
+[2025-12-08 13:30:49] [Info] Transposition Table initialized.
+[2025-12-08 13:31:19] [Debug] UCI Input: position fen 3k4/R7/3K4/8/8/8/8/8 w - - 0 1
+[2025-12-08 13:31:21] [Debug] UCI Input: go depth 5
+[2025-12-08 13:31:39] [Debug] UCI Input: d
+[2025-12-08 13:32:08] [Debug] UCI Input: quit
+[2025-12-08 13:32:08] [Info] Engine exiting.
+[2025-12-08 13:35:46] [Info] Gyatso Chess Engine Started
+[2025-12-08 13:35:46] [Info] Attack tables precomputed.
+[2025-12-08 13:35:49] [Info] Magic bitboards initialized.
+[2025-12-08 13:35:49] [Info] Zobrist keys initialized.
+[2025-12-08 13:35:49] [Info] Transposition Table initialized.
+[2025-12-08 13:36:03] [Debug] UCI Input: position fen 3k4/R7/3K4/8/8/8/8/8 w - - 0 1
+[2025-12-08 13:36:05] [Debug] UCI Input: go depth 5
+[2025-12-08 13:36:30] [Debug] UCI Input: quit
+[2025-12-08 13:36:30] [Info] Engine exiting.

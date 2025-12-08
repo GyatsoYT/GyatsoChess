@@ -38,7 +38,7 @@ proc initTT*(sizeMB: int) =
 proc ttIndex(key: ZobristKey): int {.inline.} =
   int(key mod ttSize.uint64)
 
-proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, originalBeta: int, bestMove: Move, plyFromRoot: int) {.gcsafe.} =
+proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, originalBeta: int, bestMove: Move) {.gcsafe.} =
   let index = ttIndex(board.currentZobristKey)
   let lockIdx = index mod NumTTLocks
   
@@ -50,10 +50,13 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
     
   var adjustedScore = score
   if abs(score) > 20000: # Mate score threshold (KingValue)
+    # Convert from search-relative to game-absolute
+    # Search returns: MATE_VALUE - plyFromRoot (for mate by us)
+    # Store as: MATE_VALUE - totalPlyFromGameRoot
     if score > 0:
-      adjustedScore += plyFromRoot
+      adjustedScore = score - board.gamePly
     else:
-      adjustedScore -= plyFromRoot
+      adjustedScore = score + board.gamePly
       
   # Replacement strategy: Always replace for now (simplest)
   # Could add depth check: if entry.depth <= depth or entry.flag == InvalidEntry
@@ -68,7 +71,7 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
   )
   release(ttLocks[lockIdx])
 
-proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int, plyFromRoot: int): (bool, int, Move) {.gcsafe.} =
+proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int, gamePly: int): (bool, int, Move) {.gcsafe.} =
   let index = ttIndex(zobristKey)
   let lockIdx = index mod NumTTLocks
   
@@ -81,10 +84,13 @@ proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
       var score = entry.score.int
       
       if abs(score) > 20000:
+        # Convert from game-absolute back to search-relative
+        # Stored as: MATE_VALUE - totalPlyFromGameRoot
+        # Return as: MATE_VALUE - plyFromRoot (for current search)
         if score > 0:
-          score -= plyFromRoot
+          score = score + gamePly
         else:
-          score += plyFromRoot
+          score = score - gamePly
           
       if entry.flag == ExactScore:
         return (true, score, entry.bestMove)

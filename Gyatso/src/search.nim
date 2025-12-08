@@ -89,9 +89,24 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
     return 0  # Always return 0 for draws (can be made dynamic based on position eval)
 
   # TT Probe
-  let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, ply)
+  let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, board.gamePly)
   if hit:
     return ttScore
+  
+  # Mate distance pruning
+  # If we can already force a mate in X plies, don't search for longer mates
+  let mateInPly = MateValue - (board.gamePly + ply)
+  if mateInPly < beta:
+    beta = mateInPly
+    if alpha >= mateInPly:
+      return mateInPly
+
+  # If opponent can force mate against us in X plies, don't bother with worse positions
+  let matedInPly = -MateValue + (board.gamePly + ply) + 1
+  if matedInPly > alpha:
+    alpha = matedInPly
+    if beta <= matedInPly:
+      return matedInPly
 
   if depth == 0:
     return qSearch(board, alpha, beta, ply, info)
@@ -254,7 +269,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
       break 
   
   # TT Store
-  storeTT(board, depth, maxEval, originalAlpha, beta, bestMove, ply)
+  storeTT(board, depth, maxEval, originalAlpha, beta, bestMove)
       
   return maxEval
 
@@ -266,7 +281,7 @@ proc getPV(board: Board, depth: int): string =
   for i in 0 ..< depth:
     var alpha = -Infinity
     var beta = Infinity
-    let (hit, _, move) = probeTT(b.currentZobristKey, 0, alpha, beta, 0)
+    let (hit, _, move) = probeTT(b.currentZobristKey, 0, alpha, beta, b.gamePly)
     if move == Move(0):
       break
       
@@ -342,7 +357,7 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
         return (bestMove, bestScore)  # Game over
       
       # Get TT Move for ordering
-      let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, 0)
+      let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth, alpha, beta, board.gamePly)
       
       # Score Moves
       for i in 0 ..< ml.count:
@@ -445,11 +460,24 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo, threadID: int =
       
       # Only print if not stopped
       if info.stopFlag == nil or not info.stopFlag[].load(moRelaxed):
-         # Store TT Entry for Root Position
-        storeTT(board, depth, bestScore, -Infinity, Infinity, bestMove, 0)
+        # Store TT Entry for Root Position
+        storeTT(board, depth, bestScore, -Infinity, Infinity, bestMove)
         
         let pvLine = getPV(board, depth)
-        echo "info depth ", depth, " score cp ", bestScore, " nodes ", totalNodes, " nps ", nps, " time ", elapsed, " pv ", pvLine
+        
+        # Format score for UCI output
+        var scoreStr = ""
+        if abs(bestScore) > 20000:
+          # Mate score - convert to mate distance
+          let mateDistance = (MateValue - abs(bestScore) + 1) div 2
+          if bestScore > 0:
+            scoreStr = "mate " & $mateDistance
+          else:
+            scoreStr = "mate -" & $mateDistance
+        else:
+          scoreStr = "cp " & $bestScore
+        
+        echo "info depth ", depth, " score ", scoreStr, " nodes ", totalNodes, " nps ", nps, " time ", elapsed, " pv ", pvLine
     
     # Decay History after each depth
     for c in White .. Black:

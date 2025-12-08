@@ -22,6 +22,7 @@ type
     castlingRights*: int
     halfMoveClock*: int
     fullMoveNumber*: int
+    gamePly*: int  # Total plies from game start (for mate distance calculation)
     currentZobristKey*: ZobristKey
     history*: seq[GameState]
 
@@ -43,6 +44,7 @@ proc clear(board: var Board) =
   board.castlingRights = 0
   board.halfMoveClock = 0
   board.fullMoveNumber = 1
+  board.gamePly = 0
   board.currentZobristKey = 0
 
 proc updateOccupancies*(board: var Board) =
@@ -156,6 +158,9 @@ proc parseFen*(board: var Board, fen: string) =
       board.fullMoveNumber = parseInt(parts[5])
     except ValueError:
       board.fullMoveNumber = 1
+
+  # Calculate gamePly from fullMoveNumber and sideToMove
+  board.gamePly = (board.fullMoveNumber - 1) * 2 + (if board.sideToMove == Black: 1 else: 0)
 
   board.currentZobristKey = board.generateZobristKey()
 
@@ -316,6 +321,7 @@ proc unmakeMove*(board: var Board, move: Move) =
   
   board.sideToMove = us
   if us == Black: dec(board.fullMoveNumber)
+  dec(board.gamePly)
   
   let fromSq = move.fromSquare
   let toSq = move.toSquare
@@ -521,6 +527,9 @@ proc makeMove*(board: var Board, move: Move): bool =
   # Update FullMove Number
   if us == Black:
     inc(board.fullMoveNumber)
+  
+  # Update GamePly
+  inc(board.gamePly)
     
   # Update Side to Move
   board.sideToMove = them
