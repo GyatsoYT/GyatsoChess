@@ -13,8 +13,13 @@ htmldocs/
 *.nim.cpp
 *.nim.js
 
-# Nimble generated files
+# Executables
+*.exe
+*.out
 
+#python files
+*.py
+*.pyc
 
 # Editor specific files
 *~

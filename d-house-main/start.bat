@@ -1,1 +1,0 @@
-python D:\engine\d-house-main\src\main.py

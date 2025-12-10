@@ -1,4 +1,3 @@
-
 import coretypes, bitboard, lookups, utils
 import std/random
 
@@ -12,14 +11,12 @@ type
 var rookMagics*: array[Square, MagicEntry]
 var bishopMagics*: array[Square, MagicEntry]
 
-# Use ptr UncheckedArray allocated with allocShared to be thread-safe and gcsafe.
 var sharedRookAttackTable: ptr UncheckedArray[Bitboard]
 var sharedBishopAttackTable: ptr UncheckedArray[Bitboard]
 
 var rookAttackTable* {.threadvar.}: ptr UncheckedArray[Bitboard]
 var bishopAttackTable* {.threadvar.}: ptr UncheckedArray[Bitboard]
 
-# PRNG for magic generation
 var state: uint64 = 1804289383
 
 proc randomU64(): uint64 =

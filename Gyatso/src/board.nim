@@ -1,4 +1,3 @@
-
 import coretypes, bitboard, zobrist, utils, lookups, magicbitboards, move
 import std/strutils
 

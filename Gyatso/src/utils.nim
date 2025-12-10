@@ -1,4 +1,3 @@
-
 import coretypes
 
 func squareFromCoords*(rank, file: int): Square {.inline.} =

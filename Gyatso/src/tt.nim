@@ -50,10 +50,6 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int, original
     
   var adjustedScore = score
   
-      
-  # Replacement strategy: Always replace for now (simplest)
-  # Could add depth check: if entry.depth <= depth or entry.flag == InvalidEntry
-  
   acquire(ttLocks[lockIdx])
   transpositionTable[index] = TTEntry(
     zobristKey: board.currentZobristKey,
@@ -90,6 +86,6 @@ proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
       if alpha >= beta:
         return (true, score, entry.bestMove)
         
-    return (false, 0, entry.bestMove) # Return move even if false? Useful for ordering.
+    return (false, 0, entry.bestMove)
     
   return (false, 0, Move(0))

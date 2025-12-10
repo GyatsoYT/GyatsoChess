@@ -252,7 +252,6 @@ proc evaluatePawnStructure(board: Board, mgWhite, egWhite, mgBlack, egBlack: var
     if (PassedPawnMasks[Black][sq] and board.pieceBB[WhitePawn]) == 0:
       egBlack += PassedPawnBonus[relativeRank]
 
-# Removed evaluateMobility and evaluateKingSafety as they are now inlined
 
 
 proc evaluate*(board: Board): int =

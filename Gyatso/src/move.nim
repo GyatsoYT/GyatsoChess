@@ -1,4 +1,3 @@
-
 import coretypes, utils
 
 type
@@ -31,7 +30,7 @@ const
   FromMask = 0x3F
   ToMask = 0xFC0
   PromoMask = 0x7000
-  FlagMask = 0xF0000 # Using bits 16-19 for flags if we use uint32
+  FlagMask = 0xF0000 
 
   # Shift amounts
   ToShift = 6

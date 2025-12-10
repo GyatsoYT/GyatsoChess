@@ -11,7 +11,6 @@ var
 # Initialize tables at module load
 proc initTables*() =
   # Late Move Reduction table
-  # Formula from dhouse: int(0.8 + log(depth) * log(1.2 * moves) / 2.5)
   for depth in 1 ..< MaxPly:
     for moves in 1 ..< 64:
       LMR[depth][moves] = int(0.8 + ln(depth.float) * ln(1.2 * moves.float) / 2.5)

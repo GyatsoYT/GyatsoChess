@@ -195,7 +195,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
     let m = pickMove(ml, i)
     
     # Futility Pruning - prune quiet moves if eval is too low
-    # Don't prune if in check or move gives check (approximation: captures/promotions might give check)
     if depth < 7 and not inCheck and not m.isCapture and not m.isPromotion:
        let margin = 100 * depth
        if staticEval + margin < alpha:

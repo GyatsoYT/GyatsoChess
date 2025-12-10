@@ -1,4 +1,3 @@
-
 import coretypes, board, move, bitboard, lookups, utils, magicbitboards, evaluation
 
 proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
@@ -28,11 +27,6 @@ proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
 
   # Double Push
   var doublePush = if us == White: (singlePush shl 8) else: (singlePush shr 8)
-  # Filter by rank (must start from startRank)
-  # For White, single push lands on rank 2 (index 2), double on rank 3. 
-  # Wait, startRank is 1 (index 1). Single push lands on 2. Double push lands on 3.
-  # We need to filter *sources* on startRank.
-  # Easier: Filter doublePush destinations to be on rank 3 (White) or 4 (Black).
   let doublePushRankMask = if us == White: 0x00000000FF000000'u64 else: 0x000000FF00000000'u64
   doublePush = doublePush and doublePushRankMask and not board.allPiecesBB
   
@@ -62,13 +56,6 @@ proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   # En Passant
   if board.enPassantSquare != NoSquare:
     let epSq = board.enPassantSquare.Square
-    # Find pawns that can attack epSq
-    # We can use pawnAttacks[them][epSq] to find *our* pawns that attack *their* ep square?
-    # No, pawnAttacks[c][s] gives squares attacked BY a pawn of color c on s.
-    # We want to know if any of OUR pawns attack epSq.
-    # This is equivalent to: if a pawn of OPPONENT color was on epSq, would it attack our pawn?
-    # So we check pawnAttacks[them][epSq] and intersect with our pawns.
-    
     var epAttackers = pawnAttacks[them][epSq] and pawns
     while epAttackers != 0:
       let fromSq = popBit(epAttackers)

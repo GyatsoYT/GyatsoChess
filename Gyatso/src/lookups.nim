@@ -1,4 +1,3 @@
-
 import coretypes, bitboard, utils
 
 type
@@ -107,9 +106,7 @@ proc initPawnAttacks() =
       if f > 0: pawnAttacks[Black][sq].setBit(squareFromCoords(r-1, f-1))
 
 proc initLineBetween() =
-  # This is a simplified version. A full version would handle all pairs.
-  # For now, we can rely on ray attacks or just implement it fully.
-  # Let's implement a basic version that checks if squares are on the same rank/file/diagonal.
+  # This is a simplified version.
   
   for s1Int in 0..63:
     let s1 = s1Int.Square
@@ -253,5 +250,5 @@ proc precomputeAttackTables*() =
   initKnightAttacks()
   initKingAttacks()
   initPawnAttacks()
-  initLineBetween() # Disabled due to hang/performance issue and lack of usage
+  initLineBetween()
   initEvaluationMasks()

@@ -1,4 +1,3 @@
-
 import std/bitops
 import coretypes
 

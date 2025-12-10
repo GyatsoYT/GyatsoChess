@@ -1,4 +1,3 @@
-
 import coretypes
 import std/sysrand
 
@@ -14,10 +13,6 @@ var
 proc randomKey(): ZobristKey =
   var bytes: array[8, byte]
   if not urandom(bytes):
-    # Fallback or error if system random fails, though unlikely
-    # For simplicity in this context, we might just use a pseudo-random fallback if needed,
-    # but urandom is preferred for "cryptographically strong" as requested.
-    # Let's assume urandom works or raise.
     raise newException(IOError, "Failed to generate random bytes")
   cast[ZobristKey](bytes)
 

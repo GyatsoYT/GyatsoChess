@@ -79,7 +79,6 @@ proc uciLoop() {.thread, gcsafe.} =
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
         echo "option name Threads type spin default 1 min 1 max 128"
-        echo "option name UCI_Chess960 type check default false"
         echo "option name Ponder type check default false"
         echo "uciok"
       of "isready":
@@ -115,12 +114,6 @@ proc uciLoop() {.thread, gcsafe.} =
             log("TT resized to " & $mb & " MB", Info)
           except ValueError:
             log("Invalid Hash value: " & value, Warn)
-        elif name == "UCI_Chess960":
-          if value == "true":
-            uciChess960 = true
-          else:
-            uciChess960 = false
-          log("UCI_Chess960 set to " & $uciChess960, Info)
         elif name == "Threads":
           try:
             let t = parseInt(value)
