@@ -1,4 +1,4 @@
-import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times, std/monotimes, std/atomics, see, zobrist
+import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times, std/monotimes, std/atomics, see, zobrist, tables
 
 var killerMoves* {.threadvar.}: array[MaxPly, array[2, Move]]
 var historyTable* {.threadvar.}: array[Color, array[Square, array[Square, int]]]
@@ -200,6 +200,16 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
        let margin = 100 * depth
        if staticEval + margin < alpha:
          continue
+    
+    # SEE Pruning for quiet moves (using StaticPruning table)
+    if not m.isCapture and not m.isPromotion and depth < MaxPly:
+      if see(board, m) < StaticPruning[0][depth]:
+        continue
+    
+    # SEE Pruning for bad captures (using StaticPruning table)
+    if m.isCapture and depth < MaxPly:
+      if see(board, m) < StaticPruning[1][depth]:
+        continue
          
     discard board.makeMove(m)
     
@@ -223,14 +233,24 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int, inf
       # First move - Full Window
       score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info, totalExtensions + extension)
     else:
-      # Late Move Reductions
+      # Late Move Reductions using pre-computed LMR table
       var reduction = 0
-      if depth >= 3 and movesSearched >= 4 and not m.isCapture and not m.isPromotion and not givesCheck and not inCheck:
-        reduction = 1
-        if movesSearched > 10: reduction += 1
-        # Cap reduction
-        if reduction > depth - 2: reduction = depth - 2
-        if reduction < 0: reduction = 0
+      if depth >= 3 and movesSearched >= 1:
+        # Base reduction from table
+        let tableDepth = min(depth, MaxPly - 1)
+        let tableIndex = min(movesSearched, 63)
+        reduction = LMR[tableDepth][tableIndex]
+        
+        # Adjust reduction based on move characteristics
+        if m.isCapture or m.isPromotion:
+          reduction = reduction div 2  # Reduce less for tactical moves
+        if givesCheck:
+          reduction = max(0, reduction - 1)
+        if inCheck:
+          reduction = max(0, reduction - 1)
+        
+        # Ensure reduction is valid
+        reduction = max(0, min(reduction, depth - 1))
       
       # Null Window Search with reduction
       score = -negamax(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1, info, totalExtensions + extension)
