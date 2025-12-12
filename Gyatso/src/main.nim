@@ -75,7 +75,7 @@ proc uciLoop() {.thread, gcsafe.} =
       
       case command
       of "uci":
-        echo "id name Gyatso"
+        echo "id name Gyatso 1.0.0"
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
         echo "option name Threads type spin default 1 min 1 max 128"

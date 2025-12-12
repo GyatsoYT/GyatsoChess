@@ -44,5 +44,5 @@ tests/nimcache/
 tests/*.out
 
 # Custom build directories
-build/
+builds/
 dist/
