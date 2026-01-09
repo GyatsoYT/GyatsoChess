@@ -1,8 +1,8 @@
-import coretypes, utils, bitboard, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, search, tt
+import coretypes, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, tt
 import std/strutils
 import std/times
 import std/atomics
-import std/monotimes
+import std/cpuinfo
 
 # Global flag to control the engine loop
 var quitEngine = false
@@ -20,12 +20,8 @@ proc calculateSearchTime(wtime, btime, winc, binc, movestogo: int, sideToMove: C
   if movestogo > 0:
     timeForMove = timeAvailable div movestogo
   else:
-    # Default time management if movestogo not specified (e.g. sudden death or unknown)
-    # Allocate ~1/30th of remaining time + increment
     timeForMove = (timeAvailable div 30) + inc
     
-  # Safety margin: ensure we don't run out of time completely
-  # Subtract some overhead (e.g. 50ms) but keep at least a minimum
   if timeForMove > 50:
     timeForMove -= 50
     
@@ -45,6 +41,83 @@ proc perftDriver(board: var Board, depth: int): uint64 =
       board.unmakeMove(m)
       
   return nodes
+
+type
+  PerftWorkerData = object
+    board: Board
+    moves: seq[Move]
+    depth: int
+    nodeCount: ptr Atomic[uint64]
+
+proc perftWorker(data: PerftWorkerData) {.thread.} =
+  initThreadMagics()  # Initialize thread-local magic bitboards
+  var board = data.board
+  var localNodes: uint64 = 0
+  
+  for m in data.moves:
+    if board.makeMove(m):
+      localNodes += perftDriver(board, data.depth - 1)
+      board.unmakeMove(m)
+  
+  # Atomically add local nodes to shared counter
+  data.nodeCount[].atomicInc(localNodes)
+
+proc perftDriverParallel(board: var Board, depth: int): uint64 =
+  if depth <= 1:
+    # For shallow depths, just use sequential version
+    return perftDriver(board, depth)
+  
+  # Get number of logical CPU cores
+  let numCores = countProcessors()
+  
+  # Generate all root moves
+  var ml: MoveList
+  generatePseudoLegalMoves(board, ml)
+  
+  # Filter to legal moves
+  var legalMoves: seq[Move] = @[]
+  for i in 0 ..< ml.count:
+    let m = ml.moves[i]
+    if board.makeMove(m):
+      legalMoves.add(m)
+      board.unmakeMove(m)
+  
+  if legalMoves.len == 0:
+    return 0
+  
+  # Allocate shared node counter
+  var sharedNodes = cast[ptr Atomic[uint64]](allocShared0(sizeof(Atomic[uint64])))
+  sharedNodes[].store(0)
+  
+  # Distribute moves across workers
+  var threads: seq[Thread[PerftWorkerData]] = newSeq[Thread[PerftWorkerData]](numCores)
+  var workerData: seq[PerftWorkerData] = newSeq[PerftWorkerData](numCores)
+
+  for i in 0 ..< numCores:
+    workerData[i].board = board
+    workerData[i].depth = depth
+    workerData[i].nodeCount = sharedNodes
+    workerData[i].moves = @[]
+  
+  for i in 0 ..< legalMoves.len:
+    let workerIdx = i mod numCores
+    workerData[workerIdx].moves.add(legalMoves[i])
+  
+  # Launch worker threads
+  for i in 0 ..< numCores:
+    if workerData[i].moves.len > 0:
+      createThread(threads[i], perftWorker, workerData[i])
+  
+  # Wait for all workers to complete
+  for i in 0 ..< numCores:
+    if workerData[i].moves.len > 0:
+      joinThread(threads[i])
+  
+  # Get final node count
+  let totalNodes = sharedNodes[].load()
+  deallocShared(sharedNodes)
+  
+  return totalNodes
 
 proc parseMove(board: var Board, moveStr: string): Move =
   var ml: MoveList
@@ -75,11 +148,13 @@ proc uciLoop() {.thread, gcsafe.} =
       
       case command
       of "uci":
-        echo "id name Gyatso 1.0.0"
+        echo "id name Gyatso 1.1.0"
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
         echo "option name Threads type spin default 1 min 1 max 128"
+        echo "option name UCI_Chess960 type check default false"
         echo "option name Ponder type check default false"
+        echo "option name Log Engine type check default false"
         echo "uciok"
       of "isready":
         echo "readyok"
@@ -114,6 +189,12 @@ proc uciLoop() {.thread, gcsafe.} =
             log("TT resized to " & $mb & " MB", Info)
           except ValueError:
             log("Invalid Hash value: " & value, Warn)
+        elif name == "UCI_Chess960":
+          if value == "true":
+            uciChess960 = true
+          else:
+            uciChess960 = false
+          log("UCI_Chess960 set to " & $uciChess960, Info)
         elif name == "Threads":
           try:
             let t = parseInt(value)
@@ -130,6 +211,14 @@ proc uciLoop() {.thread, gcsafe.} =
           else:
             uciPonder = false
           log("Ponder set to " & $uciPonder, Info)
+        elif name == "Log Engine":
+           if value == "true":
+             setLoggerState(true)
+             log("Logging enabled", Info)
+           else:
+             log("Logging disabled", Info)
+             setLoggerState(false)
+
           
       of "stop":
         stopSearch()
@@ -186,7 +275,7 @@ proc uciLoop() {.thread, gcsafe.} =
             let depth = parseInt(parts[1])
             echo "Performance test to depth ", depth
             let startTime = cpuTime()
-            let nodes = perftDriver(b, depth)
+            let nodes = perftDriverParallel(b, depth)
             let endTime = cpuTime()
             let duration = endTime - startTime
             echo "Nodes: ", nodes
@@ -262,6 +351,8 @@ proc uciLoop() {.thread, gcsafe.} =
         info.allocatedTime = allocatedTime
         info.depthLimit = depth
         info.ponderFlag = mainPonderFlag
+        info.movesToGo = movestogo
+        info.increment = initDuration(milliseconds = if b.sideToMove == White: winc else: binc)
         # info.stopFlag is set by startSearch
         
         startSearch(b, info)

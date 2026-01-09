@@ -1,15 +1,15 @@
 import coretypes
 
-func squareFromCoords*(rank, file: int): Square {.inline.} =
+template squareFromCoords*(rank, file: int): Square =
   ## Rank and file are 0-indexed.
   ## Rank 0 is 1st rank, File 0 is A file.
   ## Square = rank * 8 + file
   (rank * 8 + file).Square
 
-func fileOf*(sq: Square): int {.inline.} =
+template fileOf*(sq: Square): int =
   sq mod 8
 
-func rankOf*(sq: Square): int {.inline.} =
+template rankOf*(sq: Square): int =
   sq div 8
 
 func squareToAlgebraic*(sq: Square): string =

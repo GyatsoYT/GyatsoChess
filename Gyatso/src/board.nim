@@ -17,11 +17,11 @@ type
     pieces*: array[Square, Piece] # Mailbox representation
     sideToMove*: Color
 
-    enPassantSquare*: int # Using int to allow NoSquare (-1)
+    enPassantSquare*: int 
     castlingRights*: int
     halfMoveClock*: int
     fullMoveNumber*: int
-    gamePly*: int  # Total plies from game start (for mate distance calculation)
+    gamePly*: int 
     currentZobristKey*: ZobristKey
     history*: seq[GameState]
 
@@ -218,8 +218,6 @@ proc isSquareAttacked*(board: Board, sq: Square, attacker: Color): bool {.gcsafe
   # Sliding Pieces (Bishops, Queens)
   let bishopQueens = board.pieceBB[makePiece(attacker, Bishop)] or board.pieceBB[makePiece(attacker, Queen)]
   if (getBishopAttacks(sq, board.allPiecesBB) and bishopQueens) != 0: return true
-
-  if (getBishopAttacks(sq, board.allPiecesBB) and bishopQueens) != 0: return true
   
 proc hasSufficientMaterial*(board: Board, color: Color): bool =
   let nonPawn = board.pieceBB[makePiece(color, Knight)] or
@@ -262,10 +260,6 @@ proc isInsufficientMaterial*(board: Board): bool =
   return false
 
 proc isRepetition*(board: Board): bool =
-  # Check from current-2 down to last irreversible move
-  # The last irreversible move happened 'halfMoveClock' half-moves ago.
-  # So we check history entries from (history.len - 2) down to (history.len - halfMoveClock)
-  # Step 2 because repetition must be same side to move
   
   if board.halfMoveClock < 4: return false
   
@@ -307,16 +301,14 @@ proc unmakeNullMove*(board: var Board) =
   board.sideToMove = if board.sideToMove == White: Black else: White
 
 proc unmakeMove*(board: var Board, move: Move) =
-  # Restore State
   let state = board.history.pop()
   board.castlingRights = state.castlingRights
   board.enPassantSquare = state.enPassantSquare
   board.halfMoveClock = state.halfMoveClock
   board.currentZobristKey = state.zobristKey
-  # fullMoveNumber and sideToMove need manual reversal
   
-  let us = if board.sideToMove == White: Black else: White # Side that moved
-  let them = board.sideToMove # Side currently to move (before reversal)
+  let us = if board.sideToMove == White: Black else: White 
+  let them = board.sideToMove 
   
   board.sideToMove = us
   if us == Black: dec(board.fullMoveNumber)
@@ -328,21 +320,17 @@ proc unmakeMove*(board: var Board, move: Move) =
   let isPromo = move.isPromotion
   let capturedPiece = state.capturedPiece
   
-  # Identify moving piece (it's at toSq now, unless promo)
   var movingPiece = NoPiece
   if isPromo:
     movingPiece = makePiece(us, Pawn)
-    # Remove promoted piece
     let promoPiece = makePiece(us, move.promotion)
     board.pieceBB[promoPiece].clearBit(toSq)
     board.pieces[toSq] = NoPiece
   else:
-    # Piece at toSq is the moving piece
     movingPiece = board.pieces[toSq]
     board.pieceBB[movingPiece].clearBit(toSq)
     board.pieces[toSq] = NoPiece
     
-  # Place moving piece back at source
   board.pieceBB[movingPiece].setBit(fromSq)
   board.pieces[fromSq] = movingPiece
   
@@ -365,25 +353,72 @@ proc unmakeMove*(board: var Board, move: Move) =
         board.pieces[squareFromCoords(0, 5)] = NoPiece
         board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 7))   # h1
         board.pieces[squareFromCoords(0, 7)] = WhiteRook
+        
+        # Incremental Update: Move Rook in occupiedBB and allPiecesBB
+        board.occupiedBB[White].clearBit(squareFromCoords(0, 5))
+        board.occupiedBB[White].setBit(squareFromCoords(0, 7))
+        board.allPiecesBB.clearBit(squareFromCoords(0, 5))
+        board.allPiecesBB.setBit(squareFromCoords(0, 7))
+
       elif flags == QueenCastle.int:
         board.pieceBB[WhiteRook].clearBit(squareFromCoords(0, 3)) # d1
         board.pieces[squareFromCoords(0, 3)] = NoPiece
         board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 0))   # a1
         board.pieces[squareFromCoords(0, 0)] = WhiteRook
+        
+        # Incremental Update
+        board.occupiedBB[White].clearBit(squareFromCoords(0, 3))
+        board.occupiedBB[White].setBit(squareFromCoords(0, 0))
+        board.allPiecesBB.clearBit(squareFromCoords(0, 3))
+        board.allPiecesBB.setBit(squareFromCoords(0, 0))
+
     else:
       if flags == KingCastle.int:
         board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 5)) # f8
         board.pieces[squareFromCoords(7, 5)] = NoPiece
         board.pieceBB[BlackRook].setBit(squareFromCoords(7, 7))   # h8
         board.pieces[squareFromCoords(7, 7)] = BlackRook
+
+        # Incremental Update
+        board.occupiedBB[Black].clearBit(squareFromCoords(7, 5))
+        board.occupiedBB[Black].setBit(squareFromCoords(7, 7))
+        board.allPiecesBB.clearBit(squareFromCoords(7, 5))
+        board.allPiecesBB.setBit(squareFromCoords(7, 7))
+
       elif flags == QueenCastle.int:
         board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 3)) # d8
         board.pieces[squareFromCoords(7, 3)] = NoPiece
         board.pieceBB[BlackRook].setBit(squareFromCoords(7, 0))   # a8
         board.pieces[squareFromCoords(7, 0)] = BlackRook
-        
-  board.updateOccupancies()
 
+        # Incremental Update
+        board.occupiedBB[Black].clearBit(squareFromCoords(7, 3))
+        board.occupiedBB[Black].setBit(squareFromCoords(7, 0))
+        board.allPiecesBB.clearBit(squareFromCoords(7, 3))
+        board.allPiecesBB.setBit(squareFromCoords(7, 0))
+
+  
+  if isPromo:
+    board.occupiedBB[us].clearBit(toSq)
+    board.occupiedBB[us].setBit(fromSq)
+    board.allPiecesBB.clearBit(toSq)
+    board.allPiecesBB.setBit(fromSq)
+  else:
+    board.occupiedBB[us].clearBit(toSq)
+    board.occupiedBB[us].setBit(fromSq)
+    board.allPiecesBB.clearBit(toSq)
+    board.allPiecesBB.setBit(fromSq)
+    
+  # Restore Captured
+  if isCap:
+    if move.isEnPassant:
+      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
+      # Add captured pawn back to them
+      board.occupiedBB[them].setBit(capSq)
+      board.allPiecesBB.setBit(capSq)
+    else:
+      board.occupiedBB[them].setBit(toSq)
+      board.allPiecesBB.setBit(toSq)
 
 proc makeMove*(board: var Board, move: Move): bool =
   let us = board.sideToMove
@@ -435,6 +470,22 @@ proc makeMove*(board: var Board, move: Move): bool =
       board.pieceBB[capturedPiece].clearBit(toSq)
       # pieces[toSq] will be overwritten by moving piece later
       
+  # INCREMENTAL UPDATES
+  
+  # 1. Moving Piece: Remove from Source
+  board.occupiedBB[us].clearBit(fromSq)
+  board.allPiecesBB.clearBit(fromSq)
+  
+  # 2. Handle Captures: Remove from Them
+  if isCap:
+    if move.isEnPassant:
+      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
+      board.occupiedBB[them].clearBit(capSq)
+      board.allPiecesBB.clearBit(capSq)
+    else:
+      board.occupiedBB[them].clearBit(toSq)
+      board.allPiecesBB.clearBit(toSq)
+      
       # Update Castling Rights if Rook captured
       if capturedPiece == makePiece(them, Rook):
         if toSq == squareFromCoords(0, 0): board.castlingRights = board.castlingRights and not WhiteQueenSide
@@ -442,7 +493,7 @@ proc makeMove*(board: var Board, move: Move): bool =
         elif toSq == squareFromCoords(7, 0): board.castlingRights = board.castlingRights and not BlackQueenSide
         elif toSq == squareFromCoords(7, 7): board.castlingRights = board.castlingRights and not BlackKingSide
 
-  # Place moving piece at destination
+  # 3. Place moving piece at destination (Pawn or Promo)
   if isPromo:
     let promoPiece = makePiece(us, move.promotion)
     key = key xor zobristTable[promoPiece][toSq]
@@ -452,8 +503,10 @@ proc makeMove*(board: var Board, move: Move): bool =
     key = key xor zobristTable[movingPiece][toSq]
     board.pieceBB[movingPiece].setBit(toSq)
     board.pieces[toSq] = movingPiece
-    
-  # Handle Castling Move (Move Rook)
+
+  board.occupiedBB[us].setBit(toSq)
+  board.allPiecesBB.setBit(toSq)
+
   if move.isCastle:
     if us == White:
       if flags == KingCastle.int: # O-O
@@ -464,6 +517,13 @@ proc makeMove*(board: var Board, move: Move): bool =
         board.pieces[squareFromCoords(0, 7)] = NoPiece
         board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 5))
         board.pieces[squareFromCoords(0, 5)] = WhiteRook
+        
+        # Incremental
+        board.occupiedBB[White].clearBit(squareFromCoords(0, 7))
+        board.occupiedBB[White].setBit(squareFromCoords(0, 5))
+        board.allPiecesBB.clearBit(squareFromCoords(0, 7))
+        board.allPiecesBB.setBit(squareFromCoords(0, 5))
+        
       elif flags == QueenCastle.int: # O-O-O
         # Move Rook from a1 to d1
         key = key xor zobristTable[WhiteRook][squareFromCoords(0, 0)]
@@ -472,6 +532,13 @@ proc makeMove*(board: var Board, move: Move): bool =
         board.pieces[squareFromCoords(0, 0)] = NoPiece
         board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 3))
         board.pieces[squareFromCoords(0, 3)] = WhiteRook
+
+        # Incremental
+        board.occupiedBB[White].clearBit(squareFromCoords(0, 0))
+        board.occupiedBB[White].setBit(squareFromCoords(0, 3))
+        board.allPiecesBB.clearBit(squareFromCoords(0, 0))
+        board.allPiecesBB.setBit(squareFromCoords(0, 3))
+
     else:
       if flags == KingCastle.int: # O-O
         # Move Rook from h8 to f8
@@ -481,6 +548,13 @@ proc makeMove*(board: var Board, move: Move): bool =
         board.pieces[squareFromCoords(7, 7)] = NoPiece
         board.pieceBB[BlackRook].setBit(squareFromCoords(7, 5))
         board.pieces[squareFromCoords(7, 5)] = BlackRook
+
+        # Incremental
+        board.occupiedBB[Black].clearBit(squareFromCoords(7, 7))
+        board.occupiedBB[Black].setBit(squareFromCoords(7, 5))
+        board.allPiecesBB.clearBit(squareFromCoords(7, 7))
+        board.allPiecesBB.setBit(squareFromCoords(7, 5))
+
       elif flags == QueenCastle.int: # O-O-O
         # Move Rook from a8 to d8
         key = key xor zobristTable[BlackRook][squareFromCoords(7, 0)]
@@ -490,7 +564,12 @@ proc makeMove*(board: var Board, move: Move): bool =
         board.pieceBB[BlackRook].setBit(squareFromCoords(7, 3))
         board.pieces[squareFromCoords(7, 3)] = BlackRook
 
-  # Update Castling Rights (if King or Rook moves)
+        # Incremental
+        board.occupiedBB[Black].clearBit(squareFromCoords(7, 0))
+        board.occupiedBB[Black].setBit(squareFromCoords(7, 3))
+        board.allPiecesBB.clearBit(squareFromCoords(7, 0))
+        board.allPiecesBB.setBit(squareFromCoords(7, 3))
+
   if movingPiece == makePiece(us, King):
     if us == White:
       board.castlingRights = board.castlingRights and not (WhiteKingSide or WhiteQueenSide)
@@ -538,15 +617,9 @@ proc makeMove*(board: var Board, move: Move): bool =
   key = key xor zobristCastling[state.castlingRights] # Remove old
   key = key xor zobristCastling[board.castlingRights] # Add new
   
-  # Update Occupancies
-  board.updateOccupancies()
-  
   # Update Zobrist Key
   board.currentZobristKey = key
 
-  
-  # Check Legality (King in check?)
-  # Note: sideToMove is now 'them', so we check if 'us' King is attacked by 'them'
   let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
   if board.isSquareAttacked(kingSq.Square, them):
     board.unmakeMove(move)

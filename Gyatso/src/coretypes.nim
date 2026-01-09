@@ -10,8 +10,12 @@ type
     threadID*: int
     numThreads*: int
     nodeCounts*: ptr UncheckedArray[uint64]
-    ponderFlag*: ptr Atomic[bool]  # Shared flag for pondering state
-    ponderMove*: uint16  # Store as uint16 to match Move type
+    ponderFlag*: ptr Atomic[bool]  
+    ponderMove*: uint16  
+    selDepth*: int       
+    movesToGo*: int      
+    increment*: Duration 
+
 
   Color* = enum
     White, Black, NoColor
@@ -28,7 +32,31 @@ type
 
 const
   MaxMoves* = 256
-  MaxPly* = 128
+  MaxPly* = 512
+  MateValue* = 29000
+  UNKNOWN* = -32000 
+
+const
+  PawnValueMG* = 108
+  PawnValueEG* = 100
+  KnightValueMG* = 492
+  KnightValueEG* = 415
+  BishopValueMG* = 469
+  BishopValueEG* = 413
+  RookValueMG* = 647
+  RookValueEG* = 721
+  QueenValueMG* = 1362
+  QueenValueEG* = 1431
+  KingValue* = 20000
+
+  
+type
+  StackEntry* = object
+    evaluation*: int 
+    move*: uint32     
+    killers*: array[2, uint32]
+    excluded*: uint32 
+    ply*: int
 
 func pieceColor*(p: Piece): Color =
   case p

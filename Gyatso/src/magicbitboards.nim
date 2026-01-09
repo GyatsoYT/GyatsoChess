@@ -1,5 +1,4 @@
-import coretypes, bitboard, lookups, utils
-import std/random
+import coretypes, bitboard, utils
 
 type
   MagicEntry* = object

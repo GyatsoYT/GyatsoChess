@@ -23,14 +23,14 @@ type
 
   MoveList* = object
     moves*: array[MaxMoves, Move]
-    scores*: array[MaxMoves, int]
+    scores*: array[MaxMoves, int32]
     count*: int
 
 const
   FromMask = 0x3F
   ToMask = 0xFC0
   PromoMask = 0x7000
-  FlagMask = 0xF0000 
+  FlagMask = 0xF0000
 
   # Shift amounts
   ToShift = 6
@@ -55,13 +55,13 @@ func makeMove*(fromSq, toSq: Square, promo: PieceType = NoPieceType, flag: int =
   
   return Move(m)
 
-func fromSquare*(m: Move): Square {.inline.} =
+template fromSquare*(m: Move): Square =
   Square(uint32(m) and FromMask)
 
-func toSquare*(m: Move): Square {.inline.} =
+template toSquare*(m: Move): Square =
   Square((uint32(m) and ToMask) shr ToShift)
 
-func promotion*(m: Move): PieceType {.inline.} =
+template promotion*(m: Move): PieceType =
   let pVal = (uint32(m) and PromoMask) shr PromoShift
   case pVal
   of 1: Knight
@@ -70,27 +70,27 @@ func promotion*(m: Move): PieceType {.inline.} =
   of 4: Queen
   else: NoPieceType
 
-func flags*(m: Move): int {.inline.} =
+template flags*(m: Move): int =
   int((uint32(m) and FlagMask) shr FlagShift)
 
-func isCapture*(m: Move): bool {.inline.} =
+template isCapture*(m: Move): bool =
   (flags(m) and 4) != 0 # 4 is bit 2 of flag (FlagCapture=4, FlagEpCapture=5, etc)
 
-func isPromotion*(m: Move): bool {.inline.} =
+template isPromotion*(m: Move): bool =
   (flags(m) and 8) != 0
 
-func isEnPassant*(m: Move): bool {.inline.} =
+template isEnPassant*(m: Move): bool =
   flags(m) == 5
 
-func isCastle*(m: Move): bool {.inline.} =
+template isCastle*(m: Move): bool =
   let f = flags(m)
   f == 2 or f == 3
 
-func addMove*(ml: var MoveList, m: Move) {.inline.} =
+template addMove*(ml: var MoveList, m: Move) =
   ml.moves[ml.count] = m
   inc(ml.count)
 
-func clear*(ml: var MoveList) {.inline.} =
+template clear*(ml: var MoveList) =
   ml.count = 0
 
 func toAlgebraic*(m: Move): string =

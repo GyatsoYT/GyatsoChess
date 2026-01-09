@@ -1,4 +1,3 @@
-import threading
 import std/strutils
 import std/times
 import std/locks
@@ -11,12 +10,21 @@ var
   logLock: Lock
   logFile: File
 
-proc initLogger*(filename: string = "engine.log") =
+proc initLogger*() =
   initLock(logLock)
-  try:
-    logFile = open(filename, fmAppend)
-  except IOError:
-    stderr.writeLine("Failed to open log file: " & filename)
+
+proc setLoggerState*(enable: bool, filename: string = "engine.log") =
+  withLock logLock:
+    if enable:
+      if logFile == nil:
+        try:
+          logFile = open(filename, fmAppend)
+        except IOError:
+          stderr.writeLine("Failed to open log file: " & filename)
+    else:
+      if logFile != nil:
+        logFile.close()
+        logFile = nil
 
 proc log*(msg: string, level: LogLevel = Info) =
   let timestamp = now().format("yyyy-MM-dd HH:mm:ss")
@@ -29,9 +37,6 @@ proc log*(msg: string, level: LogLevel = Info) =
         logFile.flushFile()
       except IOError:
         discard
-    # Optionally print to stderr for debugging, but UCI relies on stdout for commands
-    # stderr.writeLine(logMsg)
-
 proc closeLogger*() =
   if logFile != nil:
     logFile.close()

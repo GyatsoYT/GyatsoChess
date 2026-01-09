@@ -1,4 +1,4 @@
-import coretypes, board, move, bitboard, lookups, utils, magicbitboards, evaluation
+import coretypes, board, move, bitboard, lookups, utils, magicbitboards, history
 
 proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
@@ -38,9 +38,12 @@ proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
 
   # Captures
   bb = pawns
+  let themKing = board.pieceBB[makePiece(them, King)]
+  let validTargets = board.occupiedBB[them] and not themKing
+  
   while bb != 0:
     let fromSq = popBit(bb)
-    var attacks = pawnAttacks[us][fromSq] and board.occupiedBB[them]
+    var attacks = pawnAttacks[us][fromSq] and validTargets
     
     while attacks != 0:
       let toSq = popBit(attacks)
@@ -65,16 +68,18 @@ proc generatePawnMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
 
 proc generateKnightMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
+  let them = if us == White: Black else: White
   var knights = board.pieceBB[makePiece(us, Knight)]
+  let themKing = board.pieceBB[makePiece(them, King)]
   let notUs = not board.occupiedBB[us]
   
   while knights != 0:
     let fromSq = popBit(knights)
-    var moves = knightAttacks[fromSq] and notUs
+    var moves = knightAttacks[fromSq] and notUs and not themKing
     
     while moves != 0:
       let toSq = popBit(moves)
-      let isCap = getBit(board.occupiedBB[if us == White: Black else: White], toSq)
+      let isCap = getBit(board.occupiedBB[them], toSq)
       let flag = if isCap: Capture else: Quiet
       ml.addMove(makeMove(fromSq, toSq, NoPieceType, flag.int))
 
@@ -82,11 +87,12 @@ proc generateKingMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
   let them = if us == White: Black else: White
   var king = board.pieceBB[makePiece(us, King)]
+  let themKing = board.pieceBB[makePiece(them, King)]
   let notUs = not board.occupiedBB[us]
   
   if king != 0:
     let fromSq = popBit(king)
-    var moves = kingAttacks[fromSq] and notUs
+    var moves = kingAttacks[fromSq] and notUs and not themKing
     
     while moves != 0:
       let toSq = popBit(moves)
@@ -142,9 +148,11 @@ proc generateSlidingMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   
   # Rooks & Queens (Orthogonal)
   var rooks = board.pieceBB[makePiece(us, Rook)] or board.pieceBB[makePiece(us, Queen)]
+  let themKing = board.pieceBB[makePiece(them, King)]
+
   while rooks != 0:
     let fromSq = popBit(rooks)
-    var moves = getRookAttacks(fromSq, occupied) and notUs
+    var moves = getRookAttacks(fromSq, occupied) and notUs and not themKing
     while moves != 0:
       let toSq = popBit(moves)
       let isCap = getBit(board.occupiedBB[them], toSq)
@@ -155,7 +163,7 @@ proc generateSlidingMoves*(board: Board, ml: var MoveList) {.gcsafe.} =
   var bishops = board.pieceBB[makePiece(us, Bishop)] or board.pieceBB[makePiece(us, Queen)]
   while bishops != 0:
     let fromSq = popBit(bishops)
-    var moves = getBishopAttacks(fromSq, occupied) and notUs
+    var moves = getBishopAttacks(fromSq, occupied) and notUs and not themKing
     while moves != 0:
       let toSq = popBit(moves)
       let isCap = getBit(board.occupiedBB[them], toSq)
@@ -177,9 +185,11 @@ proc generatePawnCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
   
   # Captures
   var bb = pawns
+  let validTargets = board.occupiedBB[them] and not board.pieceBB[makePiece(them, King)]
+  
   while bb != 0:
     let fromSq = popBit(bb)
-    var attacks = pawnAttacks[us][fromSq] and board.occupiedBB[them]
+    var attacks = pawnAttacks[us][fromSq] and validTargets
     
     while attacks != 0:
       let toSq = popBit(attacks)
@@ -217,7 +227,8 @@ proc generatePawnCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
 proc generateKnightCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
   var knights = board.pieceBB[makePiece(us, Knight)]
-  let themBB = board.occupiedBB[if us == White: Black else: White]
+  let them = if us == White: Black else: White
+  let themBB = board.occupiedBB[them] and not board.pieceBB[makePiece(them, King)]
   
   while knights != 0:
     let fromSq = popBit(knights)
@@ -228,7 +239,8 @@ proc generateKnightCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
 
 proc generateKingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
-  let themBB = board.occupiedBB[if us == White: Black else: White]
+  let them = if us == White: Black else: White
+  let themBB = board.occupiedBB[them] and not board.pieceBB[makePiece(them, King)]
   var king = board.pieceBB[makePiece(us, King)]
   
   if king != 0:
@@ -240,7 +252,8 @@ proc generateKingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
 
 proc generateSlidingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
   let us = board.sideToMove
-  let themBB = board.occupiedBB[if us == White: Black else: White]
+  let them = if us == White: Black else: White
+  let themBB = board.occupiedBB[them] and not board.pieceBB[makePiece(them, King)]
   let occupied = board.allPiecesBB
   
   # Rooks & Queens
@@ -259,6 +272,7 @@ proc generateSlidingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
     var moves = getBishopAttacks(fromSq, occupied) and themBB
     while moves != 0:
       let toSq = popBit(moves)
+      let isCap = true # Captured piece known to be valid (not King)
       ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
 
 proc generatePseudoLegalCaptures*(board: Board, ml: var MoveList) {.gcsafe.} =
@@ -293,59 +307,82 @@ proc generateLegalMoves*(board: var Board, ml: var MoveList) {.gcsafe.} =
       ml.addMove(m)
       board.unmakeMove(m)
 
-proc getPieceTypeAt(board: Board, sq: Square): PieceType =
-  let p = board.pieces[sq]
-  if p == NoPiece: return NoPieceType
-  return pieceType(p)
-
 
 proc getPieceValue(pt: PieceType): int =
   case pt
-  of Pawn: PawnValue
-  of Knight: KnightValue
-  of Bishop: BishopValue
-  of Rook: RookValue
-  of Queen: QueenValue
+  of Pawn: PawnValueMG
+  of Knight: KnightValueMG
+  of Bishop: BishopValueMG
+  of Rook: RookValueMG
+  of Queen: QueenValueMG
   of King: KingValue
   else: 0
 
-proc scoreMove*(board: Board, move: Move, ttMove: Move): int =
+proc scoreMove*(board: Board, move: Move, ttMove: Move, 
+                history: var HistoryTables, stack: openArray[StackEntry], ply: int,
+                prevMove: Move, grandparentMove: Move): int32 {.inline.} =
+  # TT move gets highest priority
   if move == ttMove:
-    return 1_000_000 # Highest priority
-    
-  if move.isCapture:
-    let victim = getPieceTypeAt(board, move.toSquare)
-    # Find attacker
-    let attacker = pieceType(board.pieces[move.fromSquare])
-    
-    if move.isEnPassant:
-      return 100_105 # Captures start at 100,000
-      
-    # MVV-LVA: Victim * 10 - Attacker
-    let score = (getPieceValue(victim) * 10) - getPieceValue(attacker)
-    return 100_000 + score
-    
-  if move.isPromotion:
-    return 90_000 + getPieceValue(move.promotion)
-    
-  return 0
-
-proc pickMove*(ml: var MoveList, startIndex: int): Move =
-  var bestIndex = startIndex
-  var bestScore = -100000
+    return 1_000_000'i32
   
-  for i in startIndex ..< ml.count:
+  # Captures and promotions
+  if move.isCapture or move.isPromotion:
+    var score = 100_000'i32  # Base tactical score
+
+    let tacHist = getTacticalHistory(history, move, board).int32
+    score += (tacHist div 16)
+    
+    if move.isCapture:
+      # MVV-LVA
+      var victimVal = 0'i32
+      if move.isEnPassant:
+        victimVal = PawnValueMG.int32 # En Passant is always pawn capture
+      else:
+        let victim = pieceType(board.pieces[move.toSquare])
+        victimVal = getPieceValue(victim).int32
+
+      let attacker = pieceType(board.pieces[move.fromSquare])
+      score += victimVal * 10'i32 - getPieceValue(attacker).int32
+      
+    if move.isPromotion:
+      score += getPieceValue(move.promotion).int32 * 10'i32
+    
+    return score
+  
+  # Quiet moves
+  var score: int32 = 0'i32
+  
+  # Killer moves (from search stack)
+  # Ensure we respect array bounds and stack structure
+  if stack[ply].killers[0] == uint32(move):
+    return 90_000'i32
+  if stack[ply].killers[1] == uint32(move):
+    return 80_000'i32
+  
+  # Counter move
+  if prevMove != Move(0):
+      let counterMove = history.counterMoves[historyIndex(prevMove)]
+      if move == counterMove:
+        return 70_000'i32
+  
+  # Combined quiet history (main + counter + follow-up)
+  score = getQuietHistory(history, move, board, prevMove, grandparentMove).int32
+  
+  return score
+
+proc pickMove*(ml: var MoveList, startIndex: int): Move {.inline, noSideEffect.} =
+  var bestIndex: int32 = startIndex.int32
+  var bestScore: int32 = ml.scores[startIndex]
+  let count = ml.count.int32
+  
+  for i in (startIndex.int32 + 1) ..< count:
     if ml.scores[i] > bestScore:
       bestScore = ml.scores[i]
       bestIndex = i
-      
-  # Swap
-  let tempMove = ml.moves[startIndex]
-  ml.moves[startIndex] = ml.moves[bestIndex]
-  ml.moves[bestIndex] = tempMove
   
-  let tempScore = ml.scores[startIndex]
-  ml.scores[startIndex] = ml.scores[bestIndex]
-  ml.scores[bestIndex] = tempScore
+
+  let bestIdx = bestIndex.int
+  swap(ml.moves[startIndex], ml.moves[bestIdx])
+  swap(ml.scores[startIndex], ml.scores[bestIdx])
   
   return ml.moves[startIndex]

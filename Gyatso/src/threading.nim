@@ -1,6 +1,4 @@
-import std/locks
 import std/atomics
-import std/os
 import coretypes, board, search, magicbitboards, move, tt
 
 

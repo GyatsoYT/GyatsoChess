@@ -6,22 +6,22 @@ export bitops
 type
   Bitboard* = uint64
 
-func setBit*(bb: var Bitboard, sq: Square) {.inline.} =
+template setBit*(bb: var Bitboard, sq: Square) =
   bb = bb or (1'u64 shl sq)
 
-func clearBit*(bb: var Bitboard, sq: Square) {.inline.} =
+template clearBit*(bb: var Bitboard, sq: Square) =
   bb = bb and not (1'u64 shl sq)
 
-func getBit*(bb: Bitboard, sq: Square): bool {.inline.} =
+template getBit*(bb: Bitboard, sq: Square): bool =
   (bb and (1'u64 shl sq)) != 0
 
-func popBit*(bb: var Bitboard): Square {.inline.} =
+template popBit*(bb: var Bitboard): Square =
   let sq = countTrailingZeroBits(bb)
   bb = bb and (bb - 1)
-  return sq.Square
+  sq.Square
 
-func countBits*(bb: Bitboard): int {.inline.} =
+template countBits*(bb: Bitboard): int =
   countSetBits(bb)
 
-func bitScanForward*(bb: Bitboard): int {.inline.} =
+template bitScanForward*(bb: Bitboard): int =
   countTrailingZeroBits(bb)

@@ -106,8 +106,6 @@ proc initPawnAttacks() =
       if f > 0: pawnAttacks[Black][sq].setBit(squareFromCoords(r-1, f-1))
 
 proc initLineBetween() =
-  # This is a simplified version.
-  
   for s1Int in 0..63:
     let s1 = s1Int.Square
     for s2Int in 0..63:
@@ -146,8 +144,6 @@ proc initLineBetween() =
           r += dr
           f += df
         lineBetweenBB[s1][s2] = bb
-
-  
 
 var
   FileMasks*: array[0..7, Bitboard]
@@ -192,9 +188,6 @@ proc initEvaluationMasks() =
       if f < 7: blackPassed.setBit(squareFromCoords(r2, f+1))
     PassedPawnMasks[Black][sq] = blackPassed
 
-  # King Shield Masks
-  # Shield is defined as the 3 squares in front of the king (rank+1) and the 3 squares on rank+2.
-  # For White: r+1, r+2. For Black: r-1, r-2.
   for sqInt in 0..63:
     let sq = sqInt.Square
     let r = rankOf(sq)
@@ -230,7 +223,6 @@ proc initEvaluationMasks() =
         if f < 7: blackShield.setBit(squareFromCoords(r-2, f+1))
     KingShieldMasks[Black][sq] = blackShield
 
-  # King Attack Zone Masks (3x3 area around the king, including king square)
   for sqInt in 0..63:
     let sq = sqInt.Square
     let r = rankOf(sq)
