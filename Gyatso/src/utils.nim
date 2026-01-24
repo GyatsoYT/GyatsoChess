@@ -30,3 +30,8 @@ func rankToChar*(rank: int): char =
 
 func fileToChar*(file: int): char =
   char('a'.ord + file)
+
+func distance*(sq1, sq2: Square): int =
+  let fileDist = abs(fileOf(sq1) - fileOf(sq2))
+  let rankDist = abs(rankOf(sq1) - rankOf(sq2))
+  max(fileDist, rankDist)

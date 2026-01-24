@@ -272,7 +272,7 @@ proc generateSlidingCaptures(board: Board, ml: var MoveList) {.gcsafe.} =
     var moves = getBishopAttacks(fromSq, occupied) and themBB
     while moves != 0:
       let toSq = popBit(moves)
-      let isCap = true # Captured piece known to be valid (not King)
+      #let isCap = true # Captured piece known to be valid (not King)
       ml.addMove(makeMove(fromSq, toSq, NoPieceType, Capture.int))
 
 proc generatePseudoLegalCaptures*(board: Board, ml: var MoveList) {.gcsafe.} =

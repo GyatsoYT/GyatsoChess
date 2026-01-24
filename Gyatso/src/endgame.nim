@@ -73,8 +73,8 @@ proc mopUpEvaluation*(board: Board): int =
     var bbb = strongBishops
     while bbb != 0:
       let sq = popBit(bbb)
-      if ((fileOf(sq) + rankOf(sq)) mod 2) == 0: # A1 is 0+0=0 Even
-        useDark = true # Assuming Even sum = Dark (A1 is usually black/dark)
+      if ((fileOf(sq) + rankOf(sq)) mod 2) == 0:
+        useDark = true 
       else:
         useLight = true
         
