@@ -20,7 +20,7 @@ elif [ "$choice" = "2" ]; then
     echo
     echo "[Stage 1] Instrumenting..."
     # Build with profile generation
-    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Build failed!"
         exit 1
@@ -34,7 +34,7 @@ import osproc, streams, strutils, os
 
 proc main() =
   echo "[Runner] Starting Gyatso..."
-  var p = startProcess("./Gyatso", options={poUsePath, poStdErrToStdOut})
+  var p = startProcess("./Gyatso.out", options={poUsePath, poStdErrToStdOut})
   var inp = p.inputStream
   var outp = p.outputStream
 
@@ -92,7 +92,7 @@ EOF
 
     echo
     echo "[Stage 5] Final Optimized Build..."
-    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Final build failed!"
         exit 1
