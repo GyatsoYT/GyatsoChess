@@ -1,4 +1,4 @@
-﻿import math, coretypes
+import math, coretypes
 
 const
   SeePruneCutoff* = 20
@@ -7,6 +7,7 @@ const
 var
   LMR*: array[MaxPly, array[64, int]]
   StaticPruning*: array[2, array[MaxPly, int]]
+  LateMovePruning*: array[MaxPly, int]
 
 # Initialize tables at module load
 proc initTables*() =
@@ -17,5 +18,9 @@ proc initTables*() =
   for depth in 0 ..< MaxPly:
     StaticPruning[0][depth] = -SeePruneCutoff * depth * depth
     StaticPruning[1][depth] = -SeePruneCaptureCutoff * depth
+  
+  # Late Move Pruning thresholds: 3 + depth^2
+  for depth in 0 ..< MaxPly:
+    LateMovePruning[depth] = 3 + depth * depth
 
 initTables()

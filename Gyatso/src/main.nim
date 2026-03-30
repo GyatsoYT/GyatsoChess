@@ -1,4 +1,4 @@
-import coretypes, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, tt
+import coretypes, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, tt, nnuetypes, nnue, search
 import std/strutils
 import std/times
 import std/atomics
@@ -71,13 +71,14 @@ proc uciLoop() {.thread, gcsafe.} =
 
       case command
       of "uci":
-        echo "id name Gyatso 1.2.0"
+        echo "id name Gyatso 1.3.0"
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
         echo "option name Threads type spin default 1 min 1 max 128"
         echo "option name UCI_Chess960 type check default false"
         echo "option name Ponder type check default false"
         echo "option name Log Engine type check default false"
+        echo "option name EvalFile type string default <embedded>"
         echo "uciok"
       of "isready":
         echo "readyok"
@@ -141,6 +142,16 @@ proc uciLoop() {.thread, gcsafe.} =
           else:
             log("Logging disabled", Info)
             setLoggerState(false)
+        elif name == "EvalFile":
+          try:
+            if value == "" or value == "<embedded>":
+              initNNUE()
+              log("NNUE loaded from embedded weights", Info)
+            else:
+              initNNUE(value)
+              log("NNUE loaded from " & value, Info)
+          except IOError:
+            log("Failed to load NNUE file: " & value, Warn)
 
 
       of "stop":
@@ -282,7 +293,9 @@ proc uciLoop() {.thread, gcsafe.} =
 
         startSearch(b, info)
       of "eval":
-        let score = evaluate(b)
+        var tempState: NNUEState
+        refreshState(addr gNetwork, b, tempState)
+        let score = evaluate(b, tempState)
         echo "evaluation ", score, " cp"
         flushFile(stdout)
       of "d":
@@ -336,8 +349,11 @@ when isMainModule:
   initializeZobristKeys()
   log("Zobrist keys initialized.", Info)
 
-  initTT(64) # 64 MB Transposition Table
+  initTT(16) # 16 MB Transposition Table
   log("Transposition Table initialized.", Info)
+
+  initNNUE()
+  log("NNUE network loaded.", Info)
 
   var uciThread: Thread[void]
   createThread(uciThread, uciLoop)

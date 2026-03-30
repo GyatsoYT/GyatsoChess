@@ -35,3 +35,6 @@ func distance*(sq1, sq2: Square): int =
   let fileDist = abs(fileOf(sq1) - fileOf(sq2))
   let rankDist = abs(rankOf(sq1) - rankOf(sq2))
   max(fileDist, rankDist)
+
+func manhattanDistance*(sq1, sq2: Square): int =
+  abs(fileOf(sq1) - fileOf(sq2)) + abs(rankOf(sq1) - rankOf(sq2))

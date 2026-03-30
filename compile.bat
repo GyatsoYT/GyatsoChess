@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+echo Installing nimsimd dependency...
+call nimble install -y nimsimd
+
 :MENU
 cls
 echo GyatsoChess Build System
@@ -10,6 +13,17 @@ echo 2. PGO Build (Slow, Maximum Performance)
 echo.
 set /p choice="Select build type (1/2): "
 
+echo.
+echo Select Target Architecture Extensions:
+echo 1. Default (None)
+echo 2. AVX2
+echo 3. AVX512
+set /p arch_choice="Select extensions (1/2/3): "
+
+set AVX_FLAGS=
+if "%arch_choice%"=="2" set AVX_FLAGS=-d:avx2
+if "%arch_choice%"=="3" set AVX_FLAGS=-d:avx2 -d:avx512
+
 if "%choice%"=="1" goto NORMAL
 if "%choice%"=="2" goto PGO
 goto MENU
@@ -17,7 +31,7 @@ goto MENU
 :NORMAL
 echo.
 echo === Normal Build ===
-nim c -d:release -d:danger --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso.exe Gyatso/src/main.nim
+nim c -d:release -d:danger -d:simd %AVX_FLAGS% --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso.exe Gyatso/src/main.nim
 echo.
 echo Compilation finished.
 pause
@@ -29,7 +43,7 @@ echo === PGO Build Pipeline ===
 echo.
 echo [Stage 1] Instrumenting...
 rem Build with profile generation
-nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.exe Gyatso/src/main.nim
+nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.exe Gyatso/src/main.nim
 if errorlevel 1 goto ERROR
 
 echo.
@@ -91,7 +105,7 @@ if errorlevel 1 goto ERROR
 
 echo.
 echo [Stage 5] Final Optimized Build...
-nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.exe Gyatso/src/main.nim
+nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.exe Gyatso/src/main.nim
 if errorlevel 1 goto ERROR
 
 echo.

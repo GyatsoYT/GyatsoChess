@@ -1,5 +1,5 @@
 import std/atomics
-import coretypes, board, search, magicbitboards, move, tt
+import coretypes, board, search, magicbitboards, move, tt, nnuetypes, nnue, evaluation
 
 
 type

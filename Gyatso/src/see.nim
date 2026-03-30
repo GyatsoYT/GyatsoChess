@@ -1,21 +1,19 @@
-import coretypes, board, move, bitboard, lookups, utils, magicbitboards
+import coretypes, board, move, bitboard, lookups, utils, magicbitboards, evaluation
 
-const
-  ValuePawn = PawnValueMG
-  ValueKnight = KnightValueMG
-  ValueBishop = BishopValueMG
-  ValueRook = RookValueMG
-  ValueQueen = QueenValueMG
-  ValueKing = KingValue
 
-proc getPieceValue(pt: PieceType): int =
+template getPieceValue*(pt: PieceType, phase: int): int =
   case pt
-  of Pawn: ValuePawn
-  of Knight: ValueKnight
-  of Bishop: ValueBishop
-  of Rook: ValueRook
-  of Queen: ValueQueen
-  of King: ValueKing
+  of Pawn: 
+    (PawnValueMG * phase + PawnValueEG * (PhaseTotal - phase)) div PhaseTotal
+  of Knight: 
+    (KnightValueMG * phase + KnightValueEG * (PhaseTotal - phase)) div PhaseTotal
+  of Bishop: 
+    (BishopValueMG * phase + BishopValueEG * (PhaseTotal - phase)) div PhaseTotal
+  of Rook: 
+    (RookValueMG * phase + RookValueEG * (PhaseTotal - phase)) div PhaseTotal
+  of Queen: 
+    (QueenValueMG * phase + QueenValueEG * (PhaseTotal - phase)) div PhaseTotal
+  of King: KingValue
   else: 0
 
 proc getLeastValuableAttacker(board: Board, sq: Square, bySide: Color, occupied: Bitboard, pawnAttacks: ptr array[Color, array[Square, Bitboard]]): (PieceType, Square) =
@@ -57,7 +55,7 @@ proc getLeastValuableAttacker(board: Board, sq: Square, bySide: Color, occupied:
     
   return (NoPieceType, Square(0))
 
-proc see*(board: Board, move: Move): int =
+proc see*(board: Board, move: Move, phase: int): int =
   # Static Exchange Evaluation
   
   var gain: array[32, int]
@@ -72,17 +70,17 @@ proc see*(board: Board, move: Move): int =
   # Initial capture value
   var valueTarget = 0
   if move.isEnPassant:
-    valueTarget = ValuePawn
+    valueTarget = getPieceValue(Pawn, phase)
     let capturedSq = squareFromCoords(rankOf(fromSq), fileOf(toSq))
     occupied = occupied and not (1'u64 shl capturedSq)
   elif move.isCapture:
     let capturedPiece = board.pieces[toSq]
-    valueTarget = getPieceValue(pieceType(capturedPiece))
+    valueTarget = getPieceValue(pieceType(capturedPiece), phase)
   else:
     valueTarget = 0
     
   if promo != NoPieceType:
-    valueTarget += getPieceValue(promo) - ValuePawn
+    valueTarget += getPieceValue(promo, phase) - getPieceValue(Pawn, phase)
     
   gain[d] = valueTarget
   
@@ -103,7 +101,7 @@ proc see*(board: Board, move: Move): int =
     if nextAttackerType == NoPieceType:
       break
     
-    gain[d] = getPieceValue(attackerType) - gain[d-1]
+    gain[d] = getPieceValue(attackerType, phase) - gain[d-1]
     
     attackerType = nextAttackerType
     side = if side == White: Black else: White

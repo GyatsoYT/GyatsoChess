@@ -15,6 +15,7 @@ type
     selDepth*: int       
     movesToGo*: int      
     increment*: Duration 
+    nodeLimit*: uint64   
 
 
   Color* = enum
@@ -37,16 +38,16 @@ const
   UNKNOWN* = -32000 
 
 const
-  PawnValueMG* = 108
-  PawnValueEG* = 100
-  KnightValueMG* = 492
-  KnightValueEG* = 415
-  BishopValueMG* = 469
-  BishopValueEG* = 413
-  RookValueMG* = 647
-  RookValueEG* = 721
-  QueenValueMG* = 1362
-  QueenValueEG* = 1431
+  PawnValueMG* = 93
+  PawnValueEG* = 119
+  KnightValueMG* = 413
+  KnightValueEG* = 458
+  BishopValueMG* = 405
+  BishopValueEG* = 482
+  RookValueMG* = 546
+  RookValueEG* = 820
+  QueenValueMG* = 1300
+  QueenValueEG* = 1533
   KingValue* = 20000
 
   

@@ -1,5 +1,8 @@
 #!/bin/sh
 
+echo "Installing nimsimd dependency..."
+nimble install -y nimsimd
+
 echo "GyatsoChess Build System"
 echo "========================"
 echo "1. Normal Build (Fast, Native)"
@@ -8,10 +11,25 @@ echo
 printf "Select build type (1/2): "
 read choice
 
+echo
+echo "Select Target Architecture Extensions:"
+echo "1. Default (None)"
+echo "2. AVX2"
+echo "3. AVX512"
+printf "Select extensions (1/2/3): "
+read arch_choice
+
+AVX_FLAGS=""
+if [ "$arch_choice" = "2" ]; then
+    AVX_FLAGS="-d:avx2"
+elif [ "$arch_choice" = "3" ]; then
+    AVX_FLAGS="-d:avx2 -d:avx512"
+fi
+
 if [ "$choice" = "1" ]; then
     echo
     echo "=== Normal Build ==="
-    nim c -d:release -d:danger --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso Gyatso/src/main.nim
+    nim c -d:release -d:danger -d:simd $AVX_FLAGS --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso Gyatso/src/main.nim
     echo "Compilation finished."
     exit 0
 elif [ "$choice" = "2" ]; then
@@ -20,7 +38,7 @@ elif [ "$choice" = "2" ]; then
     echo
     echo "[Stage 1] Instrumenting..."
     # Build with profile generation
-    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.out Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Build failed!"
         exit 1
@@ -92,7 +110,7 @@ EOF
 
     echo
     echo "[Stage 5] Final Optimized Build..."
-    nim c --cc:clang -d:release -d:danger --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.out Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Final build failed!"
         exit 1
