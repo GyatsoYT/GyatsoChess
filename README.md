@@ -11,7 +11,8 @@ Gyatso is a high-performance chess engine compatible with the Universal Chess In
 | :--- | :--- |
 | **v1.0** | **2095** |
 | **v1.1** | **2555** |
-| **v1.2** | **~2700** (Estimated) |
+| **v1.2** | **~2654**|
+| **v1.3** | **~3100** (Estimated) |
 
 ## Features
 
@@ -103,7 +104,6 @@ Gyatso determines its mode based on input. Connect it to any UCI-compatible GUI 
 ## Future Implementation / Roadmap
 
 We are constantly working to improve Gyatso. Here are some planned features:
-- [ ] **NNUE Support**: Implement Efficiently Updatable Neural Networks for state-of-the-art evaluation.
 - [ ] **Syzygy Tablebases**: Support for endgame tablebases to play perfectly in known endgames.
 - [ ] **Multi-PV Support**: Display multiple principal variations during search.
 - [ ] **Chess960/FRC**: Full Fischer Random Chess support.
@@ -119,6 +119,15 @@ Contributions are welcome! Whether it's code improvements, bug fixes, or documen
 5. **Open a Pull Request**.
 
 Please ensure your code follows the Nim style guide and passes existing tests.
+
+
+## Special Thanks
+
+- **Heimdall Chess Engine** - For the Simd and NNUE Integration.
+- **Nalwald and Tsoj** - For Helping me At each step.
+- **Bullet** - Amzaing Tool for Training A Neural Network.
+- **Stockfish Dev Community** - For Helping me With Bugs and Speedups in the code.
+- **[Nabdevorg](https://github.com/nabdevdotorg) and [Mrpineapple.org](https://github.com/PineappleChad)** - For helping me with datagen.
 
 ## License
 
