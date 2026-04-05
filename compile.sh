@@ -13,10 +13,11 @@ read choice
 
 echo
 echo "Select Target Architecture Extensions:"
-echo "1. Default (None)"
-echo "2. AVX2"
-echo "3. AVX512"
-printf "Select extensions (1/2/3): "
+echo "1. Default (auto-detect: NEON on ARM64, scalar elsewhere)"
+echo "2. AVX2   (x86-64 with AVX2 support)"
+echo "3. AVX512 (x86-64 with AVX-512 support)"
+echo "4. NEON   (explicit ARM64 / Apple Silicon)"
+printf "Select extensions (1/2/3/4): "
 read arch_choice
 
 AVX_FLAGS=""
@@ -24,6 +25,8 @@ if [ "$arch_choice" = "2" ]; then
     AVX_FLAGS="-d:avx2"
 elif [ "$arch_choice" = "3" ]; then
     AVX_FLAGS="-d:avx2 -d:avx512"
+elif [ "$arch_choice" = "4" ]; then
+    AVX_FLAGS="-d:neon"
 fi
 
 if [ "$choice" = "1" ]; then

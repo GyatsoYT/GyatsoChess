@@ -15,14 +15,16 @@ set /p choice="Select build type (1/2): "
 
 echo.
 echo Select Target Architecture Extensions:
-echo 1. Default (None)
-echo 2. AVX2
-echo 3. AVX512
-set /p arch_choice="Select extensions (1/2/3): "
+echo 1. Default (auto-detect: NEON on ARM64, scalar elsewhere)
+echo 2. AVX2   (x86-64 with AVX2 support)
+echo 3. AVX512 (x86-64 with AVX-512 support)
+echo 4. NEON   (explicit ARM64 / Apple Silicon)
+set /p arch_choice="Select extensions (1/2/3/4): "
 
 set AVX_FLAGS=
 if "%arch_choice%"=="2" set AVX_FLAGS=-d:avx2
 if "%arch_choice%"=="3" set AVX_FLAGS=-d:avx2 -d:avx512
+if "%arch_choice%"=="4" set AVX_FLAGS=-d:neon
 
 if "%choice%"=="1" goto NORMAL
 if "%choice%"=="2" goto PGO
