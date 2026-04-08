@@ -355,8 +355,18 @@ proc scoreMove*(board: Board, move: Move, ttMove: Move, stack: openArray[StackEn
   if stack[ply].killers[0] == uint32(move): return 195_000'i32
   if stack[ply].killers[1] == uint32(move): return 190_000'i32
 
-  # Main history score
-  return history.mainHistory[board.sideToMove.ord][historyIndex(move)].int32
+  # Combined quiet history score
+  var score = history.mainHistory[board.sideToMove.ord][historyIndex(move)].int32
+
+  # 1-ply continuation history
+  if ply > 0 and stack[ply - 1].move != 0:
+    let prevPiece = stack[ply - 1].movedPiece
+    if prevPiece != NoPiece:
+      let prevTo = Move(stack[ply - 1].move).toSquare.int
+      let currPiece = board.pieces[move.fromSquare]
+      score += history.contHistory[prevPiece][prevTo][currPiece][move.toSquare.int].int32
+
+  return score
 
 proc pickMove*(ml: var MoveList, startIndex: int): Move {.inline,
     noSideEffect.} =

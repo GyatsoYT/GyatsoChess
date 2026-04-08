@@ -37,6 +37,8 @@ Thumbs.db
 # Profiling and debugging files
 *.prof
 *.trace
+*.profdata
+*.profraw
 
 
 # Test artifacts

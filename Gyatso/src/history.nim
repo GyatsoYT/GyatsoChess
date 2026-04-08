@@ -1,8 +1,9 @@
-import move
+import move, coretypes
 
 type
   HistoryTables* = object
     mainHistory*: array[2, array[4096, int16]]
+    contHistory*: array[Piece, array[64, array[Piece, array[64, int16]]]]
 
 template historyIndex*(m: Move): int =
   ## Butterfly index: (fromSq << 6) | toSq

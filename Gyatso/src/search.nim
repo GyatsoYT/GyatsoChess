@@ -197,6 +197,8 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
           break
 
       if hasNonPawnMaterial:
+        searchStack[ply].move = 0
+        searchStack[ply].movedPiece = NoPiece
         pushNullMove(nnueState)
         board.makeNullMove()
         # Adaptive Null Move Pruning
@@ -345,6 +347,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
       quietsTriedCount.inc
 
     searchStack[ply].move = uint32(m)
+    searchStack[ply].movedPiece = board.pieces[m.fromSquare]
     pushAccumulator(addr gNetwork, board, m, nnueState)
     discard board.makeMove(m)
 
@@ -469,6 +472,16 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         for qi in 0 ..< quietsTriedCount - 1:  # -1 because bestMove is the last quiet added
           let qm = quietsTried[qi]
           updateHistoryStat(historyTable.mainHistory[colorIdx][historyIndex(qm)], malus)
+        # 1-ply continuation history bonus/malus
+        if searchStack[ply - 1].movedPiece != NoPiece:
+          let prevPiece = searchStack[ply - 1].movedPiece
+          let prevTo = Move(searchStack[ply - 1].move).toSquare.int
+          let currPiece = board.pieces[m.fromSquare]
+          updateHistoryStat(historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int], bonus)
+          for qi in 0 ..< quietsTriedCount - 1:
+            let qm = quietsTried[qi]
+            let qPiece = board.pieces[qm.fromSquare]
+            updateHistoryStat(historyTable.contHistory[prevPiece][prevTo][qPiece][qm.toSquare.int], malus)
         # Update killers
         if searchStack[ply].killers[0] != uint32(m):
           searchStack[ply].killers[1] = searchStack[ply].killers[0]
@@ -500,6 +513,8 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
     searchStack[i].excluded = 0
     searchStack[i].excluded = 0
     searchStack[i].evaluation = UNKNOWN
+    searchStack[i].move = 0
+    searchStack[i].movedPiece = NoPiece
 
   searchStack[0].move = 0
 
@@ -573,6 +588,8 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
       for i in 0 ..< ml.count:
         let m = pickMove(ml, i)
 
+        searchStack[0].move = uint32(m)
+        searchStack[0].movedPiece = board.pieces[m.fromSquare]
         searchStack[1].move = uint32(m)
         pushAccumulator(addr gNetwork, board, m, nnueState)
         discard board.makeMove(m)
