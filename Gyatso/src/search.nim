@@ -428,6 +428,19 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         if inCheck:
           reduction = max(0, reduction - 1)
 
+        # History-based LMR adjustment: reduce less for good history, more for bad
+        if isQuiet:
+          let colorIdx = us.ord
+          var histScore = historyTable.mainHistory[colorIdx][historyIndex(m)].int
+          # Add continuation history if available
+          if ply > 0 and searchStack[ply - 1].move != 0:
+            let prevPiece = searchStack[ply - 1].movedPiece
+            if prevPiece != NoPiece:
+              let prevTo = Move(searchStack[ply - 1].move).toSquare.int
+              let currPiece = board.pieces[m.fromSquare]
+              histScore += historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int].int
+          reduction -= histScore div 8192
+
         # Ensure reduction is valid
         reduction = max(0, min(reduction, depth - 1))
 
