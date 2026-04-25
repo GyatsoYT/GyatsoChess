@@ -202,7 +202,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         pushNullMove(nnueState)
         board.makeNullMove()
         # Adaptive Null Move Pruning
-        let R = 2 + (depth div 6)
+        let R = 2 + (depth div 4)
         let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1,
             info, totalExtensions)
         board.unmakeNullMove()
