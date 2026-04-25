@@ -53,7 +53,7 @@ const
   MultiCutM = 3 # Number of moves to test for Multi-Cut
   MultiCutC = 2 # Required cutoffs to trigger Multi-Cut pruning
 
-proc qSearch(board: var Board, alpha: int, beta: int, ply: int,
+proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
     info: var SearchInfo): int =
   info.nodes.inc
   if info.nodes mod 2048 == 0:

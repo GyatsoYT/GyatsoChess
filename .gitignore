@@ -40,7 +40,8 @@ Thumbs.db
 *.profdata
 *.profraw
 
-
+# TOOLS
+tools/
 # Test artifacts
 tests/nimcache/
 tests/*.out

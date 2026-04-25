@@ -1,4 +1,4 @@
-import coretypes, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, tt, nnuetypes, nnue, search
+import coretypes, zobrist, board, threading, logger, lookups, move, movegen, magicbitboards, evaluation, tt, nnuetypes, nnue, search, benchmark
 import std/strutils
 import std/times
 import std/atomics
@@ -330,6 +330,14 @@ proc uciLoop() {.thread, gcsafe.} =
                 discard b.makeMove(m)
               else:
                 echo "Invalid move: ", parts[i]
+      of "bench":
+        var benchDepth = DefaultBenchDepth
+        if parts.len > 1:
+          try:
+            benchDepth = parseInt(parts[1])
+          except ValueError:
+            echo "Invalid bench depth, using default ", DefaultBenchDepth
+        discard runBench(benchDepth)
       else:
         log("Unknown command: " & line, Warn)
 
