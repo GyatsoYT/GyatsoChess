@@ -3,7 +3,7 @@ import coretypes
 const
   ALIGNMENT* = 64
   FT_IN*     = 768   
-  HL*        = 256   
+  HL*        = 512  
   QA*        = 255   
   QB*        = 64    
   EVAL_SCALE* = 400

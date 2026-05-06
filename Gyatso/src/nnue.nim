@@ -4,13 +4,14 @@ import std/[streams, endians]
 when defined(simd):
     import simd
 
-func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square): int {.inline.} =
+func featureIndex*(perspective, pieceColor: Color, pt: PieceType,
+        sq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
-    let ptIdx = pt.ord  # Pawn=0..King=5
+    let ptIdx = pt.ord # Pawn=0..King=5
     let sqIdx = if perspective == White: sq.int else: (sq.int xor 56)
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512.bin")
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
@@ -51,7 +52,8 @@ proc loadNetworkFromEmbedded*(): NNUENetwork =
 proc initAccumulator*(net: ptr NNUENetwork, acc: var Accumulator) {.inline.} =
     acc.data = net.ftBias
 
-proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
+proc addFeature*(net: ptr NNUENetwork, index: int,
+        acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] += net.ftWeight[index][o]
@@ -64,7 +66,8 @@ proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inlin
             vecStore(addr acc.data[o], sum)
             o += CHUNK_SIZE
 
-proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
+proc removeFeature*(net: ptr NNUENetwork, index: int,
+        acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] -= net.ftWeight[index][o]
@@ -81,7 +84,8 @@ proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
+                    net.ftWeight[subIdx][i]
     else:
         var i = 0
         while i < HL:
@@ -96,7 +100,8 @@ proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
                 prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
+                    net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
     else:
         var i = 0
         while i < HL:
@@ -136,7 +141,8 @@ proc queueAddSub*(q: var UpdateQueue, addIdx, subIdx: int) {.inline.} =
     q.subs[q.subCount] = subIdx
     inc q.subCount
 
-proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1, subIdx2: int) {.inline.} =
+proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1,
+        subIdx2: int) {.inline.} =
     q.adds[q.addCount] = addIdx
     inc q.addCount
     q.subs[q.subCount] = subIdx1
@@ -155,10 +161,12 @@ proc apply*(q: var UpdateQueue, net: ptr NNUENetwork,
     elif q.addCount == 2 and q.subCount == 2:
         net.addSubAddSub(q.adds[0], q.subs[0], q.adds[1], q.subs[1], oldAcc, newAcc)
     else:
-        doAssert false, "invalid add/sub configuration: " & $q.addCount & " adds, " & $q.subCount & " subs"
+        doAssert false, "invalid add/sub configuration: " & $q.addCount &
+                " adds, " & $q.subCount & " subs"
     q.reset()
 
-proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
+proc refreshAccumulator*(net: ptr NNUENetwork, board: Board,
+        acc: var Accumulator, perspective: Color) =
     ## Full recompute of accumulator from board state
     net.initAccumulator(acc)
     var occ = board.allPiecesBB
@@ -176,7 +184,8 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     net.refreshAccumulator(board, state.white[0], White)
     net.refreshAccumulator(board, state.black[0], Black)
 
-proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+proc forward*(net: ptr NNUENetwork, stmAcc,
+        nstmAcc: var Accumulator): int {.inline.} =
     when not defined(simd):
         var output: int32 = 0
 
@@ -224,7 +233,8 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         let rawSum = vecReduceAdd32(sum)
         return int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
-proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
+proc nnueEvaluate*(net: ptr NNUENetwork, board: Board,
+        state: var NNUEState): int {.inline.} =
     let ply = state.current
     if board.sideToMove == White:
         result = forward(net, state.white[ply], state.black[ply])
@@ -253,25 +263,25 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
     if m.isCastle:
         let kingFrom = fromSq
-        let kingTo = toSq  # Note: in Gyatso, king toSq is the destination square
+        let kingTo = toSq # Note: in Gyatso, king toSq is the destination square
 
         var rookFrom, rookTo: Square
         if m.flags == KingCastle.int:
             # Kingside
             if us == White:
-                rookFrom = squareFromCoords(0, 7)  # h1
-                rookTo = squareFromCoords(0, 5)     # f1
+                rookFrom = squareFromCoords(0, 7) # h1
+                rookTo = squareFromCoords(0, 5) # f1
             else:
-                rookFrom = squareFromCoords(7, 7)  # h8
-                rookTo = squareFromCoords(7, 5)     # f8
+                rookFrom = squareFromCoords(7, 7) # h8
+                rookTo = squareFromCoords(7, 5) # f8
         else:
             # Queenside
             if us == White:
-                rookFrom = squareFromCoords(0, 0)  # a1
-                rookTo = squareFromCoords(0, 3)     # d1
+                rookFrom = squareFromCoords(0, 0) # a1
+                rookTo = squareFromCoords(0, 3) # d1
             else:
-                rookFrom = squareFromCoords(7, 0)  # a8
-                rookTo = squareFromCoords(7, 3)     # d8
+                rookFrom = squareFromCoords(7, 0) # a8
+                rookTo = squareFromCoords(7, 3) # d8
 
         let kingAddIdx = featureIndex(perspective, us, King, kingTo)
         let kingSubIdx = featureIndex(perspective, us, King, kingFrom)
