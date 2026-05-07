@@ -22,6 +22,8 @@ type
     current*: int
     white*:   array[MaxPly, Accumulator]
     black*:   array[MaxPly, Accumulator]
+    whiteNeedsRefresh*: array[MaxPly, bool]
+    blackNeedsRefresh*: array[MaxPly, bool]
 
   UpdateQueue* = object
     adds*: array[2, int]

@@ -4,14 +4,16 @@ import std/[streams, endians]
 when defined(simd):
     import simd
 
-func featureIndex*(perspective, pieceColor: Color, pt: PieceType,
-        sq: Square): int {.inline.} =
+func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
-    let ptIdx = pt.ord # Pawn=0..King=5
-    let sqIdx = if perspective == White: sq.int else: (sq.int xor 56)
+    let ptIdx = pt.ord  # Pawn=0..King=5
+    var sqIdx = if perspective == White: sq.int else: (sq.int xor 56)
+    # Horizontal mirror: flip file when perspective king is on files e-h
+    if (perspectiveKingSq.int mod 8) > 3:
+        sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HM.bin")
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
@@ -52,8 +54,7 @@ proc loadNetworkFromEmbedded*(): NNUENetwork =
 proc initAccumulator*(net: ptr NNUENetwork, acc: var Accumulator) {.inline.} =
     acc.data = net.ftBias
 
-proc addFeature*(net: ptr NNUENetwork, index: int,
-        acc: var Accumulator) {.inline.} =
+proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] += net.ftWeight[index][o]
@@ -66,8 +67,7 @@ proc addFeature*(net: ptr NNUENetwork, index: int,
             vecStore(addr acc.data[o], sum)
             o += CHUNK_SIZE
 
-proc removeFeature*(net: ptr NNUENetwork, index: int,
-        acc: var Accumulator) {.inline.} =
+proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] -= net.ftWeight[index][o]
@@ -84,8 +84,7 @@ proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
-                    net.ftWeight[subIdx][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx][i]
     else:
         var i = 0
         while i < HL:
@@ -100,8 +99,7 @@ proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
                 prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
-                    net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
     else:
         var i = 0
         while i < HL:
@@ -141,8 +139,7 @@ proc queueAddSub*(q: var UpdateQueue, addIdx, subIdx: int) {.inline.} =
     q.subs[q.subCount] = subIdx
     inc q.subCount
 
-proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1,
-        subIdx2: int) {.inline.} =
+proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1, subIdx2: int) {.inline.} =
     q.adds[q.addCount] = addIdx
     inc q.addCount
     q.subs[q.subCount] = subIdx1
@@ -161,13 +158,12 @@ proc apply*(q: var UpdateQueue, net: ptr NNUENetwork,
     elif q.addCount == 2 and q.subCount == 2:
         net.addSubAddSub(q.adds[0], q.subs[0], q.adds[1], q.subs[1], oldAcc, newAcc)
     else:
-        doAssert false, "invalid add/sub configuration: " & $q.addCount &
-                " adds, " & $q.subCount & " subs"
+        doAssert false, "invalid add/sub configuration: " & $q.addCount & " adds, " & $q.subCount & " subs"
     q.reset()
 
-proc refreshAccumulator*(net: ptr NNUENetwork, board: Board,
-        acc: var Accumulator, perspective: Color) =
+proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
     ## Full recompute of accumulator from board state
+    let perspKingSq = bitScanForward(board.pieceBB[makePiece(perspective, King)]).Square
     net.initAccumulator(acc)
     var occ = board.allPiecesBB
     while occ != 0:
@@ -176,16 +172,17 @@ proc refreshAccumulator*(net: ptr NNUENetwork, board: Board,
         if piece == NoPiece: continue
         let pt = pieceType(piece)
         let pc = pieceColor(piece)
-        let idx = featureIndex(perspective, pc, pt, sq)
+        let idx = featureIndex(perspective, pc, pt, sq, perspKingSq)
         net.addFeature(idx, acc)
 
 proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.current = 0
     net.refreshAccumulator(board, state.white[0], White)
     net.refreshAccumulator(board, state.black[0], Black)
+    state.whiteNeedsRefresh[0] = false
+    state.blackNeedsRefresh[0] = false
 
-proc forward*(net: ptr NNUENetwork, stmAcc,
-        nstmAcc: var Accumulator): int {.inline.} =
+proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     when not defined(simd):
         var output: int32 = 0
 
@@ -233,8 +230,19 @@ proc forward*(net: ptr NNUENetwork, stmAcc,
         let rawSum = vecReduceAdd32(sum)
         return int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
-proc nnueEvaluate*(net: ptr NNUENetwork, board: Board,
-        state: var NNUEState): int {.inline.} =
+proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
+    ## Lazy refresh: recompute accumulator if king crossed mirror boundary
+    let ply = state.current
+    if state.whiteNeedsRefresh[ply]:
+        net.refreshAccumulator(board, state.white[ply], White)
+        state.whiteNeedsRefresh[ply] = false
+    if state.blackNeedsRefresh[ply]:
+        net.refreshAccumulator(board, state.black[ply], Black)
+        state.blackNeedsRefresh[ply] = false
+
+proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
+    # Ensure accumulators are valid before evaluation
+    ensureAccumulatorReady(net, board, state)
     let ply = state.current
     if board.sideToMove == White:
         result = forward(net, state.white[ply], state.black[ply])
@@ -256,6 +264,9 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
     let movingPt = pieceType(movingPiece)
     let movingColor = pieceColor(movingPiece)
 
+    # Get perspective king square for horizontal mirroring
+    let perspKingSq = bitScanForward(board.pieceBB[makePiece(perspective, King)]).Square
+
     var queue: UpdateQueue
     queue.reset()
 
@@ -263,39 +274,37 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
     if m.isCastle:
         let kingFrom = fromSq
-        let kingTo = toSq # Note: in Gyatso, king toSq is the destination square
+        let kingTo = toSq  
 
         var rookFrom, rookTo: Square
         if m.flags == KingCastle.int:
-            # Kingside
             if us == White:
-                rookFrom = squareFromCoords(0, 7) # h1
-                rookTo = squareFromCoords(0, 5) # f1
+                rookFrom = squareFromCoords(0, 7) 
+                rookTo = squareFromCoords(0, 5)     
             else:
-                rookFrom = squareFromCoords(7, 7) # h8
-                rookTo = squareFromCoords(7, 5) # f8
+                rookFrom = squareFromCoords(7, 7)  
+                rookTo = squareFromCoords(7, 5)     
         else:
-            # Queenside
             if us == White:
-                rookFrom = squareFromCoords(0, 0) # a1
-                rookTo = squareFromCoords(0, 3) # d1
+                rookFrom = squareFromCoords(0, 0)  
+                rookTo = squareFromCoords(0, 3)     
             else:
-                rookFrom = squareFromCoords(7, 0) # a8
-                rookTo = squareFromCoords(7, 3) # d8
+                rookFrom = squareFromCoords(7, 0)  
+                rookTo = squareFromCoords(7, 3)  
 
-        let kingAddIdx = featureIndex(perspective, us, King, kingTo)
-        let kingSubIdx = featureIndex(perspective, us, King, kingFrom)
-        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo)
-        let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom)
+        let kingAddIdx = featureIndex(perspective, us, King, kingTo, perspKingSq)
+        let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
+        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo, perspKingSq)
+        let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
 
         queue.queueAddSub(kingAddIdx, kingSubIdx)
         queue.queueAddSub(rookAddIdx, rookSubIdx)
 
     elif m.isEnPassant:
         let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-        let addIdx = featureIndex(perspective, us, Pawn, toSq)
-        let subIdx1 = featureIndex(perspective, us, Pawn, fromSq)
-        let subIdx2 = featureIndex(perspective, them, Pawn, capSq)
+        let addIdx = featureIndex(perspective, us, Pawn, toSq, perspKingSq)
+        let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
+        let subIdx2 = featureIndex(perspective, them, Pawn, capSq, perspKingSq)
         queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
 
     elif m.isPromotion:
@@ -304,27 +313,27 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
             let capturedPiece = board.pieces[toSq]
             let capturedPt = pieceType(capturedPiece)
             let capturedColor = pieceColor(capturedPiece)
-            let addIdx = featureIndex(perspective, us, promoPt, toSq)
-            let subIdx1 = featureIndex(perspective, us, Pawn, fromSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq)
+            let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
+            let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
+            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
             queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
         else:
-            let addIdx = featureIndex(perspective, us, promoPt, toSq)
-            let subIdx = featureIndex(perspective, us, Pawn, fromSq)
+            let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
+            let subIdx = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
             queue.queueAddSub(addIdx, subIdx)
 
     elif m.isCapture:
         let capturedPiece = board.pieces[toSq]
         let capturedPt = pieceType(capturedPiece)
         let capturedColor = pieceColor(capturedPiece)
-        let addIdx = featureIndex(perspective, movingColor, movingPt, toSq)
-        let subIdx1 = featureIndex(perspective, movingColor, movingPt, fromSq)
-        let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq)
+        let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
+        let subIdx1 = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
+        let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
         queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
 
     else:
-        let addIdx = featureIndex(perspective, movingColor, movingPt, toSq)
-        let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq)
+        let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
+        let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
         queue.queueAddSub(addIdx, subIdx)
     if perspective == White:
         queue.apply(net, state.white[ply], state.white[ply + 1])
@@ -333,8 +342,32 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
 proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                       state: var NNUEState) =
-    computeUpdateQueue(net, board, m, White, state)
-    computeUpdateQueue(net, board, m, Black, state)
+    let ply = state.current
+    let us = board.sideToMove
+    let movingPt = pieceType(board.pieces[m.fromSquare])
+
+    ensureAccumulatorReady(net, board, state)
+
+    for perspective in [White, Black]:
+        let isOurKingMoving = (perspective == us) and (movingPt == King)
+
+        if isOurKingMoving:
+            let fromFile = m.fromSquare.int mod 8
+            let toFile = m.toSquare.int mod 8
+            if (fromFile > 3) != (toFile > 3):
+                if perspective == White:
+                    state.whiteNeedsRefresh[ply + 1] = true
+                else:
+                    state.blackNeedsRefresh[ply + 1] = true
+                continue
+
+        # Normal incremental update
+        computeUpdateQueue(net, board, m, perspective, state)
+        if perspective == White:
+            state.whiteNeedsRefresh[ply + 1] = false
+        else:
+            state.blackNeedsRefresh[ply + 1] = false
+
     inc state.current
 
 proc popAccumulator*(state: var NNUEState) {.inline.} =
@@ -342,14 +375,20 @@ proc popAccumulator*(state: var NNUEState) {.inline.} =
 
 proc pushNullMove*(state: var NNUEState) =
     let ply = state.current
-    state.white[ply + 1] = state.white[ply]
-    state.black[ply + 1] = state.black[ply]
+    state.whiteNeedsRefresh[ply + 1] = state.whiteNeedsRefresh[ply]
+    state.blackNeedsRefresh[ply + 1] = state.blackNeedsRefresh[ply]
+    if not state.whiteNeedsRefresh[ply]:
+        state.white[ply + 1] = state.white[ply]
+    if not state.blackNeedsRefresh[ply]:
+        state.black[ply + 1] = state.black[ply]
     inc state.current
 
 proc popNullMove*(state: var NNUEState) {.inline.} =
     dec state.current
 
 proc verifyNNUE*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
+    ensureAccumulatorReady(net, board, state)
+
     var whiteRef, blackRef: Accumulator
     net.refreshAccumulator(board, whiteRef, White)
     net.refreshAccumulator(board, blackRef, Black)
