@@ -80,7 +80,7 @@ proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
 
   var ml {.noinit.}: MoveList
   ml.count = 0
-  generateLegalCaptures(board, ml)
+  generatePseudoLegalCaptures(board, ml)
 
   let phase = getGamePhase(board)
 
@@ -97,7 +97,9 @@ proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
       continue
 
     pushAccumulator(addr gNetwork, board, m, nnueState)
-    discard board.makeMove(m)
+    if not board.makeMove(m):
+      popAccumulator(nnueState)
+      continue  # illegal move, skip
     let score = -qSearch(board, -beta, -alpha, ply + 1, info)
     board.unmakeMove(m)
     popAccumulator(nnueState)
@@ -116,9 +118,9 @@ proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
 proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     info: var SearchInfo, totalExtensions: int = 0): int =
 
-  initPV(ply) # Initialize PV length for this ply
+  initPV(ply)
 
-  # Clear ply+1 killers at the start of each negamax call (Heimdall-style)
+  # Clear ply+1 killers at the start of each negamax call
   if ply + 1 < MaxPly:
     searchStack[ply + 1].killers[0] = 0
     searchStack[ply + 1].killers[1] = 0
@@ -174,8 +176,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   if depth == 0:
     return qSearch(board, alpha, beta, ply, info)
 
-  var ml: MoveList
-
   let staticEval = if inCheck: UNKNOWN else: evaluate(board, nnueState)
   let phase = getGamePhase(board)
   searchStack[ply].evaluation = staticEval
@@ -228,7 +228,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
       var tacticalMoves {.noinit.}: MoveList
       tacticalMoves.count = 0
-      generateLegalCaptures(board, tacticalMoves)
+      generatePseudoLegalCaptures(board, tacticalMoves)
 
       for i in 0 ..< tacticalMoves.count:
         tacticalMoves.scores[i] = scoreMove(board, tacticalMoves.moves[i], Move(
@@ -238,7 +238,9 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         let m = pickMove(tacticalMoves, i)
 
         pushAccumulator(addr gNetwork, board, m, nnueState)
-        discard board.makeMove(m)
+        if not board.makeMove(m):
+          popAccumulator(nnueState)
+          continue
         let score = -negamax(board, probCutDepth - 1, -probBeta, -probBeta + 1,
             ply + 1, info, totalExtensions)
         board.unmakeMove(m)
@@ -251,36 +253,26 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
           return beta
 
   # Multi-Cut Pruning
-  generateLegalMoves(board, ml)
-
-  if ml.count == 0:
-    if inCheck:
-      return -MateValue + ply
-    else:
-      return 0
-
-  var movesAlreadyScored = false
-
-  # Apply Multi-Cut after move generation
-  if depth >= 6 and ply > 0 and not inCheck and abs(beta) < MateValue and
-      ml.count >= 4:
+  if depth >= 6 and ply > 0 and not inCheck and abs(beta) < MateValue:
     let isPV = (beta - alpha) > 1
     if not isPV:
-      # Score moves for Multi-Cut
-      for i in 0 ..< ml.count:
-        ml.scores[i] = scoreMove(board, ml.moves[i], ttMove,
+      var mcMoves {.noinit.}: MoveList
+      mcMoves.count = 0
+      generatePseudoLegalCaptures(board, mcMoves)
+      for i in 0 ..< mcMoves.count:
+        mcMoves.scores[i] = scoreMove(board, mcMoves.moves[i], ttMove,
             searchStack, ply, phase, historyTable)
-
-      movesAlreadyScored = true
 
       var multiCutCount = 0
       let multiCutDepth = depth - 3
-      let movesToTest = min(MultiCutM, ml.count)
+      let movesToTest = min(MultiCutM, mcMoves.count)
 
       for i in 0 ..< movesToTest:
-        let m = pickMove(ml, i)
+        let m = pickMove(mcMoves, i)
         pushAccumulator(addr gNetwork, board, m, nnueState)
-        discard board.makeMove(m)
+        if not board.makeMove(m):
+          popAccumulator(nnueState)
+          continue
         let score = -negamax(board, multiCutDepth, -beta, -beta + 1, ply + 1,
             info, totalExtensions)
         board.unmakeMove(m)
@@ -302,18 +294,16 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   var quietsTried: array[MaxMoves, Move]
   var quietsTriedCount = 0
 
-  # Score moves if not already scored by Multi-Cut
-  if not movesAlreadyScored:
-    for i in 0 ..< ml.count:
-      ml.scores[i] = scoreMove(board, ml.moves[i], ttMove,
-          searchStack, ply, phase, historyTable)
-
   var movesSearched = 0
-
   let isPVNode = (beta - alpha) > 1
 
-  for i in 0 ..< ml.count:
-    let m = pickMove(ml, i)
+  # Staged move picker
+  let killerMove = if searchStack[ply].killers[0] != 0: Move(searchStack[ply].killers[0]) else: Move(0)
+  var picker = initMovePicker(ttMove, killerMove, phase)
+
+  while true:
+    let m = picker.next(board, historyTable, searchStack, ply)
+    if m == Move(0): break
 
     if m == excluded:
       continue
@@ -349,7 +339,12 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     searchStack[ply].move = uint32(m)
     searchStack[ply].movedPiece = board.pieces[m.fromSquare]
     pushAccumulator(addr gNetwork, board, m, nnueState)
-    discard board.makeMove(m)
+    if not board.makeMove(m):
+      popAccumulator(nnueState)
+      # Undo the quiet tracking if move was illegal
+      if isQuiet and quietsTriedCount > 0:
+        quietsTriedCount.dec
+      continue
 
     # Check Extension
     let opponent = board.sideToMove
@@ -501,6 +496,13 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
           searchStack[ply].killers[0] = uint32(m)
 
       break
+
+  # Checkmate / Stalemate detection
+  if movesSearched == 0:
+    if inCheck:
+      return -MateValue + ply
+    else:
+      return 0
 
   # TT Store
   # Clamp score to avoid Infinity leaks
