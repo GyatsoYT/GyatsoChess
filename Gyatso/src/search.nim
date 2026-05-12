@@ -568,13 +568,15 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
       break
 
     # Aspiration Windows
-    var alphaWindow = 50
-    var betaWindow = 50
+    var alphaWindow = 20
+    var betaWindow = 20
     var aspirationScore = bestScore
 
     var currentBestMove = Move(0)
     var currentBestScore = -Infinity
     var aspirationFails = 0 # Track aspiration failures
+    var failHighCount = 0
+    var searchDepth = depth
 
     # Aspiration window loop
     while true:
@@ -624,12 +626,12 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
 
         var val = -Infinity
         if i == 0:
-          val = -negamax(board, depth - 1, -beta, -alpha, 1, info, 0)
+          val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0)
         else:
           # Null window search
-          val = -negamax(board, depth - 1, -alpha - 1, -alpha, 1, info, 0)
+          val = -negamax(board, searchDepth - 1, -alpha - 1, -alpha, 1, info, 0)
           if val > alpha and val < beta:
-            val = -negamax(board, depth - 1, -beta, -alpha, 1, info, 0)
+            val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0)
 
         board.unmakeMove(m)
         popAccumulator(nnueState)
@@ -658,21 +660,30 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
         let betaStart = min(Infinity, aspirationScore + betaWindow)
 
         if currentBestScore <= alphaStart:
-          alphaWindow *= 2
+          alphaWindow = (alphaWindow * 3) div 2
           aspirationScore = currentBestScore
           aspirationFails += 1
+          failHighCount = 0
+          searchDepth = depth
           if threadID == 0 and info.allocatedTime != DurationZero:
             timeManager.keepSearching()
           continue
         elif currentBestScore >= betaStart:
-          betaWindow *= 2
+          betaWindow = (betaWindow * 3) div 2
           aspirationScore = currentBestScore
           aspirationFails += 1
+          inc failHighCount
+          if failHighCount <= 2:
+            searchDepth = depth - failHighCount
+          else:
+            searchDepth = depth  # too many failures, search full depth
           if threadID == 0 and info.allocatedTime != DurationZero:
             timeManager.keepSearching()
           continue
 
       # Within window or depth < 3
+      searchDepth = depth
+      failHighCount = 0
       break
 
     if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
