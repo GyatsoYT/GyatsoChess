@@ -33,7 +33,7 @@ type
 
 const
   MaxMoves* = 256
-  MaxPly* = 512
+  MaxPly* = 128
   MateValue* = 29000
   UNKNOWN* = -32000 
 
