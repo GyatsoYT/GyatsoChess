@@ -180,6 +180,15 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   let phase = getGamePhase(board)
   searchStack[ply].evaluation = staticEval
 
+  # Improving flag
+  var improving = false
+  if not inCheck and staticEval != UNKNOWN:
+    if ply >= 2 and searchStack[ply - 2].evaluation != UNKNOWN:
+      improving = staticEval > searchStack[ply - 2].evaluation
+    elif ply >= 4 and searchStack[ply - 4].evaluation != UNKNOWN:
+      improving = staticEval > searchStack[ply - 4].evaluation
+    else:
+      improving = true  # no data, assume improving
 
   # Reverse Futility Pruning
   if depth < 7 and ply > 0 and abs(beta) < MateValue:
@@ -435,6 +444,10 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
               let currPiece = board.pieces[m.fromSquare]
               histScore += historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int].int
           reduction -= histScore div 8192
+
+        # Extra reduction for quiet moves when not improving
+        if isQuiet and not improving:
+          reduction += 1
 
         # Ensure reduction is valid
         reduction = max(0, min(reduction, depth - 1))
