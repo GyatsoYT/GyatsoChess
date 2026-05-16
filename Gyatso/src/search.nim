@@ -143,10 +143,10 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     return 0
 
   let excluded = Move(searchStack[ply].excluded)
-  let (hit, ttScore, ttMove) = if excluded == Move(0):
+  let (hit, ttScore, ttMove, _) = if excluded == Move(0):
       probeTT(board.currentZobristKey, depth, alpha, beta, board.gamePly)
     else:
-      (false, 0, Move(0))
+      (false, 0, Move(0), 0'i16)
 
   if hit and ply > 1:
     return ttScore
@@ -229,7 +229,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
     var ttAlpha = beta
     var ttBeta = beta + 1
-    let (ttHit, ttScore, _) = probeTT(board.currentZobristKey, probCutDepth,
+    let (ttHit, ttScore, _, _) = probeTT(board.currentZobristKey, probCutDepth,
         ttAlpha, ttBeta, board.gamePly)
 
     if not (ttHit and ttScore >= beta):
@@ -523,7 +523,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   if storeScore >= MateValue: storeScore = MateValue
   elif storeScore <= -MateValue: storeScore = -MateValue
 
-  storeTT(board, depth, storeScore, originalAlpha, beta, bestMove)
+  storeTT(board, depth, storeScore, originalAlpha, beta, bestMove, staticEval)
 
   return maxEval
 
@@ -594,7 +594,7 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
       if ml.count == 0:
         return (bestMove, bestScore)
 
-      let (hit, ttScore, ttMove) = probeTT(board.currentZobristKey, depth,
+      let (hit, ttScore, ttMove, _) = probeTT(board.currentZobristKey, depth,
           alpha, beta, board.gamePly)
 
       for i in 0 ..< ml.count:
