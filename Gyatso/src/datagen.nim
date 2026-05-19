@@ -1,6 +1,5 @@
 import coretypes, board, move, movegen, search, evaluation, bitboard,
-       zobrist, magicbitboards, lookups, tt, tables, utils,
-       nnuetypes, nnue
+       zobrist, magicbitboards, lookups, tt, tables, utils, nnue
 import std/[os, strutils, random, monotimes, times, atomics, cpuinfo,
             parseopt, json, sets]
 
@@ -108,7 +107,6 @@ proc isQuietMove(m: Move): bool = not m.isCapture and not m.isPromotion
 {.pop.}
 
 proc playGame(book: var OpeningBook; rng: var Rand; nodeLimit: int;
-              localNNUE: var NNUEState;
               positions: var seq[BufferedPosition]): GameResult =
   positions.setLen(0)
 
@@ -128,9 +126,6 @@ proc playGame(book: var OpeningBook; rng: var Rand; nodeLimit: int;
     let randIdx = rng.rand(vml.count - 1)
     if not b.makeMove(vml.moves[randIdx]): break  # illegal (shouldn't happen post-legal-gen)
     inc varietyPlayed
-
-  # Refresh NNUE from the new starting position (after variety moves).
-  refreshState(addr gNetwork, b, localNNUE)
 
   var adj: AdjudicationState
   var seenHashes: HashSet[uint64]
@@ -192,7 +187,6 @@ proc playGame(book: var OpeningBook; rng: var Rand; nodeLimit: int;
     if adj.drawStreak >= 8:
       return grDraw
 
-    pushAccumulator(addr gNetwork, b, bestMove, localNNUE)
     discard b.makeMove(bestMove)
     inc ply
 
@@ -283,16 +277,13 @@ var gStopFlag       {.global.}: Atomic[bool]
 proc workerThread(args: WorkerArgs) {.thread.} =
   initThreadMagics()
 
-  # Each worker owns its own NNUE state
-  var localNNUE: NNUEState
-
   var book      = loadOpeningBook(args.bookPath)
   var rng       = initRand(args.seed.int64 + args.threadId.int64 * 1000)
   var writer    = initDataWriter(args.outputDir, args.threadId)
   var positions: seq[BufferedPosition] = @[]
 
   while not args.shared.stopFlag[].load(moRelaxed):
-    let res = playGame(book, rng, args.nodeLimit, localNNUE, positions)
+    let res = playGame(book, rng, args.nodeLimit, positions)
     if res == grOngoing: continue
 
     let wdlVal: float32 = case res
