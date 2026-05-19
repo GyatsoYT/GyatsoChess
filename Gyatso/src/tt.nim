@@ -1,5 +1,8 @@
 import coretypes, zobrist, move, board
 
+func prefetch*(p: pointer; rw: cint = 0; locality: cint = 3)
+    {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
+
 type
   TTEntryFlag* = enum
     InvalidEntry,
@@ -136,3 +139,7 @@ proc getHashfull*(): int =
       
   if sampleSize == 0: return 0
   return (count * 1000) div sampleSize
+
+proc prefetchTT*(key: ZobristKey) {.inline.} =
+  if transpositionTable != nil:
+    prefetch(addr transpositionTable[ttIndex(key, ttSize)], 0, 3)

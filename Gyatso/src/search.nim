@@ -100,6 +100,7 @@ proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
     if not board.makeMove(m):
       popAccumulator(nnueState)
       continue  # illegal move, skip
+    prefetchTT(board.currentZobristKey)
     let score = -qSearch(board, -beta, -alpha, ply + 1, info)
     board.unmakeMove(m)
     popAccumulator(nnueState)
@@ -355,6 +356,8 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         quietsTriedCount.dec
       continue
 
+    prefetchTT(board.currentZobristKey)
+    
     # Check Extension
     let opponent = board.sideToMove
     let opponentIsWhite = opponent == White
