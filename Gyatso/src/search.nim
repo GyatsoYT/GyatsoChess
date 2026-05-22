@@ -152,6 +152,8 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   if hit and ply > 1:
     return ttScore
 
+  let (seHit, seEntry) = getTTEntry(board.currentZobristKey)
+
   # Internal Iterative Reduction (IIR)
   let us = board.sideToMove
   let them = if us == White: Black else: White
@@ -346,8 +348,9 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
       quietsTried[quietsTriedCount] = m
       quietsTriedCount.inc
 
+    let movingPieceForStack = board.pieces[m.fromSquare]
     searchStack[ply].move = uint32(m)
-    searchStack[ply].movedPiece = board.pieces[m.fromSquare]
+    searchStack[ply].movedPiece = movingPieceForStack
     pushAccumulator(addr gNetwork, board, m, nnueState)
     if not board.makeMove(m):
       popAccumulator(nnueState)
@@ -369,12 +372,13 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
     # Singular extension - only for TT move with proper conditions
     if m == ttMove and depth > 6 and excluded == Move(0) and not inCheck:
-      let (ttHit, ttEntry) = getTTEntry(board.currentZobristKey)
-      if ttHit and ttEntry.depth >= (depth - 3).int8 and ttEntry.flag ==
-          LowerBound and abs(ttScore) < MateValue:
+      if seHit and seEntry.depth >= (depth - 3).int8 and
+          seEntry.flag == LowerBound and abs(ttScore) < MateValue:
         let singularBeta = ttScore - 3 * depth div 2
         let singularDepth = depth div 2 - 1
-        let isPV = (beta - alpha) > 1
+        let savedKiller0 = searchStack[ply].killers[0]
+        let savedKiller1 = searchStack[ply].killers[1]
+        let savedEval    = searchStack[ply].evaluation
 
         searchStack[ply].excluded = uint32(m)
         board.unmakeMove(m) # Unmake to search from current position
@@ -384,6 +388,11 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         pushAccumulator(addr gNetwork, board, m, nnueState)
         discard board.makeMove(m) # Remake the move
         searchStack[ply].excluded = 0
+        searchStack[ply].killers[0]  = savedKiller0
+        searchStack[ply].killers[1]  = savedKiller1
+        searchStack[ply].evaluation  = savedEval
+        searchStack[ply].move        = uint32(m)
+        searchStack[ply].movedPiece  = movingPieceForStack
 
         if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
           board.unmakeMove(m)
@@ -393,7 +402,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         # Determine extension
         if singularScore < singularBeta:
           # Move is singular
-          if singularScore < singularBeta - 50 and not isPV:
+          if singularScore < singularBeta - 50 and not isPVNode:
             extension = 2 # Double extension
           else:
             extension = 1 # Single extension
