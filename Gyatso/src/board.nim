@@ -285,12 +285,20 @@ proc makeNullMove*(board: var Board) =
     capturedPiece: NoPiece
   )
   board.history.add(state)
-  
+
+  var key = board.currentZobristKey
+
+  # XOR out the old en passant contribution if one existed
+  if board.enPassantSquare != NoSquare:
+    key = key xor zobristEnPassant[fileOf(board.enPassantSquare.Square)]
+
   board.enPassantSquare = NoSquare
   board.sideToMove = if board.sideToMove == White: Black else: White
-  
-  # Update Zobrist Key (Incremental would be faster, but full regen is safer for now)
-  board.currentZobristKey = board.generateZobristKey()
+
+  # Flip side-to-move in the key
+  key = key xor zobristSideToMove
+
+  board.currentZobristKey = key
 
 proc unmakeNullMove*(board: var Board) =
   let state = board.history.pop()

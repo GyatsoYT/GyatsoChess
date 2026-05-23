@@ -183,19 +183,22 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   let phase = getGamePhase(board)
   searchStack[ply].evaluation = staticEval
 
-  # Improving flag
+  # Improving flag and delta (improvement) calculation
   var improving = false
+  var improvement = 0
   if not inCheck and staticEval != UNKNOWN:
     if ply >= 2 and searchStack[ply - 2].evaluation != UNKNOWN:
-      improving = staticEval > searchStack[ply - 2].evaluation
+      improvement = staticEval - searchStack[ply - 2].evaluation
+      improving = improvement > 0
     elif ply >= 4 and searchStack[ply - 4].evaluation != UNKNOWN:
-      improving = staticEval > searchStack[ply - 4].evaluation
+      improvement = staticEval - searchStack[ply - 4].evaluation
+      improving = improvement > 0
     else:
       improving = true  # no data, assume improving
 
   # Reverse Futility Pruning
-  if depth < 7 and ply > 0 and abs(beta) < MateValue:
-    let rfpMargin = (100 * depth) 
+  if depth < 7 and ply > 0 and abs(beta) < MateValue and staticEval != UNKNOWN:
+    let rfpMargin = 100 * depth - clamp(improvement div 2, -80, 80)
     if staticEval - rfpMargin >= beta:
       return staticEval
 
