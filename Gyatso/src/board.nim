@@ -8,6 +8,7 @@ const
   BlackQueenSide* = 8
   DefaultFen* = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
   NoSquare* = -1
+  MaxBoardHistory* = 1024
 
 type
   Board* = object
@@ -23,7 +24,8 @@ type
     fullMoveNumber*: int
     gamePly*: int 
     currentZobristKey*: ZobristKey
-    history*: seq[GameState]
+    history*: array[MaxBoardHistory, GameState]
+    historyLen*: int
 
   GameState* = object
     castlingRights*: int
@@ -45,6 +47,7 @@ proc clear(board: var Board) =
   board.fullMoveNumber = 1
   board.gamePly = 0
   board.currentZobristKey = 0
+  board.historyLen = 0
 
 proc updateOccupancies*(board: var Board) =
   board.occupiedBB[White] = 0
@@ -264,9 +267,8 @@ proc isRepetition*(board: Board): bool =
   if board.halfMoveClock < 4: return false
   
   let currentKey = board.currentZobristKey
-  let historyLen = board.history.len
-  let startIdx = historyLen - 2
-  let endIdx = historyLen - board.halfMoveClock
+  let startIdx = board.historyLen - 2
+  let endIdx = max(board.historyLen - board.halfMoveClock, 0)
   
   var i = startIdx
   while i >= endIdx and i >= 0:
@@ -284,7 +286,8 @@ proc makeNullMove*(board: var Board) =
     zobristKey: board.currentZobristKey,
     capturedPiece: NoPiece
   )
-  board.history.add(state)
+  board.history[board.historyLen] = state
+  inc board.historyLen
 
   var key = board.currentZobristKey
 
@@ -301,7 +304,8 @@ proc makeNullMove*(board: var Board) =
   board.currentZobristKey = key
 
 proc unmakeNullMove*(board: var Board) =
-  let state = board.history.pop()
+  dec board.historyLen
+  let state = board.history[board.historyLen]
   board.castlingRights = state.castlingRights
   board.enPassantSquare = state.enPassantSquare
   board.halfMoveClock = state.halfMoveClock
@@ -309,7 +313,8 @@ proc unmakeNullMove*(board: var Board) =
   board.sideToMove = if board.sideToMove == White: Black else: White
 
 proc unmakeMove*(board: var Board, move: Move) =
-  let state = board.history.pop()
+  dec board.historyLen
+  let state = board.history[board.historyLen]
   board.castlingRights = state.castlingRights
   board.enPassantSquare = state.enPassantSquare
   board.halfMoveClock = state.halfMoveClock
@@ -456,7 +461,8 @@ proc makeMove*(board: var Board, move: Move): bool =
     zobristKey: board.currentZobristKey,
     capturedPiece: capturedPiece
   )
-  board.history.add(state)
+  board.history[board.historyLen] = state
+  inc board.historyLen
   
   # Incremental Zobrist Update
   var key = board.currentZobristKey
