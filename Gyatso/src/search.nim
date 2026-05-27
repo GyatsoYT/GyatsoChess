@@ -582,6 +582,14 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
     if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
       break
 
+    var rootMoves: MoveList
+    rootMoves.count = 0
+    generateLegalMoves(board, rootMoves)
+    if rootMoves.count == 0:
+      return (bestMove, bestScore)
+
+    let phase = getGamePhase(board)  # also compute once per depth
+
     # Aspiration Windows
     var alphaWindow = 20
     var betaWindow = 20
@@ -602,36 +610,29 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
         alpha = max(-Infinity, aspirationScore - alphaWindow)
         beta = min(Infinity, aspirationScore + betaWindow)
 
-      var ml: MoveList
-      generateLegalMoves(board, ml)
-      let phase = getGamePhase(board)
-
-      if ml.count == 0:
-        return (bestMove, bestScore)
-
       let (hit, ttScore, ttMove, _) = probeTT(board.currentZobristKey, depth,
           alpha, beta, board.gamePly)
 
-      for i in 0 ..< ml.count:
-        ml.scores[i] = scoreMove(board, ml.moves[i], ttMove,
+      for i in 0 ..< rootMoves.count:
+        rootMoves.scores[i] = scoreMove(board, rootMoves.moves[i], ttMove,
             searchStack, 0, phase, historyTable)
 
       # Depth 1 fallback
-      if depth == 1 and ml.count > 0:
+      if depth == 1 and rootMoves.count > 0:
         var bestStaticIdx = 0
-        var bestStaticScore = ml.scores[0]
-        for i in 1 ..< ml.count:
-          if ml.scores[i] > bestStaticScore:
-            bestStaticScore = ml.scores[i]
+        var bestStaticScore = rootMoves.scores[0]
+        for i in 1 ..< rootMoves.count:
+          if rootMoves.scores[i] > bestStaticScore:
+            bestStaticScore = rootMoves.scores[i]
             bestStaticIdx = i
-        bestMove = ml.moves[bestStaticIdx]
+        bestMove = rootMoves.moves[bestStaticIdx]
 
       currentBestMove = Move(0)
       currentBestScore = -Infinity
 
       # Search all moves
-      for i in 0 ..< ml.count:
-        let m = pickMove(ml, i)
+      for i in 0 ..< rootMoves.count:
+        let m = pickMove(rootMoves, i)
 
         searchStack[0].move = uint32(m)
         searchStack[0].movedPiece = board.pieces[m.fromSquare]
