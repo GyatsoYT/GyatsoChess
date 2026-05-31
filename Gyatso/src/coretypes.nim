@@ -59,6 +59,7 @@ type
     excluded*: uint32 
     ply*: int
     movedPiece*: Piece  # Piece that moved at this ply (for continuation history)
+    wasPV*: bool
 
 func pieceColor*(p: Piece): Color =
   case p

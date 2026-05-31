@@ -117,9 +117,11 @@ proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
   return alpha
 
 proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
-    info: var SearchInfo, totalExtensions: int = 0): int =
+    info: var SearchInfo, totalExtensions: int = 0,
+    isPVNode: bool = false): int =
 
   initPV(ply)
+  let isPV = isPVNode
 
   # Clear ply+1 killers at the start of each negamax call
   if ply + 1 < MaxPly:
@@ -144,10 +146,13 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     return 0
 
   let excluded = Move(searchStack[ply].excluded)
-  let (hit, ttScore, ttMove, _) = if excluded == Move(0):
+  let (hit, ttScore, ttMove, _, ttWasPV) = if excluded == Move(0):
       probeTT(board.currentZobristKey, depth, alpha, beta, board.gamePly)
     else:
-      (false, 0, Move(0), 0'i16)
+      (false, 0, Move(0), 0'i16, false)
+
+  var wasPV = isPV or ttWasPV
+  searchStack[ply].wasPV = wasPV
 
   if hit and ply > 1:
     return ttScore
@@ -219,7 +224,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         # Adaptive Null Move Pruning
         let R = 2 + (depth div 4)
         let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1,
-            info, totalExtensions)
+            info, totalExtensions, isPVNode = false)
         board.unmakeNullMove()
         popNullMove(nnueState)
 
@@ -235,7 +240,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
     var ttAlpha = beta
     var ttBeta = beta + 1
-    let (ttHit, ttScore, _, _) = probeTT(board.currentZobristKey, probCutDepth,
+    let (ttHit, ttScore, _, _, _) = probeTT(board.currentZobristKey, probCutDepth,
         ttAlpha, ttBeta, board.gamePly)
 
     if not (ttHit and ttScore >= beta):
@@ -257,7 +262,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
           popAccumulator(nnueState)
           continue
         let score = -negamax(board, probCutDepth - 1, -probBeta, -probBeta + 1,
-            ply + 1, info, totalExtensions)
+            ply + 1, info, totalExtensions, isPVNode = false)
         board.unmakeMove(m)
         popAccumulator(nnueState)
 
@@ -269,7 +274,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
   # Multi-Cut Pruning
   if depth >= 6 and ply > 0 and not inCheck and abs(beta) < MateValue:
-    let isPV = (beta - alpha) > 1
     if not isPV:
       var mcMoves {.noinit.}: MoveList
       mcMoves.count = 0
@@ -289,7 +293,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
           popAccumulator(nnueState)
           continue
         let score = -negamax(board, multiCutDepth, -beta, -beta + 1, ply + 1,
-            info, totalExtensions)
+            info, totalExtensions, isPVNode = false)
         board.unmakeMove(m)
         popAccumulator(nnueState)
 
@@ -310,7 +314,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   var quietsTriedCount = 0
 
   var movesSearched = 0
-  let isPVNode = (beta - alpha) > 1
 
   # Staged move picker
   let killerMove = if searchStack[ply].killers[0] != 0: Move(searchStack[ply].killers[0]) else: Move(0)
@@ -326,7 +329,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     let isQuiet = not m.isCapture and not m.isPromotion
 
     # Late Move Pruning (LMP) - skip quiet moves late in the move list at shallow depths
-    if movesSearched > 0 and depth < 7 and not inCheck and not isPVNode and
+    if movesSearched > 0 and depth < 7 and not inCheck and not isPV and
         isQuiet and movesSearched >= LateMovePruning[depth] and
         staticEval >= alpha - 200:
       continue
@@ -387,7 +390,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         board.unmakeMove(m) # Unmake to search from current position
         popAccumulator(nnueState)
         let singularScore = negamax(board, singularDepth, singularBeta - 1,
-            singularBeta, ply, info, totalExtensions)
+            singularBeta, ply, info, totalExtensions, isPVNode = false)
         pushAccumulator(addr gNetwork, board, m, nnueState)
         discard board.makeMove(m) # Remake the move
         searchStack[ply].excluded = 0
@@ -405,7 +408,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         # Determine extension
         if singularScore < singularBeta:
           # Move is singular
-          if singularScore < singularBeta - 50 and not isPVNode:
+          if singularScore < singularBeta - 50 and not isPV:
             extension = 2 # Double extension
           else:
             extension = 1 # Single extension
@@ -429,7 +432,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
     if movesSearched == 0:
       # First move - Full Window
       score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info,
-          totalExtensions + extension)
+          totalExtensions + extension, isPVNode = isPV)
     else:
       # Late Move Reductions using pre-computed LMR table
       var reduction = 0
@@ -464,22 +467,26 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         if isQuiet and not improving:
           reduction += 1
 
+        # Reduce less if this node was previously on PV but now in null-window
+        if isQuiet and not isPV and wasPV:
+          reduction = max(0, reduction - 1)
+
         # Ensure reduction is valid
         reduction = max(0, min(reduction, depth - 1))
 
       # Null Window Search with reduction
       score = -negamax(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1,
-          info, totalExtensions + extension)
+          info, totalExtensions + extension, isPVNode = false)
 
       # Re-search if reduced and score raised alpha
       if reduction > 0 and score > alpha:
         score = -negamax(board, newDepth, -alpha - 1, -alpha, ply + 1, info,
-            totalExtensions + extension)
+            totalExtensions + extension, isPVNode = false)
 
       # PVS Re-search with full window
       if score > alpha and score < beta:
         score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info,
-            totalExtensions + extension)
+            totalExtensions + extension, isPVNode = isPV)
 
     board.unmakeMove(m)
     popAccumulator(nnueState)
@@ -538,7 +545,9 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   if storeScore >= MateValue: storeScore = MateValue
   elif storeScore <= -MateValue: storeScore = -MateValue
 
-  storeTT(board, depth, storeScore, originalAlpha, beta, bestMove, staticEval)
+  storeTT(board, depth, storeScore, originalAlpha, beta, bestMove,
+      rawEval = if staticEval != UNKNOWN: staticEval else: 0,
+      wasPV = isPV or wasPV)
 
   return maxEval
 
@@ -558,6 +567,7 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
     searchStack[i].evaluation = UNKNOWN
     searchStack[i].move = 0
     searchStack[i].movedPiece = NoPiece
+    searchStack[i].wasPV = false
 
   searchStack[0].move = 0
 
@@ -610,7 +620,7 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
         alpha = max(-Infinity, aspirationScore - alphaWindow)
         beta = min(Infinity, aspirationScore + betaWindow)
 
-      let (hit, ttScore, ttMove, _) = probeTT(board.currentZobristKey, depth,
+      let (hit, ttScore, ttMove, _, _) = probeTT(board.currentZobristKey, depth,
           alpha, beta, board.gamePly)
 
       for i in 0 ..< rootMoves.count:
@@ -642,12 +652,12 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
 
         var val = -Infinity
         if i == 0:
-          val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0)
+          val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0, isPVNode = true)
         else:
           # Null window search
-          val = -negamax(board, searchDepth - 1, -alpha - 1, -alpha, 1, info, 0)
+          val = -negamax(board, searchDepth - 1, -alpha - 1, -alpha, 1, info, 0, isPVNode = false)
           if val > alpha and val < beta:
-            val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0)
+            val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0, isPVNode = true)
 
         board.unmakeMove(m)
         popAccumulator(nnueState)
@@ -739,7 +749,7 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
         if rootScore >= MateValue: rootScore = MateValue
         elif rootScore <= -MateValue: rootScore = -MateValue
 
-        storeTT(board, depth, rootScore, -Infinity, Infinity, bestMove)
+        storeTT(board, depth, rootScore, -Infinity, Infinity, bestMove, wasPV = true)
 
         # Construct PV string from PV table
         var pvLine = ""

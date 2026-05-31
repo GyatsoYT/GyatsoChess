@@ -34,7 +34,7 @@ proc worker(data: ThreadData) {.thread.} =
       discard tempBoard.makeMove(bestMove)
       var alpha = -Infinity
       var beta = Infinity
-      let (hit, _, ttMove, _) = probeTT(tempBoard.currentZobristKey, 0, alpha, beta, tempBoard.gamePly)
+      let (hit, _, ttMove, _, _) = probeTT(tempBoard.currentZobristKey, 0, alpha, beta, tempBoard.gamePly)
       if hit and ttMove != Move(0):
         ponderMove = ttMove
     
