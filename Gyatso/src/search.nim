@@ -165,8 +165,19 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
   let inCheck = isSquareAttacked(board, kingSq.Square, them)
 
-  if depth > 3 and ttMove == Move(0) and not inCheck:
-    depth -= 1
+  if depth >= 4 and not inCheck:
+    let doIIR =
+      if ttMove == Move(0):
+        true
+      elif seHit:
+        int(seEntry.depth) + 4 < depth
+      else:
+        false
+
+    if doIIR:
+      depth -= 1
+      if depth <= 0:
+        return qSearch(board, alpha, beta, ply, info)
 
   # Mate distance pruning
   let mateInPly = MateValue - ply
