@@ -470,7 +470,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
             let prevPiece = searchStack[ply - 1].movedPiece
             if prevPiece != NoPiece:
               let prevTo = Move(searchStack[ply - 1].move).toSquare.int
-              let currPiece = board.pieces[m.fromSquare]
+              let currPiece = movingPieceForStack
               histScore += historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int].int
           reduction -= histScore div 8192
 
