@@ -219,7 +219,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
       return staticEval
 
   # Null Move Pruning (only when not in check and eval is known)
-  if depth >= 3 and ply > 0 and staticEval != UNKNOWN and staticEval >= beta:
+  if depth >= 3 and ply > 0 and staticEval != UNKNOWN and staticEval >= beta and searchStack[ply - 1].move != 0:
     if not inCheck:
       var hasNonPawnMaterial = false
       for pt in Knight .. Queen:
