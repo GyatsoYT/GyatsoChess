@@ -55,7 +55,7 @@ type
   StackEntry* = object
     evaluation*: int 
     move*: uint32     
-    killers*: array[2, uint32]
+    killers*: array[1, uint32]
     excluded*: uint32 
     ply*: int
     movedPiece*: Piece  # Piece that moved at this ply (for continuation history)

@@ -126,7 +126,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
   # Clear ply+1 killers at the start of each negamax call
   if ply + 1 < MaxPly:
     searchStack[ply + 1].killers[0] = 0
-    searchStack[ply + 1].killers[1] = 0
 
   info.nodes.inc
   if info.nodes mod 2048 == 0:
@@ -394,7 +393,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         let singularBeta = ttScore - 3 * depth div 2
         let singularDepth = depth div 2 - 1
         let savedKiller0 = searchStack[ply].killers[0]
-        let savedKiller1 = searchStack[ply].killers[1]
         let savedEval    = searchStack[ply].evaluation
 
         searchStack[ply].excluded = uint32(m)
@@ -406,7 +404,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
         discard board.makeMove(m) # Remake the move
         searchStack[ply].excluded = 0
         searchStack[ply].killers[0]  = savedKiller0
-        searchStack[ply].killers[1]  = savedKiller1
         searchStack[ply].evaluation  = savedEval
         searchStack[ply].move        = uint32(m)
         searchStack[ply].movedPiece  = movingPieceForStack
@@ -537,9 +534,7 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
             let qPiece = board.pieces[qm.fromSquare]
             updateHistoryStat(historyTable.contHistory[prevPiece][prevTo][qPiece][qm.toSquare.int], malus)
         # Update killers
-        if searchStack[ply].killers[0] != uint32(m):
-          searchStack[ply].killers[1] = searchStack[ply].killers[0]
-          searchStack[ply].killers[0] = uint32(m)
+        searchStack[ply].killers[0] = uint32(m)
 
       break
 
@@ -572,7 +567,6 @@ proc iterativeDeepening*(board: var Board, info: var SearchInfo,
   # Clear killers in search stack and init evaluations
   for i in 0 ..< MaxPly + 4:
     searchStack[i].killers[0] = 0
-    searchStack[i].killers[1] = 0
     searchStack[i].excluded = 0
     searchStack[i].excluded = 0
     searchStack[i].evaluation = UNKNOWN

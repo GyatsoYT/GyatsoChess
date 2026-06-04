@@ -397,7 +397,6 @@ proc scoreMove*(board: Board, move: Move, ttMove: Move, stack: openArray[StackEn
 
   # Killers
   if stack[ply].killers[0] == uint32(move): return 195_000'i32
-  if stack[ply].killers[1] == uint32(move): return 190_000'i32
 
   # Combined quiet history score
   var score = history.mainHistory[board.sideToMove.ord][historyIndex(move)].int32
