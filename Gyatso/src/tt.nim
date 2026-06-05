@@ -20,24 +20,29 @@ type
     bestMove*:   Move
     rawEval*:    int16
 
+const EntriesPerCluster* = 3
+
+type
+  TTCluster* = object
+    entries*: array[EntriesPerCluster, TTEntry]
+
 var ttGeneration*: uint8 = 0
 
 proc newTTGeneration*() =
   ttGeneration.inc
 
-var transpositionTable*: ptr UncheckedArray[TTEntry]
-var ttSize*: int
+var transpositionTable*: ptr UncheckedArray[TTCluster]
+var ttSize*: int  # number of clusters
 
 proc initTT*(sizeMB: int) =
-  let entrySize = sizeof(TTEntry)
-  let numEntries = (sizeMB * 1024 * 1024) div entrySize
-  
-  ttSize = numEntries
+  let numClusters = (sizeMB * 1024 * 1024) div sizeof(TTCluster)
+
+  ttSize = numClusters
   if transpositionTable != nil:
     deallocShared(transpositionTable)
-    
-  transpositionTable = cast[ptr UncheckedArray[TTEntry]](allocShared0(sizeof(TTEntry) * ttSize))
-  zeroMem(transpositionTable, sizeof(TTEntry) * ttSize)
+
+  transpositionTable = cast[ptr UncheckedArray[TTCluster]](
+    allocShared0(sizeof(TTCluster) * ttSize))
 
 func ttIndex(key: ZobristKey, size: int): int {.inline.} =
   let k = key.uint64
@@ -52,7 +57,8 @@ func ttIndex(key: ZobristKey, size: int): int {.inline.} =
 proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int,
               originalBeta: int, bestMove: Move, rawEval: int = 0,
               wasPV: bool = false) {.gcsafe.} =
-  let index = ttIndex(board.currentZobristKey, ttSize)
+  let clusterIdx = ttIndex(board.currentZobristKey, ttSize)
+  let cluster = addr transpositionTable[clusterIdx]
 
   var flag = ExactScore
   if score <= originalAlpha:
@@ -68,81 +74,101 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int,
   elif score < -MateThreshold:
     adjustedScore = score - board.gamePly
 
-  let existingEntry = transpositionTable[index]
+  var replaceIdx = 0
+  var minValue = high(int)
+  var found = false
 
-  var replace = false
-  if existingEntry.generation != ttGeneration:
-    replace = true
-  else:
-    if depth >= existingEntry.depth or existingEntry.flag == InvalidEntry:
-      replace = true
-    # Also replace if current search is PV and existing is not
-    elif wasPV and not existingEntry.wasPV:
-      replace = true
+  for i in 0 ..< EntriesPerCluster:
+    let e = cluster.entries[i]
+    if e.flag == InvalidEntry or e.hash == uint16(board.currentZobristKey):
+      replaceIdx = i
+      found = true
+      break
+    let relativeAge = (256 + ttGeneration.int - e.generation.int) and 255
+    let value = e.depth.int - relativeAge * 2
+    if value < minValue:
+      minValue = value
+      replaceIdx = i
 
-  if replace or existingEntry.hash != uint16(board.currentZobristKey):
-    transpositionTable[index] = TTEntry(
-      hash:       uint16(board.currentZobristKey),
-      depth:      depth.int8,
-      generation: ttGeneration,
-      score:      adjustedScore.int16,
-      flag:       flag,
-      wasPV:      wasPV or existingEntry.wasPV,  # preserve wasPV once set
-      bestMove:   bestMove,
-      rawEval:    rawEval.int16
-    )
+  let existingEntry = cluster.entries[replaceIdx]
+  # Preserve wasPV flag once set for same-key entries
+  let preserveWasPV = found and
+    existingEntry.hash == uint16(board.currentZobristKey) and
+    existingEntry.wasPV
+
+  cluster.entries[replaceIdx] = TTEntry(
+    hash:       uint16(board.currentZobristKey),
+    depth:      depth.int8,
+    generation: ttGeneration,
+    score:      adjustedScore.int16,
+    flag:       flag,
+    wasPV:      wasPV or preserveWasPV,
+    bestMove:   bestMove,
+    rawEval:    rawEval.int16
+  )
 
 proc probeTT*(zobristKey: ZobristKey, depth: int, alpha: var int, beta: var int,
               gamePly: int): (bool, int, Move, int16, bool) {.gcsafe.} =
-  let index = ttIndex(zobristKey, ttSize)
-  let entry = transpositionTable[index]
+  let clusterIdx = ttIndex(zobristKey, ttSize)
+  let cluster = addr transpositionTable[clusterIdx]
 
-  if entry.hash == uint16(zobristKey):
-    if entry.depth >= depth.int8:
-      var score = entry.score.int
-      const MateThreshold = MateValue - MaxPly
+  for i in 0 ..< EntriesPerCluster:
+    let e = cluster.entries[i]
+    if e.hash == uint16(zobristKey):
+      if e.depth >= depth.int8:
+        var score = e.score.int
+        const MateThreshold = MateValue - MaxPly
 
-      if score > MateThreshold: score = score - gamePly
-      elif score < -MateThreshold: score = score + gamePly
+        if score > MateThreshold: score = score - gamePly
+        elif score < -MateThreshold: score = score + gamePly
 
-      if score > MateValue:  score = MateValue
-      elif score < -MateValue: score = -MateValue
+        if score > MateValue:  score = MateValue
+        elif score < -MateValue: score = -MateValue
 
-      if entry.flag == ExactScore:
-        return (true, score, entry.bestMove, entry.rawEval, entry.wasPV)
-      elif entry.flag == LowerBound:
-        if score >= beta:
-          return (true, score, entry.bestMove, entry.rawEval, entry.wasPV)
-        alpha = max(alpha, score)
-      elif entry.flag == UpperBound:
-        beta = min(beta, score)
-      if alpha >= beta:
-        return (true, score, entry.bestMove, entry.rawEval, entry.wasPV)
+        if e.flag == ExactScore:
+          return (true, score, e.bestMove, e.rawEval, e.wasPV)
+        elif e.flag == LowerBound:
+          if score >= beta:
+            return (true, score, e.bestMove, e.rawEval, e.wasPV)
+          alpha = max(alpha, score)
+        elif e.flag == UpperBound:
+          beta = min(beta, score)
+        if alpha >= beta:
+          return (true, score, e.bestMove, e.rawEval, e.wasPV)
 
-    return (false, 0, entry.bestMove, entry.rawEval, entry.wasPV)
+      return (false, 0, e.bestMove, e.rawEval, e.wasPV)
 
   return (false, 0, Move(0), 0'i16, false)
 
 proc getTTEntry*(zobristKey: ZobristKey): tuple[hit: bool, entry: TTEntry] {.gcsafe.} =
-  let index = ttIndex(zobristKey, ttSize)
-  let entry = transpositionTable[index]
-  
-  if entry.hash == uint16(zobristKey):
-    return (true, entry)
-  else:
-    return (false, entry)
+  let clusterIdx = ttIndex(zobristKey, ttSize)
+  let cluster = addr transpositionTable[clusterIdx]
+
+  for i in 0 ..< EntriesPerCluster:
+    let e = cluster.entries[i]
+    if e.hash == uint16(zobristKey):
+      return (true, e)
+
+  return (false, TTEntry())
 
 proc getHashfull*(): int =
   var count = 0
-  let sampleSize = min(1000, ttSize)
-  
-  for i in 0 ..< sampleSize:
-    if transpositionTable[i].flag != InvalidEntry and transpositionTable[i].generation == ttGeneration:
-      count.inc
-      
-  if sampleSize == 0: return 0
-  return (count * 1000) div sampleSize
+  let sampleClusters = min(1000, ttSize)
+  let totalSampled = sampleClusters * EntriesPerCluster
+
+  for i in 0 ..< sampleClusters:
+    for j in 0 ..< EntriesPerCluster:
+      let e = transpositionTable[i].entries[j]
+      if e.flag != InvalidEntry and e.generation == ttGeneration:
+        count.inc
+
+  if totalSampled == 0: return 0
+  return (count * 1000) div totalSampled
 
 proc prefetchTT*(key: ZobristKey) {.inline.} =
   if transpositionTable != nil:
     prefetch(addr transpositionTable[ttIndex(key, ttSize)], 0, 3)
+
+proc clearTT*() =
+  if transpositionTable != nil:
+    zeroMem(transpositionTable, sizeof(TTCluster) * ttSize)
