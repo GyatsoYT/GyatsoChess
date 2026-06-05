@@ -29,8 +29,8 @@ type
     depth*: int
 
   BenchWorkerData = object
-    board: Board
-    info: SearchInfo
+    fen: string
+    depth: int
     bestMove: Move
     nodes: uint64
 
@@ -41,8 +41,24 @@ proc clearTT*() =
 
 proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   initThreadMagics()
-  var b = data.board
-  var info = data.info
+  var b = initializeBoard(data.fen)
+  
+  var stopFlag: Atomic[bool]
+  stopFlag.store(false, moRelaxed)
+
+  var info: SearchInfo
+  info.startTime = getMonoTime()
+  info.allocatedTime = DurationZero
+  info.depthLimit = data.depth
+  info.nodeLimit = 0
+  info.stopFlag = addr stopFlag
+  info.ponderFlag = nil
+  info.nodeCounts = nil
+  info.threadID = 0
+  info.numThreads = 1
+  info.nodes = 0
+  info.selDepth = 0
+
   let (bestMove, _) = iterativeDeepening(b, info, threadID = -1)
   data.bestMove = bestMove
   data.nodes = info.nodes
@@ -58,30 +74,13 @@ proc runBench*(depth: int = DefaultBenchDepth): BenchResult =
   echo ""
 
   for i, fen in BenchmarkPositions:
-    # Fresh board for each position
-    var b = initializeBoard(fen)
-
     # Clear TT between positions for reproducibility
     clearTT()
     newTTGeneration()
 
-    # Set up a fixed-depth search with no time limit
-    var stopFlag: Atomic[bool]
-    stopFlag.store(false, moRelaxed)
-
     var workerData: BenchWorkerData
-    workerData.board = b
-    workerData.info.startTime = getMonoTime()
-    workerData.info.allocatedTime = DurationZero
-    workerData.info.depthLimit = depth
-    workerData.info.nodeLimit = 0
-    workerData.info.stopFlag = addr stopFlag
-    workerData.info.ponderFlag = nil
-    workerData.info.nodeCounts = nil
-    workerData.info.threadID = 0
-    workerData.info.numThreads = 1
-    workerData.info.nodes = 0
-    workerData.info.selDepth = 0
+    workerData.fen = fen
+    workerData.depth = depth
 
     let posStart = getMonoTime()
 

@@ -1,6 +1,7 @@
 import std/atomics
-import coretypes, board, search, magicbitboards, move, tt, nnuetypes, nnue, evaluation
+import coretypes, board, search, magicbitboards, move, tt
 
+const MaxThreads* = 256
 
 type
   ThreadData* = object
@@ -9,10 +10,10 @@ type
     info*: SearchInfo
     
   ThreadPool* = object
-    threads*: seq[Thread[ThreadData]]
+    threads*: array[MaxThreads, Thread[ThreadData]]
     numThreads*: int
     
-var pool* {.threadvar.}: ThreadPool 
+var pool*: ThreadPool
 var searchRunning*: bool = false
 var mainStopFlag*: ptr Atomic[bool]
 var sharedNodeCounts*: ptr UncheckedArray[uint64]
@@ -48,8 +49,7 @@ proc worker(data: ThreadData) {.thread.} =
 
 
 proc initThreadPool*(numThreads: int) =
-  pool.numThreads = numThreads
-  pool.threads = newSeq[Thread[ThreadData]](numThreads)
+  pool.numThreads = clamp(numThreads, 1, MaxThreads)
   
   # Allocate shared stop flag if not already
   if mainStopFlag == nil:

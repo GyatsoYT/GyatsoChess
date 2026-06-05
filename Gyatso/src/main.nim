@@ -74,7 +74,7 @@ proc uciLoop() {.thread, gcsafe.} =
         echo "id name Gyatso 1.3.0"
         echo "id author Gyatso Neesham"
         echo "option name Hash type spin default 64 min 1 max 1024"
-        echo "option name Threads type spin default 1 min 1 max 128"
+        echo "option name Threads type spin default 1 min 1 max 256"
         echo "option name UCI_Chess960 type check default false"
         echo "option name Ponder type check default false"
         echo "option name Log Engine type check default false"
