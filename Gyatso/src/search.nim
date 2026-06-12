@@ -50,8 +50,6 @@ proc checkTime*(info: var SearchInfo) =
 const
   Infinity* = 30000
   Contempt* = 20
-  MultiCutM = 3 # Number of moves to test for Multi-Cut
-  MultiCutC = 2 # Required cutoffs to trigger Multi-Cut pruning
 
 proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
     info: var SearchInfo): int =
@@ -281,39 +279,6 @@ proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
 
         if score >= probBeta:
           return beta
-
-  # Multi-Cut Pruning
-  if depth >= 6 and ply > 0 and not inCheck and abs(beta) < MateValue:
-    if not isPV:
-      var mcMoves {.noinit.}: MoveList
-      mcMoves.count = 0
-      generatePseudoLegalCaptures(board, mcMoves)
-      for i in 0 ..< mcMoves.count:
-        mcMoves.scores[i] = scoreMove(board, mcMoves.moves[i], ttMove,
-            searchStack, ply, phase, historyTable)
-
-      var multiCutCount = 0
-      let multiCutDepth = depth - 3
-      let movesToTest = min(MultiCutM, mcMoves.count)
-
-      for i in 0 ..< movesToTest:
-        let m = pickMove(mcMoves, i)
-        pushAccumulator(addr gNetwork, board, m, nnueState)
-        if not board.makeMove(m):
-          popAccumulator(nnueState)
-          continue
-        let score = -negamax(board, multiCutDepth, -beta, -beta + 1, ply + 1,
-            info, totalExtensions, isPVNode = false)
-        board.unmakeMove(m)
-        popAccumulator(nnueState)
-
-        if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-          return 0
-
-        if score >= beta:
-          multiCutCount.inc
-          if multiCutCount >= MultiCutC:
-            return beta # Multi-Cut pruning
 
   var maxEval = -Infinity
   var bestMove = Move(0)
