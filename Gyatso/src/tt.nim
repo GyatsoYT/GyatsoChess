@@ -77,18 +77,24 @@ proc storeTT*(board: Board, depth: int, score: int, originalAlpha: int,
   var replaceIdx = 0
   var minValue = high(int)
   var found = false
+  var emptyIdx = -1
 
   for i in 0 ..< EntriesPerCluster:
     let e = cluster.entries[i]
-    if e.flag == InvalidEntry or e.hash == uint16(board.currentZobristKey):
+    if e.flag != InvalidEntry and e.hash == uint16(board.currentZobristKey):
       replaceIdx = i
       found = true
       break
+    if e.flag == InvalidEntry and emptyIdx < 0:
+      emptyIdx = i
     let relativeAge = (256 + ttGeneration.int - e.generation.int) and 255
     let value = e.depth.int - relativeAge * 2
     if value < minValue:
       minValue = value
       replaceIdx = i
+
+  if not found and emptyIdx >= 0:
+    replaceIdx = emptyIdx
 
   let existingEntry = cluster.entries[replaceIdx]
   # Preserve wasPV flag once set for same-key entries
