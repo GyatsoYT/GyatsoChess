@@ -1,186 +1,323 @@
-import coretypes, bitboard, zobrist, utils, lookups, magicbitboards, move
+import coretypes
+import bitboard
+import zobrist
+import attacks
 import std/strutils
 
-const
-  WhiteKingSide* = 1
-  WhiteQueenSide* = 2
-  BlackKingSide* = 4
-  BlackQueenSide* = 8
-  DefaultFen* = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-  NoSquare* = -1
-  MaxBoardHistory* = 1024
+type
+  CastlingRights* = distinct uint8
+
+func hasWK*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 1'u8) != 0
+func hasWQ*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 2'u8) != 0
+func hasBK*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 4'u8) != 0
+func hasBQ*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 8'u8) != 0
+
+func revokeWK*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(cast[uint8](cr) and (not 1'u8))
+func revokeWQ*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(cast[uint8](cr) and (not 2'u8))
+func revokeBK*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(cast[uint8](cr) and (not 4'u8))
+func revokeBQ*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(cast[uint8](cr) and (not 8'u8))
+
+func `==`*(a, b: CastlingRights): bool {.borrow, inline.}
 
 type
+  UndoInfo* = object
+    hash*:     ZobristKey
+    castling*: CastlingRights
+    epSquare*: Square
+    halfmove*: uint8
+    captured*: Piece
+    checkers*: Bitboard
+    pinHV*:    Bitboard
+    pinD12*:   Bitboard
+    threats*:  Bitboard
+
   Board* = object
-    pieceBB*: array[Piece, Bitboard]
-    occupiedBB*: array[Color, Bitboard]
-    allPiecesBB*: Bitboard
-    pieces*: array[Square, Piece] # Mailbox representation
-    sideToMove*: Color
+    byPiece*:   array[12, Bitboard]
+    byColor*:   array[2, Bitboard]
+    occupied*:  Bitboard
+    mailbox*:   array[64, Piece]
+    stm*:       Color
+    castling*:  CastlingRights
+    epSquare*:  Square
+    halfmove*:  uint8
+    fullmove*:  uint16
+    hash*:      ZobristKey
+    gamePly*:   int
+    checkers*:  Bitboard
+    pinHV*:     Bitboard
+    pinD12*:    Bitboard
+    threats*:   Bitboard
+    history*:   array[1024, UndoInfo]
+    histLen*:   int
 
-    enPassantSquare*: int 
-    castlingRights*: int
-    halfMoveClock*: int
-    fullMoveNumber*: int
-    gamePly*: int 
-    currentZobristKey*: ZobristKey
-    history*: array[MaxBoardHistory, GameState]
-    historyLen*: int
+func pieceOn*(b: Board, sq: Square): Piece {.inline.} =
+  b.mailbox[sq.int]
 
-  GameState* = object
-    castlingRights*: int
-    enPassantSquare*: int
-    halfMoveClock*: int
-    zobristKey*: ZobristKey
-    capturedPiece*: Piece
+func pieces*(b: Board, p: Piece): Bitboard {.inline.} =
+  if p == NoPiece: Bitboard(0)
+  else: b.byPiece[p.ord]
 
-proc clear(board: var Board) =
-  for p in Piece: board.pieceBB[p] = 0
-  for s in 0..63: board.pieces[s.Square] = NoPiece
-  for c in Color: board.occupiedBB[c] = 0
+func pieces*(b: Board, pt: PieceType, c: Color): Bitboard {.inline.} =
+  if pt == NoPieceType: Bitboard(0)
+  else:
+    let p = makePiece(c, pt)
+    b.byPiece[p.ord]
 
-  board.allPiecesBB = 0
-  board.sideToMove = White
-  board.enPassantSquare = NoSquare
-  board.castlingRights = 0
-  board.halfMoveClock = 0
-  board.fullMoveNumber = 1
-  board.gamePly = 0
-  board.currentZobristKey = 0
-  board.historyLen = 0
+func kingSquare*(b: Board, c: Color): Square {.inline.} =
+  let kingPiece = makePiece(c, King)
+  b.byPiece[kingPiece.ord].lsb()
 
-proc updateOccupancies*(board: var Board) =
-  board.occupiedBB[White] = 0
-  board.occupiedBB[Black] = 0
-  
-  for p in WhitePawn..WhiteKing:
-    board.occupiedBB[White] = board.occupiedBB[White] or board.pieceBB[p]
+func isOccupied*(b: Board, sq: Square): bool {.inline.} =
+  b.occupied.hasSq(sq)
+
+proc putPiece(b: var Board, p: Piece, sq: Square) {.inline.} =
+  let sqBit = bit(sq)
+  b.byPiece[p.ord] = b.byPiece[p.ord] or sqBit
+  b.byColor[p.color.ord] = b.byColor[p.color.ord] or sqBit
+  b.occupied = b.occupied or sqBit
+  b.mailbox[sq.int] = p
+  b.hash = b.hash xor pieceKeys[p.ord][sq.int]
+
+proc removePiece(b: var Board, sq: Square) {.inline.} =
+  let p = b.mailbox[sq.int]
+  if p != NoPiece:
+    let sqBit = bit(sq)
+    b.byPiece[p.ord] = b.byPiece[p.ord] and not sqBit
+    b.byColor[p.color.ord] = b.byColor[p.color.ord] and not sqBit
+    b.occupied = b.occupied and not sqBit
+    b.mailbox[sq.int] = NoPiece
+    b.hash = b.hash xor pieceKeys[p.ord][sq.int]
+
+proc movePiece(b: var Board, fromSq, toSq: Square) {.inline.} =
+  let p = b.mailbox[fromSq.int]
+  if p != NoPiece:
+    let fromBit = bit(fromSq)
+    let toBit = bit(toSq)
+    let combined = fromBit or toBit
     
-  for p in BlackPawn..BlackKing:
-    board.occupiedBB[Black] = board.occupiedBB[Black] or board.pieceBB[p]
+    b.byPiece[p.ord] = b.byPiece[p.ord] xor combined
+    b.byColor[p.color.ord] = b.byColor[p.color.ord] xor combined
+    b.occupied = b.occupied xor combined
     
-  board.allPiecesBB = board.occupiedBB[White] or board.occupiedBB[Black]
+    b.mailbox[fromSq.int] = NoPiece
+    b.mailbox[toSq.int] = p
+    
+    b.hash = b.hash xor pieceKeys[p.ord][fromSq.int] xor pieceKeys[p.ord][toSq.int]
 
-proc generateZobristKey(board: Board): ZobristKey =
-  var key: ZobristKey = 0
-  
-  # Pieces
-  for p in Piece:
-    if p == NoPiece: continue
-    var bb = board.pieceBB[p]
-    while bb != 0:
-      let sq = popBit(bb)
-      key = key xor zobristTable[p][sq]
-      
-  # Side to move
-  if board.sideToMove == Black:
-    key = key xor zobristSideToMove
-    
-  # Castling
-  key = key xor zobristCastling[board.castlingRights]
-  
-  # En Passant
-  if board.enPassantSquare != NoSquare:
-    let file = fileOf(board.enPassantSquare.Square)
-    key = key xor zobristEnPassant[file]
-    
-  return key
+proc attackersTo*(b: Board, sq: Square, occ: Bitboard, them: Color): Bitboard =
+  let offset       = them.ord * 6
+  let enemyPawns   = b.byPiece[offset + Pawn.ord]
+  let enemyKnights = b.byPiece[offset + Knight.ord]
+  let enemyBishops = b.byPiece[offset + Bishop.ord]
+  let enemyRooks   = b.byPiece[offset + Rook.ord]
+  let enemyQueens  = b.byPiece[offset + Queen.ord]
+  let enemyKing    = b.byPiece[offset + King.ord]
 
-proc parseFen*(board: var Board, fen: string) =
-  board.clear()
+  (getPawnAttacks(sq, them.opposite()) and enemyPawns) or
+  (getKnightAttacks(sq)                and enemyKnights) or
+  (getBishopAttacks(sq, occ)           and (enemyBishops or enemyQueens)) or
+  (getRookAttacks(sq, occ)             and (enemyRooks or enemyQueens)) or
+  (getKingAttacks(sq)                  and enemyKing)
+
+proc attackersTo*(b: Board, sq: Square, occ: Bitboard): Bitboard {.inline.} =
+  b.attackersTo(sq, occ, White) or b.attackersTo(sq, occ, Black)
+
+func pawnAttackLeft(bb: Bitboard, c: Color): Bitboard {.inline.} =
+  if c == White: (bb and not FileA) shl 7
+  else:          (bb and not FileH) shr 7
+
+func pawnAttackRight(bb: Bitboard, c: Color): Bitboard {.inline.} =
+  if c == White: (bb and not FileH) shl 9
+  else:          (bb and not FileA) shr 9
+
+proc updateAttackState*(b: var Board) =
+  let us   = b.stm
+  let them = us.opposite()
+  let kingSq = b.byPiece[us.ord * 6 + King.ord].lsb()
+  let occ = b.occupied
+
+  b.checkers = b.attackersTo(kingSq, occ, them)
+
+  b.pinHV  = Bitboard(0)
+  b.pinD12 = Bitboard(0)
+
+  let offset = them.ord * 6
+  let enemyRooks   = b.byPiece[offset + Rook.ord]
+  let enemyBishops = b.byPiece[offset + Bishop.ord]
+  let enemyQueens  = b.byPiece[offset + Queen.ord]
+
+  let enemyHV  = enemyRooks or enemyQueens
+  let enemyD12 = enemyBishops or enemyQueens
+
+  if not enemyHV.isEmpty():
+    var candidates = getRookAttacks(kingSq, b.byColor[them.ord]) and enemyHV
+    for pinner in candidates:
+      let ray = rayBetween(kingSq, pinner) or pinner.bit
+      if (ray and b.byColor[us.ord]).popcount() == 1:
+        b.pinHV = b.pinHV or ray
+
+  if not enemyD12.isEmpty():
+    var candidates = getBishopAttacks(kingSq, b.byColor[them.ord]) and enemyD12
+    for pinner in candidates:
+      let ray = rayBetween(kingSq, pinner) or pinner.bit
+      if (ray and b.byColor[us.ord]).popcount() == 1:
+        b.pinD12 = b.pinD12 or ray
+
+  let occNoKing = occ and not kingSq.bit
+
+  # 1. Pawn threats
+  let enemyPawns = b.byPiece[offset + Pawn.ord]
+  b.threats = pawnAttackLeft(enemyPawns, them) or pawnAttackRight(enemyPawns, them)
+
+  # 2. King threats
+  let enemyKingSq = b.byPiece[offset + King.ord].lsb()
+  b.threats = b.threats or getKingAttacks(enemyKingSq)
+
+  # 3. Knight threats
+  var enemyKnights = b.byPiece[offset + Knight.ord]
+  for sq in enemyKnights:
+    b.threats = b.threats or getKnightAttacks(sq)
+
+  # 4. Rook / Queen threats (HV)
+  var enemyRooksAndQueens = enemyRooks or enemyQueens
+  for sq in enemyRooksAndQueens:
+    b.threats = b.threats or getRookAttacks(sq, occNoKing)
+
+  # 5. Bishop / Queen threats (diagonal)
+  var enemyBishopsAndQueens = enemyBishops or enemyQueens
+  for sq in enemyBishopsAndQueens:
+    b.threats = b.threats or getBishopAttacks(sq, occNoKing)
+
+func pinRayOf*(b: Board, sq: Square): Bitboard {.inline.} =
+  if b.pinHV.hasSq(sq):  return b.pinHV
+  if b.pinD12.hasSq(sq): return b.pinD12
+  return AllSquares
+
+
+proc parseFen*(fen: string): Board =
+  for i in 0..63:
+    result.mailbox[i] = NoPiece
   
-  var parts = fen.split(' ')
+  let parts = fen.split(' ')
   
   # 1. Piece placement
-  var rank = 7
-  var file = 0
-  for char in parts[0]:
-    if char == '/':
-      rank -= 1
-      file = 0
-    elif char.isDigit:
-      file += char.ord - '0'.ord
-    else:
-      var pieceType = NoPieceType
-      var color = NoColor
-      
-      case char
-      of 'P': (pieceType, color) = (Pawn, White)
-      of 'N': (pieceType, color) = (Knight, White)
-      of 'B': (pieceType, color) = (Bishop, White)
-      of 'R': (pieceType, color) = (Rook, White)
-      of 'Q': (pieceType, color) = (Queen, White)
-      of 'K': (pieceType, color) = (King, White)
-      of 'p': (pieceType, color) = (Pawn, Black)
-      of 'n': (pieceType, color) = (Knight, Black)
-      of 'b': (pieceType, color) = (Bishop, Black)
-      of 'r': (pieceType, color) = (Rook, Black)
-      of 'q': (pieceType, color) = (Queen, Black)
-      of 'k': (pieceType, color) = (King, Black)
-      else: discard
-      
-      if pieceType != NoPieceType:
-        let piece = makePiece(color, pieceType)
-        let sq = squareFromCoords(rank, file)
-        board.pieceBB[piece].setBit(sq)
-        board.pieces[sq] = piece
-        file += 1
-
-
-  board.updateOccupancies()
-
-  # 2. Side to move
+  if parts.len > 0:
+    var rank = 7
+    var file = 0
+    for c in parts[0]:
+      if c == '/':
+        dec rank
+        file = 0
+      elif c in '1'..'8':
+        file += ord(c) - ord('0')
+      else:
+        let piece = case c
+          of 'P': WhitePawn
+          of 'N': WhiteKnight
+          of 'B': WhiteBishop
+          of 'R': WhiteRook
+          of 'Q': WhiteQueen
+          of 'K': WhiteKing
+          of 'p': BlackPawn
+          of 'n': BlackKnight
+          of 'b': BlackBishop
+          of 'r': BlackRook
+          of 'q': BlackQueen
+          of 'k': BlackKing
+          else: NoPiece
+        if piece != NoPiece:
+          let sq = makeSquare(rank, file)
+          result.mailbox[sq.int] = piece
+          inc file
+          
+  # 2. Active color
   if parts.len > 1:
-    board.sideToMove = if parts[1] == "w": White else: Black
-
-  # 3. Castling rights
-  if parts.len > 2:
-    for char in parts[2]:
-      case char
-      of 'K': board.castlingRights = board.castlingRights or WhiteKingSide
-      of 'Q': board.castlingRights = board.castlingRights or WhiteQueenSide
-      of 'k': board.castlingRights = board.castlingRights or BlackKingSide
-      of 'q': board.castlingRights = board.castlingRights or BlackQueenSide
+    if parts[1] == "w":
+      result.stm = White
+    elif parts[1] == "b":
+      result.stm = Black
+  else:
+    result.stm = White
+    
+  # 3. Castling availability
+  var castlingVal = 0'u8
+  if parts.len > 2 and parts[2] != "-":
+    for c in parts[2]:
+      case c
+      of 'K': castlingVal = castlingVal or 1'u8
+      of 'Q': castlingVal = castlingVal or 2'u8
+      of 'k': castlingVal = castlingVal or 4'u8
+      of 'q': castlingVal = castlingVal or 8'u8
       else: discard
-
-  # 4. En passant
-  if parts.len > 3 and parts[3] != "-":
-    board.enPassantSquare = algebraicToSquare(parts[3]).int
-
+  result.castling = CastlingRights(castlingVal)
+  
+  # 4. En passant target square
+  if parts.len > 3:
+    result.epSquare = parseSquare(parts[3])
+  else:
+    result.epSquare = NoSquare
+    
   # 5. Halfmove clock
   if parts.len > 4:
     try:
-      board.halfMoveClock = parseInt(parts[4])
+      result.halfmove = uint8(parseInt(parts[4]))
     except ValueError:
-      board.halfMoveClock = 0
-
+      result.halfmove = 0
+  else:
+    result.halfmove = 0
+    
   # 6. Fullmove number
   if parts.len > 5:
     try:
-      board.fullMoveNumber = parseInt(parts[5])
+      result.fullmove = uint16(parseInt(parts[5]))
     except ValueError:
-      board.fullMoveNumber = 1
+      result.fullmove = 1
+  else:
+    result.fullmove = 1
+    
+  # Compute occupied, byColor, and hash from scratch
+  for i in 0..11:
+    result.byPiece[i] = Bitboard(0)
+  result.byColor[0] = Bitboard(0)
+  result.byColor[1] = Bitboard(0)
+  result.occupied = Bitboard(0)
+  result.hash = ZobristKey(0)
+  
+  for sq in 0..63:
+    let p = result.mailbox[sq]
+    if p != NoPiece:
+      let sqBit = bit(Square(sq))
+      result.byPiece[p.ord] = result.byPiece[p.ord] or sqBit
+      result.byColor[p.color.ord] = result.byColor[p.color.ord] or sqBit
+      result.occupied = result.occupied or sqBit
+      result.hash = result.hash xor pieceKeys[p.ord][sq]
+      
+  if result.stm == Black:
+    result.hash = result.hash xor sideKey
+    
+  result.hash = result.hash xor castlingKeys[system.int(cast[uint8](result.castling))]
+  
+  if result.epSquare != NoSquare:
+    result.hash = result.hash xor epKeys[result.epSquare.file]
+    
+  updateAttackState(result)
 
-  # Calculate gamePly from fullMoveNumber and sideToMove
-  board.gamePly = (board.fullMoveNumber - 1) * 2 + (if board.sideToMove == Black: 1 else: 0)
+const StartPos* = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-  board.currentZobristKey = board.generateZobristKey()
-
-proc initializeBoard*(fen: string = DefaultFen): Board =
-  result.parseFen(fen)
-
-proc printBoard*(board: Board) =
-  echo "  +---+---+---+---+---+---+---+---+"
-  for r in countdown(7, 0):
-    stdout.write(rankToChar(r))
-    stdout.write(" |")
-    for f in 0..7:
-      let sq = squareFromCoords(r, f)
-      var pieceChar = ' '
-      for p in Piece:
-        if p == NoPiece: continue
-        if board.pieceBB[p].getBit(sq):
-          pieceChar = case p
+func toFen*(b: Board): string =
+  var placement = ""
+  for rank in countdown(7, 0):
+    var emptyCount = 0
+    for file in 0..7:
+      let sq = makeSquare(rank, file)
+      let p = b.mailbox[sq.int]
+      if p == NoPiece:
+        inc emptyCount
+      else:
+        if emptyCount > 0:
+          placement.add($emptyCount)
+          emptyCount = 0
+        let c = case p
           of WhitePawn: 'P'
           of WhiteKnight: 'N'
           of WhiteBishop: 'B'
@@ -194,451 +331,296 @@ proc printBoard*(board: Board) =
           of BlackQueen: 'q'
           of BlackKing: 'k'
           else: ' '
-          break
-      stdout.write(" " & pieceChar & " |")
-    echo "\n  +---+---+---+---+---+---+---+---+"
-  echo "    a   b   c   d   e   f   g   h"
-  echo "Side to move: ", if board.sideToMove == White: "White" else: "Black"
-  echo "Castling: ", board.castlingRights
-  echo "En Passant: ", if board.enPassantSquare != NoSquare: $board.enPassantSquare.Square else: "-"
-  echo "Key: ", board.currentZobristKey.toHex
-
-proc isSquareAttacked*(board: Board, sq: Square, attacker: Color): bool {.gcsafe.} =
-  # Pawns
-  let defender = if attacker == White: Black else: White
-  if (pawnAttacks[defender][sq] and board.pieceBB[makePiece(attacker, Pawn)]) != 0: return true
+        placement.add(c)
+    if emptyCount > 0:
+      placement.add($emptyCount)
+    if rank > 0:
+      placement.add("/")
+      
+  result.add(placement)
+  result.add(" ")
+  result.add(if b.stm == White: "w" else: "b")
+  result.add(" ")
   
-  # Knights
-  if (knightAttacks[sq] and board.pieceBB[makePiece(attacker, Knight)]) != 0: return true
-  
-  # King
-  if (kingAttacks[sq] and board.pieceBB[makePiece(attacker, King)]) != 0: return true
-  
-  # Sliding Pieces (Rooks, Queens)
-  let rookQueens = board.pieceBB[makePiece(attacker, Rook)] or board.pieceBB[makePiece(attacker, Queen)]
-  if (getRookAttacks(sq, board.allPiecesBB) and rookQueens) != 0: return true
-  
-  # Sliding Pieces (Bishops, Queens)
-  let bishopQueens = board.pieceBB[makePiece(attacker, Bishop)] or board.pieceBB[makePiece(attacker, Queen)]
-  if (getBishopAttacks(sq, board.allPiecesBB) and bishopQueens) != 0: return true
-  
-proc hasSufficientMaterial*(board: Board, color: Color): bool =
-  let nonPawn = board.pieceBB[makePiece(color, Knight)] or
-                board.pieceBB[makePiece(color, Bishop)] or
-                board.pieceBB[makePiece(color, Rook)] or
-                board.pieceBB[makePiece(color, Queen)]
-  return nonPawn != 0
-
-proc isInsufficientMaterial*(board: Board): bool =
-  # If there are any pawns, rooks, or queens, it's not insufficient material
-  if (board.pieceBB[WhitePawn] or board.pieceBB[BlackPawn] or
-      board.pieceBB[WhiteRook] or board.pieceBB[BlackRook] or
-      board.pieceBB[WhiteQueen] or board.pieceBB[BlackQueen]) != 0:
-    return false
-
-  # Count minors
-  let whiteKnights = countSetBits(board.pieceBB[WhiteKnight])
-  let blackKnights = countSetBits(board.pieceBB[BlackKnight])
-  let whiteBishops = countSetBits(board.pieceBB[WhiteBishop])
-  let blackBishops = countSetBits(board.pieceBB[BlackBishop])
-  
-  let whiteMinors = whiteKnights + whiteBishops
-  let blackMinors = blackKnights + blackBishops
-  let totalMinors = whiteMinors + blackMinors
-
-  # K vs K
-  if totalMinors == 0: return true
-  
-  # K+N vs K or K+B vs K (one minor total)
-  if totalMinors == 1: return true
-  
-  # KB vs KB (same color bishops)
-  if totalMinors == 2 and whiteBishops == 1 and blackBishops == 1:
-    let wbSq = bitScanForward(board.pieceBB[WhiteBishop])
-    let bbSq = bitScanForward(board.pieceBB[BlackBishop])
-    let wbColor = (rankOf(wbSq.Square) + fileOf(wbSq.Square)) mod 2
-    let bbColor = (rankOf(bbSq.Square) + fileOf(bbSq.Square)) mod 2
-    if wbColor == bbColor: return true
+  var castlingStr = ""
+  if b.castling.hasWK: castlingStr.add('K')
+  if b.castling.hasWQ: castlingStr.add('Q')
+  if b.castling.hasBK: castlingStr.add('k')
+  if b.castling.hasBQ: castlingStr.add('q')
+  if castlingStr == "":
+    result.add("-")
+  else:
+    result.add(castlingStr)
     
+  result.add(" ")
+  
+  if b.epSquare == NoSquare:
+    result.add("-")
+  else:
+    result.add(toAlgebraic(b.epSquare))
+    
+  result.add(" ")
+  result.add($b.halfmove)
+  result.add(" ")
+  result.add($b.fullmove)
+
+proc makeMove*(b: var Board, m: Move) =
+  doAssert b.histLen < 1024
+  
+  let fromSq = m.fromSq
+  let toSq = m.toSq
+  let movingPiece = b.mailbox[fromSq.int]
+  
+  # Determine captured piece
+  var captured = NoPiece
+  if m.isEnPassant:
+    captured = if b.stm == White: BlackPawn else: WhitePawn
+  else:
+    captured = b.mailbox[toSq.int]
+    
+  # Save to history
+  b.history[b.histLen] = UndoInfo(
+    hash: b.hash,
+    castling: b.castling,
+    epSquare: b.epSquare,
+    halfmove: b.halfmove,
+    captured: captured,
+    checkers: b.checkers,
+    pinHV: b.pinHV,
+    pinD12: b.pinD12,
+    threats: b.threats
+  )
+  inc b.histLen
+  
+  # XOR out old castling and EP contributions from hash
+  b.hash = b.hash xor castlingKeys[system.int(cast[uint8](b.castling))]
+  if b.epSquare != NoSquare:
+    b.hash = b.hash xor epKeys[b.epSquare.file]
+    
+  # Reverse piece movements / place pieces
+  if m.isPromotion:
+    let pt = case m.promoType
+      of PromoKnight: PieceType.Knight
+      of PromoBishop: PieceType.Bishop
+      of PromoRook: PieceType.Rook
+      of PromoQueen: PieceType.Queen
+    b.removePiece(fromSq)
+    if captured != NoPiece:
+      b.removePiece(toSq)
+    b.putPiece(makePiece(b.stm, pt), toSq)
+    
+  elif m.isCastling:
+    b.movePiece(fromSq, toSq)
+    if toSq == G1: b.movePiece(H1, F1)
+    elif toSq == C1: b.movePiece(A1, D1)
+    elif toSq == G8: b.movePiece(H8, F8)
+    elif toSq == C8: b.movePiece(A8, D8)
+    
+  elif m.isEnPassant:
+    let capSq = toSq + (if b.stm == White: -8 else: 8)
+    b.removePiece(capSq)
+    b.movePiece(fromSq, toSq)
+    
+  else:
+    if captured != NoPiece:
+      b.removePiece(toSq)
+    b.movePiece(fromSq, toSq)
+    
+  # Update Castling Rights
+  if fromSq == E1:
+    b.castling = b.castling.revokeWK().revokeWQ()
+  elif fromSq == E8:
+    b.castling = b.castling.revokeBK().revokeBQ()
+    
+  if fromSq == H1 or toSq == H1:
+    b.castling = b.castling.revokeWK()
+  if fromSq == A1 or toSq == A1:
+    b.castling = b.castling.revokeWQ()
+  if fromSq == H8 or toSq == H8:
+    b.castling = b.castling.revokeBK()
+  if fromSq == A8 or toSq == A8:
+    b.castling = b.castling.revokeBQ()
+    
+  # Update EP target square
+  b.epSquare = NoSquare
+  if movingPiece == WhitePawn and rank(fromSq) == 1 and rank(toSq) == 3:
+    b.epSquare = makeSquare(2, file(fromSq))
+  elif movingPiece == BlackPawn and rank(fromSq) == 6 and rank(toSq) == 4:
+    b.epSquare = makeSquare(5, file(fromSq))
+    
+  # Update halfmove clock
+  if movingPiece == WhitePawn or movingPiece == BlackPawn or captured != NoPiece:
+    b.halfmove = 0
+  else:
+    inc b.halfmove
+    
+  # Update STM, gamePly, fullmove
+  if b.stm == Black:
+    inc b.fullmove
+  b.stm = b.stm.opposite()
+  inc b.gamePly
+  
+  # XOR in new castling, EP, and side keys
+  b.hash = b.hash xor castlingKeys[system.int(cast[uint8](b.castling))]
+  if b.epSquare != NoSquare:
+    b.hash = b.hash xor epKeys[b.epSquare.file]
+  b.hash = b.hash xor sideKey
+  
+  # Call updateAttackState
+  updateAttackState(b)
+
+proc unmakeMove*(b: var Board, m: Move) =
+  dec b.histLen
+  let undo = b.history[b.histLen]
+  
+  let fromSq = m.fromSq
+  let toSq = m.toSq
+  
+  # Restore STM, gamePly, fullmove
+  b.stm = b.stm.opposite()
+  if b.stm == Black:
+    dec b.fullmove
+  dec b.gamePly
+  
+  # Reverse piece movements
+  if m.isPromotion:
+    b.removePiece(toSq)
+    b.putPiece(makePiece(b.stm, Pawn), fromSq)
+    if undo.captured != NoPiece:
+      b.putPiece(undo.captured, toSq)
+      
+  elif m.isCastling:
+    b.movePiece(toSq, fromSq)
+    if toSq == G1: b.movePiece(F1, H1)
+    elif toSq == C1: b.movePiece(D1, A1)
+    elif toSq == G8: b.movePiece(F8, H8)
+    elif toSq == C8: b.movePiece(D8, A8)
+    
+  elif m.isEnPassant:
+    b.movePiece(toSq, fromSq)
+    let capSq = toSq + (if b.stm == White: -8 else: 8)
+    b.putPiece(undo.captured, capSq)
+    
+  else:
+    b.movePiece(toSq, fromSq)
+    if undo.captured != NoPiece:
+      b.putPiece(undo.captured, toSq)
+      
+  # Restore remaining fields
+  b.castling = undo.castling
+  b.epSquare = undo.epSquare
+  b.halfmove = undo.halfmove
+  b.hash = undo.hash
+  b.checkers = undo.checkers
+  b.pinHV = undo.pinHV
+  b.pinD12 = undo.pinD12
+  b.threats = undo.threats
+
+proc makeNullMove*(b: var Board) =
+  doAssert b.histLen < 1024
+  
+  # Save to history
+  b.history[b.histLen] = UndoInfo(
+    hash: b.hash,
+    castling: b.castling,
+    epSquare: b.epSquare,
+    halfmove: b.halfmove,
+    captured: NoPiece,
+    checkers: b.checkers,
+    pinHV: b.pinHV,
+    pinD12: b.pinD12,
+    threats: b.threats
+  )
+  inc b.histLen
+  
+  if b.epSquare != NoSquare:
+    b.hash = b.hash xor epKeys[b.epSquare.file]
+    
+  # Clear EP square
+  b.epSquare = NoSquare
+  
+  # Increment halfmove clock
+  inc b.halfmove
+  
+  # Update STM, gamePly, fullmove
+  if b.stm == Black:
+    inc b.fullmove
+  b.stm = b.stm.opposite()
+  inc b.gamePly
+
+  b.hash = b.hash xor sideKey
+
+  updateAttackState(b)
+
+proc unmakeNullMove*(b: var Board) =
+  dec b.histLen
+  let undo = b.history[b.histLen]
+  
+  # Restore simple fields
+  b.castling = undo.castling
+  b.epSquare = undo.epSquare
+  b.halfmove = undo.halfmove
+  b.hash = undo.hash
+  b.checkers = undo.checkers
+  b.pinHV = undo.pinHV
+  b.pinD12 = undo.pinD12
+  b.threats = undo.threats
+  
+  # Restore STM, gamePly, fullmove
+  b.stm = b.stm.opposite()
+  if b.stm == Black:
+    dec b.fullmove
+  dec b.gamePly
+
+func isRepetition*(b: Board, plyFromRoot: int): bool =
+  let limit = max(0, b.histLen - system.int(b.halfmove))
+  let rootIdx = b.histLen - plyFromRoot
+  var count = 0
+  var i = b.histLen - 2
+  while i >= limit:
+    if b.history[i].hash == b.hash:
+      inc count
+      if i < rootIdx:
+        if count >= 1:
+          return true
+      else:
+        if count >= 2:
+          return true
+    dec(i, 2)
   return false
 
-proc isRepetition*(board: Board): bool =
-  
-  if board.halfMoveClock < 4: return false
-  
-  let currentKey = board.currentZobristKey
-  let startIdx = board.historyLen - 2
-  let endIdx = max(board.historyLen - board.halfMoveClock, 0)
-  
-  var i = startIdx
-  while i >= endIdx and i >= 0:
-    if board.history[i].zobristKey == currentKey:
-      return true
-    i -= 2
-    
+func isFiftyMove*(b: Board): bool {.inline.} =
+  b.halfmove >= 100
+
+func isInsufficientMaterial*(b: Board): bool =
+  # No pawns, rooks, or queens anywhere
+  if not (b.pieces(WhitePawn) or b.pieces(BlackPawn) or 
+          b.pieces(WhiteRook) or b.pieces(BlackRook) or 
+          b.pieces(WhiteQueen) or b.pieces(BlackQueen)).isEmpty:
+    return false
+
+  let wk = b.pieces(WhiteKnight).popcount()
+  let bk = b.pieces(BlackKnight).popcount()
+  let wb = b.pieces(WhiteBishop).popcount()
+  let bb = b.pieces(BlackBishop).popcount()
+  let totalMinors = wk + bk + wb + bb
+
+  if totalMinors == 0:
+    return true # KvK
+  elif totalMinors == 1:
+    return true # KNvK or KBvK
+  elif totalMinors == 2:
+    # KBvKB same-color bishops
+    if wb == 1 and bb == 1:
+      let wSq = b.pieces(WhiteBishop).lsb()
+      let bSq = b.pieces(BlackBishop).lsb()
+      if ((wSq.rank + wSq.file) and 1) == ((bSq.rank + bSq.file) and 1):
+        return true
   return false
 
-proc makeNullMove*(board: var Board) =
-  let state = GameState(
-    castlingRights: board.castlingRights,
-    enPassantSquare: board.enPassantSquare,
-    halfMoveClock: board.halfMoveClock,
-    zobristKey: board.currentZobristKey,
-    capturedPiece: NoPiece
-  )
-  board.history[board.historyLen] = state
-  inc board.historyLen
+func isDraw*(b: Board, plyFromRoot: int): bool {.inline.} =
+  b.isFiftyMove() or b.isInsufficientMaterial() or b.isRepetition(plyFromRoot)
 
-  var key = board.currentZobristKey
-
-  # XOR out the old en passant contribution if one existed
-  if board.enPassantSquare != NoSquare:
-    key = key xor zobristEnPassant[fileOf(board.enPassantSquare.Square)]
-
-  board.enPassantSquare = NoSquare
-  board.sideToMove = if board.sideToMove == White: Black else: White
-
-  # Flip side-to-move in the key
-  key = key xor zobristSideToMove
-
-  board.currentZobristKey = key
-
-proc unmakeNullMove*(board: var Board) =
-  dec board.historyLen
-  let state = board.history[board.historyLen]
-  board.castlingRights = state.castlingRights
-  board.enPassantSquare = state.enPassantSquare
-  board.halfMoveClock = state.halfMoveClock
-  board.currentZobristKey = state.zobristKey
-  board.sideToMove = if board.sideToMove == White: Black else: White
-
-proc unmakeMove*(board: var Board, move: Move) =
-  dec board.historyLen
-  let state = board.history[board.historyLen]
-  board.castlingRights = state.castlingRights
-  board.enPassantSquare = state.enPassantSquare
-  board.halfMoveClock = state.halfMoveClock
-  board.currentZobristKey = state.zobristKey
-  
-  let us = if board.sideToMove == White: Black else: White 
-  let them = board.sideToMove 
-  
-  board.sideToMove = us
-  if us == Black: dec(board.fullMoveNumber)
-  dec(board.gamePly)
-  
-  let fromSq = move.fromSquare
-  let toSq = move.toSquare
-  let isCap = move.isCapture
-  let isPromo = move.isPromotion
-  let capturedPiece = state.capturedPiece
-  
-  var movingPiece = NoPiece
-  if isPromo:
-    movingPiece = makePiece(us, Pawn)
-    let promoPiece = makePiece(us, move.promotion)
-    board.pieceBB[promoPiece].clearBit(toSq)
-    board.pieces[toSq] = NoPiece
-  else:
-    movingPiece = board.pieces[toSq]
-    board.pieceBB[movingPiece].clearBit(toSq)
-    board.pieces[toSq] = NoPiece
-    
-  board.pieceBB[movingPiece].setBit(fromSq)
-  board.pieces[fromSq] = movingPiece
-  
-  # Restore Captured Piece
-  if isCap:
-    if move.isEnPassant:
-      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-      board.pieceBB[capturedPiece].setBit(capSq)
-      board.pieces[capSq] = capturedPiece
-    else:
-      board.pieceBB[capturedPiece].setBit(toSq)
-      board.pieces[toSq] = capturedPiece
-      
-  # Restore Castling Rook
-  if move.isCastle:
-    let flags = move.flags
-    if us == White:
-      if flags == KingCastle.int:
-        board.pieceBB[WhiteRook].clearBit(squareFromCoords(0, 5)) # f1
-        board.pieces[squareFromCoords(0, 5)] = NoPiece
-        board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 7))   # h1
-        board.pieces[squareFromCoords(0, 7)] = WhiteRook
-        
-        # Incremental Update: Move Rook in occupiedBB and allPiecesBB
-        board.occupiedBB[White].clearBit(squareFromCoords(0, 5))
-        board.occupiedBB[White].setBit(squareFromCoords(0, 7))
-        board.allPiecesBB.clearBit(squareFromCoords(0, 5))
-        board.allPiecesBB.setBit(squareFromCoords(0, 7))
-
-      elif flags == QueenCastle.int:
-        board.pieceBB[WhiteRook].clearBit(squareFromCoords(0, 3)) # d1
-        board.pieces[squareFromCoords(0, 3)] = NoPiece
-        board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 0))   # a1
-        board.pieces[squareFromCoords(0, 0)] = WhiteRook
-        
-        # Incremental Update
-        board.occupiedBB[White].clearBit(squareFromCoords(0, 3))
-        board.occupiedBB[White].setBit(squareFromCoords(0, 0))
-        board.allPiecesBB.clearBit(squareFromCoords(0, 3))
-        board.allPiecesBB.setBit(squareFromCoords(0, 0))
-
-    else:
-      if flags == KingCastle.int:
-        board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 5)) # f8
-        board.pieces[squareFromCoords(7, 5)] = NoPiece
-        board.pieceBB[BlackRook].setBit(squareFromCoords(7, 7))   # h8
-        board.pieces[squareFromCoords(7, 7)] = BlackRook
-
-        # Incremental Update
-        board.occupiedBB[Black].clearBit(squareFromCoords(7, 5))
-        board.occupiedBB[Black].setBit(squareFromCoords(7, 7))
-        board.allPiecesBB.clearBit(squareFromCoords(7, 5))
-        board.allPiecesBB.setBit(squareFromCoords(7, 7))
-
-      elif flags == QueenCastle.int:
-        board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 3)) # d8
-        board.pieces[squareFromCoords(7, 3)] = NoPiece
-        board.pieceBB[BlackRook].setBit(squareFromCoords(7, 0))   # a8
-        board.pieces[squareFromCoords(7, 0)] = BlackRook
-
-        # Incremental Update
-        board.occupiedBB[Black].clearBit(squareFromCoords(7, 3))
-        board.occupiedBB[Black].setBit(squareFromCoords(7, 0))
-        board.allPiecesBB.clearBit(squareFromCoords(7, 3))
-        board.allPiecesBB.setBit(squareFromCoords(7, 0))
-
-  
-  if isPromo:
-    board.occupiedBB[us].clearBit(toSq)
-    board.occupiedBB[us].setBit(fromSq)
-    board.allPiecesBB.clearBit(toSq)
-    board.allPiecesBB.setBit(fromSq)
-  else:
-    board.occupiedBB[us].clearBit(toSq)
-    board.occupiedBB[us].setBit(fromSq)
-    board.allPiecesBB.clearBit(toSq)
-    board.allPiecesBB.setBit(fromSq)
-    
-  # Restore Captured
-  if isCap:
-    if move.isEnPassant:
-      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-      # Add captured pawn back to them
-      board.occupiedBB[them].setBit(capSq)
-      board.allPiecesBB.setBit(capSq)
-    else:
-      board.occupiedBB[them].setBit(toSq)
-      board.allPiecesBB.setBit(toSq)
-
-proc makeMove*(board: var Board, move: Move): bool =
-  let us = board.sideToMove
-  let them = if us == White: Black else: White
-  let fromSq = move.fromSquare
-  let toSq = move.toSquare
-  let flags = move.flags
-  let isCap = move.isCapture
-  let isPromo = move.isPromotion
-  
-  # Identify moving piece
-  let movingPiece = board.pieces[fromSq]
-  
-  # Identify captured piece
-  var capturedPiece = NoPiece
-  if isCap:
-    if move.isEnPassant:
-      capturedPiece = makePiece(them, Pawn)
-    else:
-      capturedPiece = board.pieces[toSq]
-
-  # Save state
-  let state = GameState(
-    castlingRights: board.castlingRights,
-    enPassantSquare: board.enPassantSquare,
-    halfMoveClock: board.halfMoveClock,
-    zobristKey: board.currentZobristKey,
-    capturedPiece: capturedPiece
-  )
-  board.history[board.historyLen] = state
-  inc board.historyLen
-  
-  # Incremental Zobrist Update
-  var key = board.currentZobristKey
-  
-  # Remove moving piece from source
-  key = key xor zobristTable[movingPiece][fromSq]
-  board.pieceBB[movingPiece].clearBit(fromSq)
-  board.pieces[fromSq] = NoPiece
-  
-  # Handle Captures
-  if isCap:
-    if move.isEnPassant:
-      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-      key = key xor zobristTable[capturedPiece][capSq]
-      board.pieceBB[capturedPiece].clearBit(capSq)
-      board.pieces[capSq] = NoPiece
-    else:
-      key = key xor zobristTable[capturedPiece][toSq]
-      board.pieceBB[capturedPiece].clearBit(toSq)
-      # pieces[toSq] will be overwritten by moving piece later
-      
-  # INCREMENTAL UPDATES
-  
-  # 1. Moving Piece: Remove from Source
-  board.occupiedBB[us].clearBit(fromSq)
-  board.allPiecesBB.clearBit(fromSq)
-  
-  # 2. Handle Captures: Remove from Them
-  if isCap:
-    if move.isEnPassant:
-      let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-      board.occupiedBB[them].clearBit(capSq)
-      board.allPiecesBB.clearBit(capSq)
-    else:
-      board.occupiedBB[them].clearBit(toSq)
-      board.allPiecesBB.clearBit(toSq)
-      
-      # Update Castling Rights if Rook captured
-      if capturedPiece == makePiece(them, Rook):
-        if toSq == squareFromCoords(0, 0): board.castlingRights = board.castlingRights and not WhiteQueenSide
-        elif toSq == squareFromCoords(0, 7): board.castlingRights = board.castlingRights and not WhiteKingSide
-        elif toSq == squareFromCoords(7, 0): board.castlingRights = board.castlingRights and not BlackQueenSide
-        elif toSq == squareFromCoords(7, 7): board.castlingRights = board.castlingRights and not BlackKingSide
-
-  # 3. Place moving piece at destination (Pawn or Promo)
-  if isPromo:
-    let promoPiece = makePiece(us, move.promotion)
-    key = key xor zobristTable[promoPiece][toSq]
-    board.pieceBB[promoPiece].setBit(toSq)
-    board.pieces[toSq] = promoPiece
-  else:
-    key = key xor zobristTable[movingPiece][toSq]
-    board.pieceBB[movingPiece].setBit(toSq)
-    board.pieces[toSq] = movingPiece
-
-  board.occupiedBB[us].setBit(toSq)
-  board.allPiecesBB.setBit(toSq)
-
-  if move.isCastle:
-    if us == White:
-      if flags == KingCastle.int: # O-O
-        # Move Rook from h1 to f1
-        key = key xor zobristTable[WhiteRook][squareFromCoords(0, 7)]
-        key = key xor zobristTable[WhiteRook][squareFromCoords(0, 5)]
-        board.pieceBB[WhiteRook].clearBit(squareFromCoords(0, 7))
-        board.pieces[squareFromCoords(0, 7)] = NoPiece
-        board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 5))
-        board.pieces[squareFromCoords(0, 5)] = WhiteRook
-        
-        # Incremental
-        board.occupiedBB[White].clearBit(squareFromCoords(0, 7))
-        board.occupiedBB[White].setBit(squareFromCoords(0, 5))
-        board.allPiecesBB.clearBit(squareFromCoords(0, 7))
-        board.allPiecesBB.setBit(squareFromCoords(0, 5))
-        
-      elif flags == QueenCastle.int: # O-O-O
-        # Move Rook from a1 to d1
-        key = key xor zobristTable[WhiteRook][squareFromCoords(0, 0)]
-        key = key xor zobristTable[WhiteRook][squareFromCoords(0, 3)]
-        board.pieceBB[WhiteRook].clearBit(squareFromCoords(0, 0))
-        board.pieces[squareFromCoords(0, 0)] = NoPiece
-        board.pieceBB[WhiteRook].setBit(squareFromCoords(0, 3))
-        board.pieces[squareFromCoords(0, 3)] = WhiteRook
-
-        # Incremental
-        board.occupiedBB[White].clearBit(squareFromCoords(0, 0))
-        board.occupiedBB[White].setBit(squareFromCoords(0, 3))
-        board.allPiecesBB.clearBit(squareFromCoords(0, 0))
-        board.allPiecesBB.setBit(squareFromCoords(0, 3))
-
-    else:
-      if flags == KingCastle.int: # O-O
-        # Move Rook from h8 to f8
-        key = key xor zobristTable[BlackRook][squareFromCoords(7, 7)]
-        key = key xor zobristTable[BlackRook][squareFromCoords(7, 5)]
-        board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 7))
-        board.pieces[squareFromCoords(7, 7)] = NoPiece
-        board.pieceBB[BlackRook].setBit(squareFromCoords(7, 5))
-        board.pieces[squareFromCoords(7, 5)] = BlackRook
-
-        # Incremental
-        board.occupiedBB[Black].clearBit(squareFromCoords(7, 7))
-        board.occupiedBB[Black].setBit(squareFromCoords(7, 5))
-        board.allPiecesBB.clearBit(squareFromCoords(7, 7))
-        board.allPiecesBB.setBit(squareFromCoords(7, 5))
-
-      elif flags == QueenCastle.int: # O-O-O
-        # Move Rook from a8 to d8
-        key = key xor zobristTable[BlackRook][squareFromCoords(7, 0)]
-        key = key xor zobristTable[BlackRook][squareFromCoords(7, 3)]
-        board.pieceBB[BlackRook].clearBit(squareFromCoords(7, 0))
-        board.pieces[squareFromCoords(7, 0)] = NoPiece
-        board.pieceBB[BlackRook].setBit(squareFromCoords(7, 3))
-        board.pieces[squareFromCoords(7, 3)] = BlackRook
-
-        # Incremental
-        board.occupiedBB[Black].clearBit(squareFromCoords(7, 0))
-        board.occupiedBB[Black].setBit(squareFromCoords(7, 3))
-        board.allPiecesBB.clearBit(squareFromCoords(7, 0))
-        board.allPiecesBB.setBit(squareFromCoords(7, 3))
-
-  if movingPiece == makePiece(us, King):
-    if us == White:
-      board.castlingRights = board.castlingRights and not (WhiteKingSide or WhiteQueenSide)
-    else:
-      board.castlingRights = board.castlingRights and not (BlackKingSide or BlackQueenSide)
-  elif movingPiece == makePiece(us, Rook):
-    if us == White:
-      if fromSq == squareFromCoords(0, 0): board.castlingRights = board.castlingRights and not WhiteQueenSide
-      elif fromSq == squareFromCoords(0, 7): board.castlingRights = board.castlingRights and not WhiteKingSide
-    else:
-      if fromSq == squareFromCoords(7, 0): board.castlingRights = board.castlingRights and not BlackQueenSide
-      elif fromSq == squareFromCoords(7, 7): board.castlingRights = board.castlingRights and not BlackKingSide
-
-  # Update En Passant
-  if board.enPassantSquare != NoSquare:
-    let file = fileOf(board.enPassantSquare.Square)
-    key = key xor zobristEnPassant[file] # Remove old EP key
-    
-  if flags == DoublePawnPush.int:
-    let up = if us == White: 8 else: -8
-    board.enPassantSquare = fromSq.int + up
-    let file = fileOf(board.enPassantSquare.Square)
-    key = key xor zobristEnPassant[file] # Add new EP key
-  else:
-    board.enPassantSquare = NoSquare
-    
-  # Update HalfMove Clock
-  if pieceType(movingPiece) == Pawn or isCap:
-    board.halfMoveClock = 0
-  else:
-    inc(board.halfMoveClock)
-    
-  # Update FullMove Number
-  if us == Black:
-    inc(board.fullMoveNumber)
-  
-  # Update GamePly
-  inc(board.gamePly)
-    
-  # Update Side to Move
-  board.sideToMove = them
-  key = key xor zobristSideToMove
-  
-  # Update Castling Rights Key
-  key = key xor zobristCastling[state.castlingRights] # Remove old
-  key = key xor zobristCastling[board.castlingRights] # Add new
-  
-  # Update Zobrist Key
-  board.currentZobristKey = key
-
-  let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
-  if board.isSquareAttacked(kingSq.Square, them):
-    board.unmakeMove(move)
-    return false
-    
-  return true
-
-
+func isGameOver*(b: var Board): bool =
+  # stub: for now just check draws. We will fill no legal moves check later.
+  b.isDraw(0)

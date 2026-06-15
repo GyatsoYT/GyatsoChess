@@ -20,10 +20,10 @@ type
 
   NNUEState* = object
     current*: int
-    white*:   array[MaxPly, Accumulator]
-    black*:   array[MaxPly, Accumulator]
-    whiteNeedsRefresh*: array[MaxPly, bool]
-    blackNeedsRefresh*: array[MaxPly, bool]
+    white*:   array[MaxPly + 1, Accumulator]
+    black*:   array[MaxPly + 1, Accumulator]
+    whiteNeedsRefresh*: array[MaxPly + 1, bool]
+    blackNeedsRefresh*: array[MaxPly + 1, bool]
 
   UpdateQueue* = object
     adds*: array[2, int]

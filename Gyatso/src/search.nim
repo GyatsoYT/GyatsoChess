@@ -1,769 +1,334 @@
-import coretypes, board, move, movegen, evaluation, bitboard, tt, std/times,
-    std/monotimes, std/atomics, see, tables, timeman,
-    nnuetypes, nnue, history
+import std/[atomics, monotimes, times]
 
-var historyTable* {.threadvar.}: HistoryTables
-var searchStack* {.threadvar.}: array[MaxPly + 4, StackEntry]
+import coretypes
+import bitboard
+import board
+import movegen
+import evaluate
+import nnuetypes
+import perft
+import tt
+import moveorderer
+import history
+import searchparams
+
 var nnueState* {.threadvar.}: NNUEState
 
-# PV Table Implementation
+const Unknown* = high(int)
 type
-  PVTable = array[MaxPly, array[MaxPly, Move]]
+  SearchStackEntry* = object
+    move*:       Move  
+    staticEval*: int
 
-var pvTable {.threadvar.}: PVTable
-var pvLength {.threadvar.}: array[MaxPly, int]
+  SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
-proc initPV(ply: int) {.inline.} =
-  pvLength[ply] = ply
+type SearchInfo* = object
+  startTime*:  MonoTime
+  allocMs*:    int64
+  depthLimit*: int
+  nodeLimit*:  uint64
+  nodes*:      uint64
+  selDepth*:   int
+  stopFlag*:   ptr Atomic[bool]
+  pvTable*:    array[MaxPly + 1, array[MaxPly + 1, Move]]
+  pvLen*:      array[MaxPly + 1, int]
 
-template updatePV(ply: int, m: Move) =
-  pvTable[ply][ply] = m
-  for i in (ply + 1) ..< pvLength[ply + 1]:
-    pvTable[ply][i] = pvTable[ply + 1][i]
-  pvLength[ply] = pvLength[ply + 1]
+proc shouldStop(info: var SearchInfo): bool {.inline.} =
+  if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+    return true
+  if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
+    if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+    return true
+  if (getMonoTime() - info.startTime).inMilliseconds >= info.allocMs:
+    if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+    return true
+  return false
 
-proc checkTime*(info: var SearchInfo) =
-  if info.nodes mod 2048 == 0:
-    # Sync node count to shared array FIRST
-    if info.nodeCounts != nil:
-      info.nodeCounts[info.threadID] = info.nodes
+const StopCheckFreq = 2047'u64
 
-    # Then check stop flag
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-      return
+proc checkStop(info: var SearchInfo): bool {.inline.} =
+  if (info.nodes and StopCheckFreq) == 0:
+    return shouldStop(info)
+  return false
 
-    # Node limit check
-    if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
-      if info.stopFlag != nil:
-        info.stopFlag[].store(true, moRelaxed)
-      return
+func hasNonPawnKingPiece(b: Board): bool {.inline.} =
+  let us = b.stm
+  let offset = us.ord * 6
+  let nonPawnKing =
+    b.byPiece[offset + Knight.ord] or
+    b.byPiece[offset + Bishop.ord] or
+    b.byPiece[offset + Rook.ord]   or
+    b.byPiece[offset + Queen.ord]
+  not nonPawnKing.isEmpty
 
-    # If pondering, don't check time - search infinitely until ponderhit or stop
-    if info.ponderFlag != nil and info.ponderFlag[].load(moRelaxed):
-      return
+proc qSearch*(b: var Board, alpha, beta, ply: int,
+              info: var SearchInfo,
+              stack: var SearchStack): int =
+  if ply >= MaxPly:
+    return evaluate(b, nnueState)
 
-    let elapsed = getMonoTime() - info.startTime
-    if info.allocatedTime != DurationZero and elapsed > info.allocatedTime:
-      if info.stopFlag != nil:
-        info.stopFlag[].store(true, moRelaxed)
+  inc info.nodes
 
-const
-  Infinity* = 30000
-  Contempt* = 20
-
-proc qSearch*(board: var Board, alpha: int, beta: int, ply: int,
-    info: var SearchInfo): int =
-  info.nodes.inc
-  if info.nodes mod 2048 == 0:
-    checkTime(info)
-  if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
+  if checkStop(info):
     return 0
 
   if ply > info.selDepth:
     info.selDepth = ply
 
-  var alpha = alpha
-  let standPat = evaluate(board, nnueState)
+  let standPat = evaluate(b, nnueState)
 
   if standPat >= beta:
     return beta
 
-  # Delta Pruning
-  const DeltaMargin = 975
-  if standPat < alpha - DeltaMargin:
-    return alpha
+  var curAlpha = max(alpha, standPat)
 
-  if standPat > alpha:
-    alpha = standPat
+  var ml: MoveList
+  generateCaptures(b, ml)
+  sortMoves(b, ml, NullMove, ply)
 
-  var ml {.noinit.}: MoveList
-  ml.count = 0
-  generatePseudoLegalCaptures(board, ml)
+  for idx in 0 ..< ml.len:
+    let m = ml.moves[idx]
+    stack[ply].move = m
+    nnuePush(b, m, nnueState)
+    b.makeMove(m)
+    let score = -qSearch(b, -beta, -curAlpha, ply + 1, info, stack)
+    b.unmakeMove(m)
+    nnuePop(nnueState)
 
-  let phase = getGamePhase(board)
-
-  # Score moves
-  for i in 0 ..< ml.count:
-    ml.scores[i] = scoreMove(board, ml.moves[i], Move(0),
-        searchStack, ply, phase, historyTable)
-
-  for i in 0 ..< ml.count:
-    let m = pickMove(ml, i)
-
-    # SEE Pruning for bad captures
-    if not m.isPromotion and see(board, m, phase) < 0:
-      continue
-
-    pushAccumulator(addr gNetwork, board, m, nnueState)
-    if not board.makeMove(m):
-      popAccumulator(nnueState)
-      continue  # illegal move, skip
-    prefetchTT(board.currentZobristKey)
-    let score = -qSearch(board, -beta, -alpha, ply + 1, info)
-    board.unmakeMove(m)
-    popAccumulator(nnueState)
-
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
+    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
 
     if score >= beta:
       return beta
+    if score > curAlpha:
+      curAlpha = score
 
-    if score > alpha:
-      alpha = score
+  return curAlpha
 
-  return alpha
+proc negamax*(b: var Board, depth, alpha, beta, ply: int,
+              info: var SearchInfo,
+              stack: var SearchStack,
+              skipNullMove: bool = false): int =
+  if ply >= MaxPly:
+    return evaluate(b, nnueState)
 
-proc negamax*(board: var Board, depth: int, alpha: int, beta: int, ply: int,
-    info: var SearchInfo, totalExtensions: int = 0,
-    isPVNode: bool = false): int =
+  inc info.nodes
 
-  initPV(ply)
-  let isPV = isPVNode
-
-  # Clear ply+1 killers at the start of each negamax call
-  if ply + 1 < MaxPly:
-    searchStack[ply + 1].killers[0] = 0
-
-  info.nodes.inc
-  if info.nodes mod 2048 == 0:
-    checkTime(info)
-  if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
+  if checkStop(info):
     return 0
 
-  if ply > info.selDepth:
-    info.selDepth = ply
+  # Clear PV length for this ply — will be populated if we find a best move.
+  info.pvLen[ply] = 0
 
-  var alpha = alpha
-  var beta = beta
-  var depth = depth # Make depth mutable for IIR
+  if ply > 0:
+    if b.isRepetition(ply) or b.isFiftyMove():
+      return 0
 
-  if board.isRepetition() or board.halfMoveClock >= 100 or
-      board.isInsufficientMaterial():
-    return 0
+  # Probe TT
+  var ttMove = NullMove
+  var ttScore = 0
+  var ttDepth = 0
+  var ttBound = 0'u8
+  let hashVal = cast[uint64](b.hash)
+  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound)
 
-  let excluded = Move(searchStack[ply].excluded)
-  let (hit, ttScore, ttMove, _, ttWasPV) = if excluded == Move(0):
-      probeTT(board.currentZobristKey, depth, alpha, beta, board.gamePly)
-    else:
-      (false, 0, Move(0), 0'i16, false)
+  if hasTT and ttDepth >= depth and ply > 0:
+    if ttBound == BoundExact:
+      return ttScore
+    elif ttBound == BoundAlpha and ttScore <= alpha:
+      return alpha
+    elif ttBound == BoundBeta and ttScore >= beta:
+      return beta
 
-  var wasPV = isPV or ttWasPV
-  searchStack[ply].wasPV = wasPV
+  if depth <= 0:
+    return qSearch(b, alpha, beta, ply, info, stack)
 
-  if hit and ply > 1:
-    return ttScore
+  if stack[ply].staticEval == Unknown:
+    stack[ply].staticEval = evaluate(b, nnueState)
+  let staticEval = stack[ply].staticEval
 
-  let (seHit, seEntry) = getTTEntry(board.currentZobristKey)
+  let inCheck = not b.checkers.isEmpty
 
-  # Internal Iterative Reduction (IIR)
-  let us = board.sideToMove
-  let them = if us == White: Black else: White
-  let kingSq = bitScanForward(board.pieceBB[makePiece(us, King)])
-  let inCheck = isSquareAttacked(board, kingSq.Square, them)
+  if depth >= NmpMinDepth and
+     ply   >= NmpMinPly and
+     staticEval != Unknown and
+     staticEval >= beta and
+     (ply == 0 or stack[ply - 1].move != NullMove) and
+     not inCheck and
+     hasNonPawnKingPiece(b) and
+     not skipNullMove:
 
-  if depth >= 4 and not inCheck:
-    let doIIR =
-      if ttMove == Move(0):
-        true
-      elif seHit:
-        int(seEntry.depth) + 4 < depth
+    let R = NmpBaseR + depth div NmpDepthDiv   # 2 + depth/4
+
+    stack[ply].move = NullMove
+    stack[ply + 1].staticEval = Unknown
+    nnuePushNull(nnueState)
+    b.makeNullMove()
+
+    let nullScore = -negamax(b, depth - R - 1, -beta, -beta + 1,
+                             ply + 1, info, stack, skipNullMove = true)
+
+    b.unmakeNullMove()
+    nnuePopNull(nnueState)
+
+    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+      return 0
+
+    if nullScore >= beta:
+      if depth > NmpVerificationDepth:
+        stack[ply + 1].staticEval = Unknown
+        let verScore = negamax(b, depth - R - 1, beta - 1, beta,
+                               ply, info, stack, skipNullMove = true)
+        if verScore < beta:
+          discard
+        else:
+          return beta
       else:
-        false
+        return beta
 
-    if doIIR:
-      depth -= 1
-      if depth <= 0:
-        return qSearch(board, alpha, beta, ply, info)
+  var ml: MoveList
+  generateMoves(b, ml)
 
-  # Mate distance pruning
-  let mateInPly = MateValue - ply
-  if mateInPly < beta:
-    beta = mateInPly
-    if alpha >= mateInPly:
-      return mateInPly
+  if ml.len == 0:
+    return if not b.checkers.isEmpty: -MateValue + ply
+           else: 0
 
-  let matedInPly = -MateValue + ply + 1
-  if matedInPly > alpha:
-    alpha = matedInPly
-    if beta <= matedInPly:
-      return matedInPly
+  sortMoves(b, ml, ttMove, ply)
 
-  if depth == 0:
-    return qSearch(board, alpha, beta, ply, info)
+  var curAlpha = alpha
+  var bestMove = NullMove
 
-  let staticEval = if inCheck: UNKNOWN else: evaluate(board, nnueState)
-  let phase = getGamePhase(board)
-  searchStack[ply].evaluation = staticEval
+  var triedQuiets: array[128, Move]
+  var triedQuietsLen = 0
 
-  # Improving flag and delta (improvement) calculation
-  var improving = false
-  var improvement = 0
-  if not inCheck and staticEval != UNKNOWN:
-    if ply >= 2 and searchStack[ply - 2].evaluation != UNKNOWN:
-      improvement = staticEval - searchStack[ply - 2].evaluation
-      improving = improvement > 0
-    elif ply >= 4 and searchStack[ply - 4].evaluation != UNKNOWN:
-      improvement = staticEval - searchStack[ply - 4].evaluation
-      improving = improvement > 0
-    else:
-      improving = true  # no data, assume improving
+  for idx in 0 ..< ml.len:
+    let m = ml.moves[idx]
+    stack[ply].move = m
+    stack[ply + 1].staticEval = Unknown
+    nnuePush(b, m, nnueState)
+    b.makeMove(m)
+    let score = -negamax(b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+    b.unmakeMove(m)
+    nnuePop(nnueState)
 
-  # Reverse Futility Pruning
-  if depth < 7 and ply > 0 and abs(beta) < MateValue and staticEval != UNKNOWN:
-    let rfpMargin = 100 * depth - clamp(improvement div 2, -80, 80)
-    if staticEval - rfpMargin >= beta:
-      return staticEval
-
-  # Null Move Pruning (only when not in check and eval is known)
-  if depth >= 3 and ply > 0 and staticEval != UNKNOWN and staticEval >= beta and searchStack[ply - 1].move != 0:
-    if not inCheck:
-      var hasNonPawnMaterial = false
-      for pt in Knight .. Queen:
-        if board.pieceBB[makePiece(us, pt)] != 0:
-          hasNonPawnMaterial = true
-          break
-
-      if hasNonPawnMaterial:
-        searchStack[ply].move = 0
-        searchStack[ply].movedPiece = NoPiece
-        pushNullMove(nnueState)
-        board.makeNullMove()
-        # Adaptive Null Move Pruning
-        let R = 2 + (depth div 4)
-        let score = -negamax(board, depth - R - 1, -beta, -beta + 1, ply + 1,
-            info, totalExtensions, isPVNode = false)
-        board.unmakeNullMove()
-        popNullMove(nnueState)
-
-        if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-          return 0
-
-        if score >= beta:
-          return beta
-
-  # ProbCut Pruning
-  if depth >= 5 and ply > 0 and not inCheck and abs(beta) < MateValue:
-    let probCutDepth = depth - 4
-
-    var ttAlpha = beta
-    var ttBeta = beta + 1
-    let (ttHit, ttScore, _, _, _) = probeTT(board.currentZobristKey, probCutDepth,
-        ttAlpha, ttBeta, board.gamePly)
-
-    if not (ttHit and ttScore >= beta):
-      let probBeta = beta + 110 # Empirically tuned margin
-
-      var tacticalMoves {.noinit.}: MoveList
-      tacticalMoves.count = 0
-      generatePseudoLegalCaptures(board, tacticalMoves)
-
-      for i in 0 ..< tacticalMoves.count:
-        tacticalMoves.scores[i] = scoreMove(board, tacticalMoves.moves[i], Move(
-            0), searchStack, ply, phase, historyTable)
-
-      for i in 0 ..< tacticalMoves.count:
-        let m = pickMove(tacticalMoves, i)
-
-        pushAccumulator(addr gNetwork, board, m, nnueState)
-        if not board.makeMove(m):
-          popAccumulator(nnueState)
-          continue
-        let score = -negamax(board, probCutDepth - 1, -probBeta, -probBeta + 1,
-            ply + 1, info, totalExtensions, isPVNode = false)
-        board.unmakeMove(m)
-        popAccumulator(nnueState)
-
-        if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-          return 0
-
-        if score >= probBeta:
-          return beta
-
-  var maxEval = -Infinity
-  var bestMove = Move(0)
-  let originalAlpha = alpha
-
-  # Track quiet moves tried (for history malus on cutoff)
-  var quietsTried: array[MaxMoves, Move]
-  var quietsTriedCount = 0
-
-  var movesSearched = 0
-
-  # Staged move picker
-  let killerMove = if searchStack[ply].killers[0] != 0: Move(searchStack[ply].killers[0]) else: Move(0)
-  var picker = initMovePicker(ttMove, killerMove, phase)
-
-  while true:
-    let m = picker.next(board, historyTable, searchStack, ply)
-    if m == Move(0): break
-
-    if m == excluded:
-      continue
-
-    let isQuiet = not m.isCapture and not m.isPromotion
-
-    # Late Move Pruning (LMP) - skip quiet moves late in the move list at shallow depths
-    if movesSearched > 0 and depth < 7 and not inCheck and not isPV and
-        isQuiet and movesSearched >= LateMovePruning[depth] and
-        staticEval >= alpha - 200:
-      continue
-
-    if movesSearched > 0 and depth < 7 and not inCheck and isQuiet:
-      let margin = 100 * depth
-      if staticEval + margin < alpha:
-        continue
-
-    # SEE Pruning for quiet moves (using StaticPruning table)
-    if movesSearched > 0 and isQuiet and depth < MaxPly:
-      if see(board, m, phase) < StaticPruning[0][depth]:
-        continue
-
-    # SEE Pruning for bad captures (using StaticPruning table)
-    if movesSearched > 0 and m.isCapture and depth < MaxPly:
-      if see(board, m, phase) < StaticPruning[1][depth]:
-        continue
-
-    # Track quiet moves tried (before making the move)
-    if isQuiet:
-      quietsTried[quietsTriedCount] = m
-      quietsTriedCount.inc
-
-    let movingPieceForStack = board.pieces[m.fromSquare]
-    searchStack[ply].move = uint32(m)
-    searchStack[ply].movedPiece = movingPieceForStack
-    pushAccumulator(addr gNetwork, board, m, nnueState)
-    if not board.makeMove(m):
-      popAccumulator(nnueState)
-      # Undo the quiet tracking if move was illegal
-      if isQuiet and quietsTriedCount > 0:
-        quietsTriedCount.dec
-      continue
-
-    prefetchTT(board.currentZobristKey)
-    
-    # Check Extension
-    let opponent = board.sideToMove
-    let opponentIsWhite = opponent == White
-    let weAre = if opponentIsWhite: Black else: White
-    let oppKingSq = bitScanForward(board.pieceBB[makePiece(opponent, King)])
-    let givesCheck = isSquareAttacked(board, oppKingSq.Square, weAre)
-
-    var extension = 0
-
-    # Singular extension - only for TT move with proper conditions
-    if m == ttMove and depth > 6 and excluded == Move(0) and not inCheck:
-      if seHit and seEntry.depth >= (depth - 3).int8 and
-          seEntry.flag == LowerBound and abs(ttScore) < MateValue:
-        let singularBeta = ttScore - 3 * depth div 2
-        let singularDepth = depth div 2 - 1
-        let savedKiller0 = searchStack[ply].killers[0]
-        let savedEval    = searchStack[ply].evaluation
-
-        searchStack[ply].excluded = uint32(m)
-        board.unmakeMove(m) # Unmake to search from current position
-        popAccumulator(nnueState)
-        let singularScore = negamax(board, singularDepth, singularBeta - 1,
-            singularBeta, ply, info, totalExtensions, isPVNode = false)
-        pushAccumulator(addr gNetwork, board, m, nnueState)
-        discard board.makeMove(m) # Remake the move
-        searchStack[ply].excluded = 0
-        searchStack[ply].killers[0]  = savedKiller0
-        searchStack[ply].evaluation  = savedEval
-        searchStack[ply].move        = uint32(m)
-        searchStack[ply].movedPiece  = movingPieceForStack
-
-        if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-          board.unmakeMove(m)
-          popAccumulator(nnueState)
-          return 0
-
-        # Determine extension
-        if singularScore < singularBeta:
-          # Move is singular
-          if singularScore < singularBeta - 50 and not isPV:
-            extension = 2 # Double extension
-          else:
-            extension = 1 # Single extension
-        elif singularBeta >= beta:
-          board.unmakeMove(m)
-          popAccumulator(nnueState)
-          return singularBeta
-
-    # Check extension
-    if extension == 0 and givesCheck:
-      extension = 1
-
-    # Cap total extensions to prevent search explosion
-    if totalExtensions + extension >= 16:
-      extension = 0
-
-    var newDepth = depth - 1 + extension
-    if newDepth < 0: newDepth = 0
-
-    var score = -Infinity
-    if movesSearched == 0:
-      # First move - Full Window
-      score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info,
-          totalExtensions + extension, isPVNode = isPV)
-    else:
-      # Late Move Reductions using pre-computed LMR table
-      var reduction = 0
-      if depth >= 3 and movesSearched >= 1:
-        # Base reduction from table
-        let tableDepth = min(depth, MaxPly - 1)
-        let tableIndex = min(movesSearched, 63)
-        reduction = LMR[tableDepth][tableIndex]
-
-        # Adjust reduction based on move characteristics
-        if m.isCapture or m.isPromotion:
-          reduction = reduction div 2 # Reduce less for tactical moves
-        if givesCheck:
-          reduction = max(0, reduction - 1)
-        if inCheck:
-          reduction = max(0, reduction - 1)
-
-        # History-based LMR adjustment: reduce less for good history, more for bad
-        if isQuiet:
-          let colorIdx = us.ord
-          var histScore = historyTable.mainHistory[colorIdx][historyIndex(m)].int
-          # Add continuation history if available
-          if ply > 0 and searchStack[ply - 1].move != 0:
-            let prevPiece = searchStack[ply - 1].movedPiece
-            if prevPiece != NoPiece:
-              let prevTo = Move(searchStack[ply - 1].move).toSquare.int
-              let currPiece = movingPieceForStack
-              histScore += historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int].int
-          reduction -= histScore div 8192
-
-        # Extra reduction for quiet moves when not improving
-        if isQuiet and not improving:
-          reduction += 1
-
-        # Reduce less if this node was previously on PV but now in null-window
-        if isQuiet and not isPV and wasPV:
-          reduction = max(0, reduction - 1)
-
-        # Ensure reduction is valid
-        reduction = max(0, min(reduction, depth - 1))
-
-      # Null Window Search with reduction
-      score = -negamax(board, newDepth - reduction, -alpha - 1, -alpha, ply + 1,
-          info, totalExtensions + extension, isPVNode = false)
-
-      # Re-search if reduced and score raised alpha
-      if reduction > 0 and score > alpha:
-        score = -negamax(board, newDepth, -alpha - 1, -alpha, ply + 1, info,
-            totalExtensions + extension, isPVNode = false)
-
-      # PVS Re-search with full window
-      if score > alpha and score < beta:
-        score = -negamax(board, newDepth, -beta, -alpha, ply + 1, info,
-            totalExtensions + extension, isPVNode = isPV)
-
-    board.unmakeMove(m)
-    popAccumulator(nnueState)
-    movesSearched.inc
-
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
+    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
 
-    if score > maxEval:
-      maxEval = score
+    if score > curAlpha:
+      curAlpha = score
       bestMove = m
+      info.pvTable[ply][0] = m
+      let childLen = info.pvLen[ply + 1]
+      for k in 0 ..< childLen:
+        info.pvTable[ply][k + 1] = info.pvTable[ply + 1][k]
+      info.pvLen[ply] = childLen + 1
+      if curAlpha >= beta:
+        # Store killer if the cutoff move is quiet (not a capture/promotion)
+        if isQuietMove(b, m):
+          storeKiller(ply, m)
+          let bonus = getBonus(depth)
+          updateHistory(b, m, bonus)
+          for i in 0 ..< triedQuietsLen:
+            if triedQuiets[i] != m:
+              updateHistory(b, triedQuiets[i], -getPenalty(depth))
+        storeTT(hashVal, bestMove, curAlpha.int16, depth.int8, BoundBeta, ply)
+        return beta
 
-    if maxEval > alpha:
-      alpha = maxEval
-      updatePV(ply, m) # Update PV if we improved alpha
+    # Record tried quiet moves that did not cause a cutoff
+    if isQuietMove(b, m):
+      if triedQuietsLen < triedQuiets.len:
+        triedQuiets[triedQuietsLen] = m
+        inc triedQuietsLen
 
-    if alpha >= beta:
-      # Beta Cutoff — update history for quiet best moves
-      if ply > 0 and not m.isCapture and not m.isPromotion:
-        let bonus = min(depth * depth + 2 * depth, 400)
-        let malus = -bonus
-        let colorIdx = us.ord
-        # Bonus for the move that caused cutoff
-        updateHistoryStat(historyTable.mainHistory[colorIdx][historyIndex(m)], bonus)
-        # Malus for all quiets tried before the cutoff move
-        for qi in 0 ..< quietsTriedCount - 1:  # -1 because bestMove is the last quiet added
-          let qm = quietsTried[qi]
-          updateHistoryStat(historyTable.mainHistory[colorIdx][historyIndex(qm)], malus)
-        # 1-ply continuation history bonus/malus
-        if searchStack[ply - 1].movedPiece != NoPiece:
-          let prevPiece = searchStack[ply - 1].movedPiece
-          let prevTo = Move(searchStack[ply - 1].move).toSquare.int
-          let currPiece = board.pieces[m.fromSquare]
-          updateHistoryStat(historyTable.contHistory[prevPiece][prevTo][currPiece][m.toSquare.int], bonus)
-          for qi in 0 ..< quietsTriedCount - 1:
-            let qm = quietsTried[qi]
-            let qPiece = board.pieces[qm.fromSquare]
-            updateHistoryStat(historyTable.contHistory[prevPiece][prevTo][qPiece][qm.toSquare.int], malus)
-        # Update killers
-        searchStack[ply].killers[0] = uint32(m)
+  let bound = if curAlpha > alpha: BoundExact else: BoundAlpha
+  if bestMove != NullMove and isQuietMove(b, bestMove):
+    let bonus = getBonus(depth)
+    updateHistory(b, bestMove, bonus)
+    for i in 0 ..< triedQuietsLen:
+      if triedQuiets[i] != bestMove:
+        updateHistory(b, triedQuiets[i], -getPenalty(depth))
+  storeTT(hashVal, bestMove, curAlpha.int16, depth.int8, bound, ply)
+  return curAlpha
 
-      break
+proc elapsedMs(info: SearchInfo): int64 {.inline.} =
+  (getMonoTime() - info.startTime).inMilliseconds
 
-  # Checkmate / Stalemate detection
-  if movesSearched == 0:
-    if inCheck:
-      return -MateValue + ply
-    else:
-      return 0
+proc printInfo(depth, selDepth, score: int, nodes: uint64,
+               elapsed: int64, info: SearchInfo) =
+  let nps = if elapsed > 0: nodes * 1000 div cast[uint64](elapsed) else: nodes
+  var line = "info depth " & $depth &
+             " seldepth " & $selDepth &
+             " score "
+  if score >= MateThreshold:
+    let mateIn = (MateValue - score + 1) div 2
+    line &= "mate " & $mateIn
+  elif score <= -MateThreshold:
+    let mateIn = -(MateValue + score + 1) div 2
+    line &= "mate " & $mateIn
+  else:
+    line &= "cp " & $score
+  line &= " nodes " & $nodes &
+          " nps " & $nps &
+          " time " & $elapsed &
+          " pv"
+  for i in 0 ..< info.pvLen[0]:
+    line &= " " & moveToAlgebraic(info.pvTable[0][i])
+  echo line
+  stdout.flushFile()
 
-  # TT Store
-  # Clamp score to avoid Infinity leaks
-  var storeScore = maxEval
-  if storeScore >= MateValue: storeScore = MateValue
-  elif storeScore <= -MateValue: storeScore = -MateValue
+proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
+  # Age history table
+  ageHistory()
 
-  storeTT(board, depth, storeScore, originalAlpha, beta, bestMove,
-      rawEval = if staticEval != UNKNOWN: staticEval else: 0,
-      wasPV = isPV or wasPV)
+  # Clear killer table for fresh search
+  for i in 0 .. MaxPly:
+    killerMoves[i][0] = NullMove
+    killerMoves[i][1] = NullMove
 
-  return maxEval
+  refreshNNUE(b, nnueState)
 
-proc iterativeDeepening*(board: var Board, info: var SearchInfo,
-    threadID: int = 0): (Move, int) =
-  info.startTime = getMonoTime()
-  info.startTime = getMonoTime()
-  info.nodes = 0
-  info.selDepth = 0
+  let maxDepth = if info.depthLimit > 0: info.depthLimit else: MaxPly
 
-  # Clear killers in search stack and init evaluations
-  for i in 0 ..< MaxPly + 4:
-    searchStack[i].killers[0] = 0
-    searchStack[i].excluded = 0
-    searchStack[i].excluded = 0
-    searchStack[i].evaluation = UNKNOWN
-    searchStack[i].move = 0
-    searchStack[i].movedPiece = NoPiece
-    searchStack[i].wasPV = false
-
-  searchStack[0].move = 0
-
-  # Init history
-  initHistory(historyTable)
-
-  # Initialize NNUE accumulators from scratch for this position
-  refreshState(addr gNetwork, board, nnueState)
-
-  var bestMove = Move(0)
+  var bestMove  = NullMove
   var bestScore = -Infinity
 
-  var timeManager: TimeManager
-  if threadID == 0 and info.allocatedTime != DurationZero:
-    let movesToGo = if info.movesToGo > 0: min(40, info.movesToGo) else: 30
-    timeManager = initTimeManager(info.allocatedTime, info.allocatedTime,
-        info.increment, movesToGo)
-
-  let maxDepth = if info.depthLimit > 0: info.depthLimit else: 64
+  # Initialise the search stack for a fresh search
+  var stack: SearchStack
+  for i in 0 .. MaxPly + 1:
+    stack[i].move       = NullMove
+    stack[i].staticEval = Unknown
 
   for depth in 1 .. maxDepth:
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
+    info.selDepth = depth
+
+    for k in 0 .. MaxPly:
+      info.pvLen[k] = 0
+
+    stack[0].staticEval = Unknown
+
+    let score = negamax(b, depth, -Infinity, Infinity, 0, info, stack)
+
+    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+      break
+    if shouldStop(info) and depth > 1:
       break
 
-    var rootMoves: MoveList
-    rootMoves.count = 0
-    generateLegalMoves(board, rootMoves)
-    if rootMoves.count == 0:
-      return (bestMove, bestScore)
+    bestScore = score
+    bestMove  = if info.pvLen[0] > 0: info.pvTable[0][0] else: NullMove
 
-    let phase = getGamePhase(board)  # also compute once per depth
+    let elapsed = elapsedMs(info)
+    printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
 
-    # Aspiration Windows
-    var alphaWindow = 20
-    var betaWindow = 20
-    var aspirationScore = bestScore
-
-    var currentBestMove = Move(0)
-    var currentBestScore = -Infinity
-    var aspirationFails = 0 # Track aspiration failures
-    var failHighCount = 0
-    var searchDepth = depth
-
-    # Aspiration window loop
-    while true:
-      var alpha = -Infinity
-      var beta = Infinity
-
-      if depth >= 3:
-        alpha = max(-Infinity, aspirationScore - alphaWindow)
-        beta = min(Infinity, aspirationScore + betaWindow)
-
-      let (hit, ttScore, ttMove, _, _) = probeTT(board.currentZobristKey, depth,
-          alpha, beta, board.gamePly)
-
-      for i in 0 ..< rootMoves.count:
-        rootMoves.scores[i] = scoreMove(board, rootMoves.moves[i], ttMove,
-            searchStack, 0, phase, historyTable)
-
-      # Depth 1 fallback
-      if depth == 1 and rootMoves.count > 0:
-        var bestStaticIdx = 0
-        var bestStaticScore = rootMoves.scores[0]
-        for i in 1 ..< rootMoves.count:
-          if rootMoves.scores[i] > bestStaticScore:
-            bestStaticScore = rootMoves.scores[i]
-            bestStaticIdx = i
-        bestMove = rootMoves.moves[bestStaticIdx]
-
-      currentBestMove = Move(0)
-      currentBestScore = -Infinity
-
-      # Search all moves
-      for i in 0 ..< rootMoves.count:
-        let m = pickMove(rootMoves, i)
-
-        searchStack[0].move = uint32(m)
-        searchStack[0].movedPiece = board.pieces[m.fromSquare]
-        searchStack[1].move = uint32(m)
-        pushAccumulator(addr gNetwork, board, m, nnueState)
-        discard board.makeMove(m)
-
-        var val = -Infinity
-        if i == 0:
-          val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0, isPVNode = true)
-        else:
-          # Null window search
-          val = -negamax(board, searchDepth - 1, -alpha - 1, -alpha, 1, info, 0, isPVNode = false)
-          if val > alpha and val < beta:
-            val = -negamax(board, searchDepth - 1, -beta, -alpha, 1, info, 0, isPVNode = true)
-
-        board.unmakeMove(m)
-        popAccumulator(nnueState)
-
-        if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-          break
-
-        if val > currentBestScore:
-          currentBestScore = val
-          currentBestMove = m
-
-        if currentBestScore > alpha:
-          alpha = currentBestScore
-          # Ensure PV table is updated for the root
-          updatePV(0, m)
-
-        if currentBestScore >= beta:
-          break
-
-      if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-        break
-
-      # Aspiration window logic
-      if depth >= 3:
-        let alphaStart = max(-Infinity, aspirationScore - alphaWindow)
-        let betaStart = min(Infinity, aspirationScore + betaWindow)
-
-        if currentBestScore <= alphaStart:
-          alphaWindow = (alphaWindow * 3) div 2
-          aspirationScore = currentBestScore
-          aspirationFails += 1
-          failHighCount = 0
-          searchDepth = depth
-          if threadID == 0 and info.allocatedTime != DurationZero:
-            timeManager.keepSearching()
-          continue
-        elif currentBestScore >= betaStart:
-          betaWindow = (betaWindow * 3) div 2
-          aspirationScore = currentBestScore
-          aspirationFails += 1
-          inc failHighCount
-          if failHighCount <= 2:
-            searchDepth = depth - failHighCount
-          else:
-            searchDepth = depth  # too many failures, search full depth
-          if threadID == 0 and info.allocatedTime != DurationZero:
-            timeManager.keepSearching()
-          continue
-
-      # Within window or depth < 3
-      searchDepth = depth
-      failHighCount = 0
+    if shouldStop(info):
       break
 
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-      break
-
-    if currentBestMove != Move(0):
-      bestMove = currentBestMove
-      bestScore = currentBestScore
-
-    if threadID == 0 and info.allocatedTime != DurationZero and depth > 4:
-      timeManager.updateStability(bestMove)
-      timeManager.updateScoreOscillation(bestScore)
-
-      if timeManager.shouldStopEarly():
-        if info.stopFlag != nil:
-          info.stopFlag[].store(true, moRelaxed)
-
-    if threadID == 0:
-      if bestMove == Move(0):
-        var ml: MoveList
-        generateLegalMoves(board, ml)
-        if ml.count > 0:
-          bestMove = ml.moves[0]
-
-      var totalNodes = info.nodes
-      if info.nodeCounts != nil:
-        for i in 0 ..< info.numThreads:
-          if i != threadID:
-            totalNodes += info.nodeCounts[i]
-
-      let elapsed = (getMonoTime() - info.startTime).inMilliseconds
-      let nps = if elapsed > 0: (totalNodes.float / (elapsed.float /
-          1000.0)).int else: 0
-
-      if info.stopFlag == nil or not info.stopFlag[].load(moRelaxed):
-        var rootScore = bestScore
-        if rootScore >= MateValue: rootScore = MateValue
-        elif rootScore <= -MateValue: rootScore = -MateValue
-
-        storeTT(board, depth, rootScore, -Infinity, Infinity, bestMove, wasPV = true)
-
-        # Construct PV string from PV table
-        var pvLine = ""
-        for i in 0 ..< pvLength[0]:
-          pvLine.add(pvTable[0][i].toAlgebraic() & " ")
-
-        var scoreStr = ""
-        if abs(bestScore) > 20000 and abs(bestScore) <= MateValue:
-          let safeScore = if bestScore > 0: min(bestScore, MateValue) else: max(
-              bestScore, -MateValue)
-          let mateDistance = (MateValue - abs(safeScore) + 1) div 2
-          if bestScore > 0:
-            scoreStr = "mate " & $mateDistance
-          else:
-            scoreStr = "mate -" & $mateDistance
-        else:
-          scoreStr = "cp " & $bestScore
-
-        echo "info depth ", depth, " seldepth ", info.selDepth, " score ",
-            scoreStr, " nodes ", totalNodes, " nps ", nps, " hashfull ",
-            getHashfull(), " time ", elapsed, " pv ", pvLine
-
-    if info.stopFlag != nil and info.stopFlag[].load(moRelaxed):
-      break
+  if bestMove == NullMove:
+    if info.pvLen[0] > 0 and info.pvTable[0][0] != NullMove:
+      bestMove = info.pvTable[0][0]
+    else:
+      var ml: MoveList
+      generateMoves(b, ml)
+      if ml.len > 0:
+        bestMove = ml.moves[0]
 
   return (bestMove, bestScore)
-
-proc searchNodes*(board: var Board, nodes: int): (Move, int) =
-  ## Standalone node-limited search for datagen.
-  ## Calls iterativeDeepening directly — no threading, no UCI.
-  var stopFlag: Atomic[bool]
-  stopFlag.store(false, moRelaxed)
-
-  var info: SearchInfo
-  info.startTime = getMonoTime()
-  info.allocatedTime = DurationZero
-  info.depthLimit = 0
-  info.nodeLimit = nodes.uint64
-  info.stopFlag = addr stopFlag
-  info.ponderFlag = nil
-  info.nodeCounts = nil
-  info.threadID = 0
-  info.numThreads = 1
-  info.nodes = 0
-  info.selDepth = 0
-
-  return iterativeDeepening(board, info, threadID = -1)
