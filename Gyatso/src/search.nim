@@ -76,9 +76,10 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     info.selDepth = ply
 
   let standPat = evaluate(b, nnueState)
+  var bestScore = standPat
 
   if standPat >= beta:
-    return beta
+    return standPat
 
   var curAlpha = max(alpha, standPat)
 
@@ -98,12 +99,14 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
 
-    if score >= beta:
-      return beta
-    if score > curAlpha:
-      curAlpha = score
+    if score > bestScore:
+      bestScore = score
+      if score >= beta:
+        return bestScore
+      if score > curAlpha:
+        curAlpha = score
 
-  return curAlpha
+  return bestScore
 
 proc negamax*(b: var Board, depth, alpha, beta, ply: int,
               info: var SearchInfo,
@@ -136,9 +139,9 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
     if ttBound == BoundExact:
       return ttScore
     elif ttBound == BoundAlpha and ttScore <= alpha:
-      return alpha
+      return ttScore
     elif ttBound == BoundBeta and ttScore >= beta:
-      return beta
+      return ttScore
 
   if depth <= 0:
     return qSearch(b, alpha, beta, ply, info, stack)
@@ -195,6 +198,7 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
 
   sortMoves(b, ml, ttMove, ply)
 
+  var bestScore = -Infinity
   var curAlpha = alpha
   var bestMove = NullMove
 
@@ -214,25 +218,27 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
 
-    if score > curAlpha:
-      curAlpha = score
-      bestMove = m
-      info.pvTable[ply][0] = m
-      let childLen = info.pvLen[ply + 1]
-      for k in 0 ..< childLen:
-        info.pvTable[ply][k + 1] = info.pvTable[ply + 1][k]
-      info.pvLen[ply] = childLen + 1
-      if curAlpha >= beta:
-        # Store killer if the cutoff move is quiet (not a capture/promotion)
-        if isQuietMove(b, m):
-          storeKiller(ply, m)
-          let bonus = getBonus(depth)
-          updateHistory(b, m, bonus)
-          for i in 0 ..< triedQuietsLen:
-            if triedQuiets[i] != m:
-              updateHistory(b, triedQuiets[i], -getPenalty(depth))
-        storeTT(hashVal, bestMove, curAlpha.int16, depth.int8, BoundBeta, ply)
-        return beta
+    if score > bestScore:
+      bestScore = score
+      if score > curAlpha:
+        curAlpha = score
+        bestMove = m
+        info.pvTable[ply][0] = m
+        let childLen = info.pvLen[ply + 1]
+        for k in 0 ..< childLen:
+          info.pvTable[ply][k + 1] = info.pvTable[ply + 1][k]
+        info.pvLen[ply] = childLen + 1
+        if curAlpha >= beta:
+          # Store killer if the cutoff move is quiet (not a capture/promotion)
+          if isQuietMove(b, m):
+            storeKiller(ply, m)
+            let bonus = getBonus(depth)
+            updateHistory(b, m, bonus)
+            for i in 0 ..< triedQuietsLen:
+              if triedQuiets[i] != m:
+                updateHistory(b, triedQuiets[i], -getPenalty(depth))
+          storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply)
+          return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
     if isQuietMove(b, m):
@@ -240,15 +246,15 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
         triedQuiets[triedQuietsLen] = m
         inc triedQuietsLen
 
-  let bound = if curAlpha > alpha: BoundExact else: BoundAlpha
+  let bound = if bestScore > alpha: BoundExact else: BoundAlpha
   if bestMove != NullMove and isQuietMove(b, bestMove):
     let bonus = getBonus(depth)
     updateHistory(b, bestMove, bonus)
     for i in 0 ..< triedQuietsLen:
       if triedQuiets[i] != bestMove:
         updateHistory(b, triedQuiets[i], -getPenalty(depth))
-  storeTT(hashVal, bestMove, curAlpha.int16, depth.int8, bound, ply)
-  return curAlpha
+  storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply)
+  return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
   (getMonoTime() - info.startTime).inMilliseconds
