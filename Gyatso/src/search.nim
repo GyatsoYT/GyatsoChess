@@ -204,6 +204,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   var triedQuiets: array[128, Move]
   var triedQuietsLen = 0
+  var movesSearched = 0
 
   for idx in 0 ..< ml.len:
     let m = ml.moves[idx]
@@ -213,21 +214,39 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     b.makeMove(m)
 
     var score = -Infinity
-    var needsFullSearch = false
 
-    if not pvNode or idx > 0:
-      score = -negamax[false](b, depth - 1, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
-      if pvNode and score > curAlpha:
-        needsFullSearch = true
+    if movesSearched == 0:
+      # First move — full window
+      score = -negamax[pvNode](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+    else:
+      # Late Move Reductions
+      var reduction = 0
+      if depth >= 3:
+        let tableDepth = min(depth, MaxPly - 1)
+        let tableIndex = min(movesSearched, 63)
+        reduction = LMR[tableDepth][tableIndex]
 
-    if pvNode and (idx == 0 or needsFullSearch):
-      score = -negamax[true](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+      let reducedDepth = if reduction > 0: max(1, depth - 1 - reduction)
+                         else: depth - 1
+
+      # Null-window search
+      score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+
+      # Re-search at full depth if LMR raised alpha
+      if reduction > 0 and score > curAlpha:
+        score = -negamax[false](b, depth - 1, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+
+      # PVS re-search with full window
+      if score > curAlpha and score < beta:
+        score = -negamax[true](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
 
     b.unmakeMove(m)
     nnuePop(nnueState)
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
+
+    inc movesSearched
 
     if score > bestScore:
       bestScore = score
@@ -325,9 +344,9 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     let score = negamax[true](b, depth, -Infinity, Infinity, 0, info, stack)
 
-    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
-      break
-    if shouldStop(info) and depth > 1:
+    let stopped = (info.stopFlag != nil and info.stopFlag[].load(moAcquire)) or
+                  shouldStop(info)
+    if stopped and depth > 1:
       break
 
     bestScore = score
@@ -336,7 +355,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     let elapsed = elapsedMs(info)
     printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
 
-    if shouldStop(info):
+    if stopped:
       break
 
   if bestMove == NullMove:
