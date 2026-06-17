@@ -218,6 +218,20 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   for idx in 0 ..< ml.len:
     let m = ml.moves[idx]
+
+    # Futility Pruning
+    if movesSearched > 0 and
+       depth <= FpDepth and
+       not inCheck and
+       isQuietMove(b, m) and
+       m != ttMove and
+       m != killerMoves[ply][0] and
+       m != killerMoves[ply][1] and
+       curAlpha < MateThreshold:
+      let fpMargin = FpMarginConst + FpMarginScale * depth
+      if staticEval + fpMargin <= curAlpha:
+        continue
+
     stack[ply].move = m
     stack[ply + 1].staticEval = Unknown
     nnuePush(b, m, nnueState)

@@ -10,6 +10,9 @@ const
   RfpDepth* = 12
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15
+  FpDepth* = 8
+  FpMarginConst* = 75
+  FpMarginScale* = 75
 
 var
   LMR*: array[MaxPly, array[64, int]]
