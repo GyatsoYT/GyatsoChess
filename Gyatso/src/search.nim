@@ -152,6 +152,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   let inCheck = not b.checkers.isEmpty
 
+  # Reverse Futility Pruning (RFP)
+  if not pvNode and
+     not inCheck and
+     ply > 0 and
+     depth <= RfpDepth and
+     abs(beta) < MateThreshold:
+    let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth
+    if staticEval - rfpMargin >= beta:
+      return staticEval - rfpMargin
+
   if depth >= NmpMinDepth and
      ply   >= NmpMinPly and
      staticEval != Unknown and

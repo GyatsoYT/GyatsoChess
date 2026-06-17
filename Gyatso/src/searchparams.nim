@@ -7,6 +7,9 @@ const
   NmpBaseR* = 2
   NmpDepthDiv* = 4          # so R = 2 + depth div 4
   NmpVerificationDepth* = 14
+  RfpDepth* = 12
+  RfpLinearMargin* = 75
+  RfpQuadraticMargin* = 15
 
 var
   LMR*: array[MaxPly, array[64, int]]
