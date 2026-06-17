@@ -108,10 +108,10 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   return bestScore
 
-proc negamax*(b: var Board, depth, alpha, beta, ply: int,
+proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack,
-              skipNullMove: bool = false): int =
+              skipNullMove: bool = false): int {.gcsafe.} =
   if ply >= MaxPly:
     return evaluate(b, nnueState)
 
@@ -132,7 +132,7 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
   var ttScore = 0
   var ttDepth = 0
   var ttBound = 0'u8
-  let hashVal = cast[uint64](b.hash)
+  let hashVal = cast[system.uint64](b.hash)
   let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound)
 
   if hasTT and ttDepth >= depth and ply > 0:
@@ -168,7 +168,7 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
     nnuePushNull(nnueState)
     b.makeNullMove()
 
-    let nullScore = -negamax(b, depth - R - 1, -beta, -beta + 1,
+    let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,
                              ply + 1, info, stack, skipNullMove = true)
 
     b.unmakeNullMove()
@@ -180,7 +180,7 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
     if nullScore >= beta:
       if depth > NmpVerificationDepth:
         stack[ply + 1].staticEval = Unknown
-        let verScore = negamax(b, depth - R - 1, beta - 1, beta,
+        let verScore = negamax[false](b, depth - R - 1, beta - 1, beta,
                                ply, info, stack, skipNullMove = true)
         if verScore < beta:
           discard
@@ -211,7 +211,18 @@ proc negamax*(b: var Board, depth, alpha, beta, ply: int,
     stack[ply + 1].staticEval = Unknown
     nnuePush(b, m, nnueState)
     b.makeMove(m)
-    let score = -negamax(b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+
+    var score = -Infinity
+    var needsFullSearch = false
+
+    if not pvNode or idx > 0:
+      score = -negamax[false](b, depth - 1, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+      if pvNode and score > curAlpha:
+        needsFullSearch = true
+
+    if pvNode and (idx == 0 or needsFullSearch):
+      score = -negamax[true](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+
     b.unmakeMove(m)
     nnuePop(nnueState)
 
@@ -312,7 +323,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     stack[0].staticEval = Unknown
 
-    let score = negamax(b, depth, -Infinity, Infinity, 0, info, stack)
+    let score = negamax[true](b, depth, -Infinity, Infinity, 0, info, stack)
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       break
