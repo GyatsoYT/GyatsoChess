@@ -14,6 +14,14 @@ const
   FpMarginConst* = 75
   FpMarginScale* = 75
   SeePruneCutoff* = 50
+  # Aspiration Windows
+  AspMinDepth*      = 3
+  AspInitAlpha*     = 20
+  AspInitBeta*      = 20
+  AspWideNum*       = 3
+  AspWideDen*       = 2
+  AspMaxRetries*    = 6
+  AspFailHighMaxReduction* = 2
 
 var
   LMR*:           array[MaxPly, array[64, int]]

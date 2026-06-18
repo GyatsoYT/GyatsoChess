@@ -367,6 +367,9 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     stack[i].move       = NullMove
     stack[i].staticEval = Unknown
 
+  # aspirationScore seeds the windows for depth >= AspMinDepth
+  var aspirationScore = bestScore
+
   for depth in 1 .. maxDepth:
     info.selDepth = depth
 
@@ -375,7 +378,54 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     stack[0].staticEval = Unknown
 
-    let score = negamax[true](b, depth, -Infinity, Infinity, 0, info, stack)
+    var alphaWindow  = AspInitAlpha
+    var betaWindow   = AspInitBeta
+    var aspRetries   = 0
+    var failHighCount = 0
+    var searchDepth  = depth
+
+    var score = -Infinity
+
+    while true:
+      var alpha = -Infinity
+      var beta  =  Infinity
+
+      if depth >= AspMinDepth:
+        alpha = max(-Infinity, aspirationScore - alphaWindow)
+        beta  = min( Infinity, aspirationScore + betaWindow)
+
+      for k in 0 .. MaxPly:
+        info.pvLen[k] = 0
+      stack[0].staticEval = Unknown
+
+      score = negamax[true](b, searchDepth, alpha, beta, 0, info, stack)
+
+      if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+        break
+
+      if depth < AspMinDepth or aspRetries >= AspMaxRetries:
+        break
+
+      if score <= alpha:
+        alphaWindow  = (alphaWindow * AspWideNum) div AspWideDen
+        aspirationScore = score
+        inc aspRetries
+        failHighCount = 0
+        searchDepth   = depth
+        continue
+
+      elif score >= beta:
+        betaWindow   = (betaWindow * AspWideNum) div AspWideDen
+        aspirationScore = score
+        inc aspRetries
+        inc failHighCount
+        if failHighCount <= AspFailHighMaxReduction:
+          searchDepth = depth - failHighCount
+        else:
+          searchDepth = depth
+        continue
+
+      break
 
     let stopped = (info.stopFlag != nil and info.stopFlag[].load(moAcquire)) or
                   shouldStop(info)
@@ -384,6 +434,8 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     bestScore = score
     bestMove  = if info.pvLen[0] > 0: info.pvTable[0][0] else: NullMove
+
+    aspirationScore = bestScore
 
     let elapsed = elapsedMs(info)
     printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
