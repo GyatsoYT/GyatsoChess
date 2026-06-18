@@ -13,11 +13,16 @@ const
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75
+  SeePruneCutoff* = 50
 
 var
-  LMR*: array[MaxPly, array[64, int]]
+  LMR*:           array[MaxPly, array[64, int]]
+  StaticPruning*: array[MaxPly, int]
 
 proc initTables*() =
   for depth in 1 ..< MaxPly:
     for moves in 1 ..< 64:
       LMR[depth][moves] = int(0.8 + ln(depth.float) * ln(1.2 * moves.float) / 1.8)
+
+  for depth in 0 ..< MaxPly:
+    StaticPruning[depth] = -SeePruneCutoff * depth * depth   # quiet moves

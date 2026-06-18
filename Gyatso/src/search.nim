@@ -11,6 +11,7 @@ import tt
 import moveorderer
 import history
 import searchparams
+import see
 
 var nnueState* {.threadvar.}: NNUEState
 
@@ -231,6 +232,14 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       let fpMargin = FpMarginConst + FpMarginScale * depth
       if staticEval + fpMargin <= curAlpha:
         continue
+
+    # Quiet SEE Pruning
+    if movesSearched > 0 and
+       not inCheck and
+       isQuietMove(b, m) and
+       abs(curAlpha) < MateThreshold and
+       not see(b, m, StaticPruning[depth]):
+      continue
 
     stack[ply].move = m
     stack[ply + 1].staticEval = Unknown
