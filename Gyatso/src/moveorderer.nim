@@ -2,8 +2,8 @@ import coretypes
 import board
 import bitboard
 import history
+import see
 
-# Killer move table: 2 killers per ply, indexed by ply
 var killerMoves*: array[MaxPly + 1, array[2, Move]]
 
 proc storeKiller*(ply: int, m: Move) {.inline.} =
@@ -20,56 +20,118 @@ func isCapture(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant: return true
   b.mailbox[m.toSq.int] != NoPiece
 
-proc scoreMove*(b: Board, m: Move, ttMove: Move, ply: int): int {.inline.} =
+const mvvlvaVictimBonus: array[PieceType, int] = [
+  1, 
+  4, 
+  4, 
+  6, 
+  12,
+  0, 
+  0, 
+]
+
+const mvvlvaAttackerPenalty: array[PieceType, int] = [
+  0,
+  1,    
+  1,    
+  2,    
+  4,    
+  5,    
+  0,    
+]
+
+func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
+  mvvlvaVictimBonus[victimPt] * 8 - mvvlvaAttackerPenalty[attackerPt]
+
+const
+  TtMoveScore*         = 2_000_000
+  GoodCaptureBase*     = 1_000_000
+  KillerBase*          = 900_000
+  BadCaptureBase*      = -1_000_000
+
+proc scoreMove*(b: Board, m: Move, ttMove: Move, ply: int): int =
+
+  # 1. TT move
   if m == ttMove:
-    return 1_000_000
+    return TtMoveScore
 
-  let isCap = isCapture(b, m)
-  let isPromo = m.isPromotion()
+  let isCap  = isCapture(b, m)
+  let isPromo = m.isPromotion
 
-  const pieceValues = [100, 300, 310, 500, 900, 10000]
+  # Capture or promotion
+  if isCap or isPromo:
 
-  if isCap:
-    let attackerVal = pieceValues[b.mailbox[m.fromSq.int].pieceType.ord]
-    let victimVal = if m.isEnPassant: 100
-                    else: pieceValues[b.mailbox[m.toSq.int].pieceType.ord]
-
-    if victimVal >= attackerVal or m.isEnPassant:
-      # Good capture
-      var score = 200_000 + victimVal * 100 - attackerVal
+    # Determine promo piece type
+    let promoPt: PieceType =
       if isPromo:
-        let promoVal = case m.promoType
-                       of PromoQueen:  900
-                       of PromoRook:   500
-                       of PromoBishop: 300
-                       of PromoKnight: 350
-        score += promoVal
-      return score
+        case m.promoType
+        of PromoQueen:  Queen
+        of PromoKnight: Knight
+        of PromoBishop: Bishop
+        of PromoRook:   Rook
+      else:
+        NoPieceType
+
+    # Classify promotion quality independent of capture
+    let isGoodPromo: bool =
+      isPromo and (promoPt == Queen or promoPt == Knight)
+
+    # Run SEE to decide good vs bad exchange
+    let seeOk = see(b, m, 0)
+
+    if seeOk:
+      let attackerPt =
+        if isPromo: promoPt
+        else:        b.mailbox[m.fromSq.int].pieceType
+
+      let victimPt: PieceType =
+        if m.isEnPassant: Pawn
+        elif isCap:       b.mailbox[m.toSq.int].pieceType
+        else:             NoPieceType
+
+      let mvvlva =
+        if victimPt != NoPieceType: mvvlvaScore(attackerPt, victimPt)
+        else: 0
+
+      let promoBonus =
+        if isGoodPromo: 500
+        elif isPromo:   200
+        else: 0
+
+      return GoodCaptureBase + promoBonus + mvvlva
+
     else:
-      # Bad capture — below killers
-      return victimVal * 100 - attackerVal + 10_000
+      let attackerPt =
+        if isPromo: promoPt
+        else:        b.mailbox[m.fromSq.int].pieceType
 
-  elif isPromo:
-    # Non-capture promotion — treat like a good capture
-    let promoVal = case m.promoType
-                   of PromoQueen:  900
-                   of PromoRook:   500
-                   of PromoBishop: 300
-                   of PromoKnight: 350
-    return 200_000 + promoVal
+      let victimPt: PieceType =
+        if m.isEnPassant: Pawn
+        elif isCap:       b.mailbox[m.toSq.int].pieceType
+        else:             NoPieceType
 
-  else:
-    let killerSlot = isKiller(m, ply)
-    if killerSlot > 0:
-      return 150_000 + killerSlot * 1_000 
-    
-    # Retrieve threat indexed butterfly history score
-    let stm = b.stm.ord
-    let fromSq = m.fromSq.int
-    let toSq = m.toSq.int
-    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
-    let toAttacked = if b.threats.hasSq(m.toSq): 1 else: 0
-    return system.int(historyTable[stm][fromSq][toSq][fromAttacked][toAttacked])
+      let mvvlva =
+        if victimPt != NoPieceType: mvvlvaScore(attackerPt, victimPt)
+        else: 0
+
+      let promoBonus =
+        if isPromo: 100
+        else: 0
+
+      return BadCaptureBase + promoBonus + mvvlva
+
+  # 3. Killers
+  let killerSlot = isKiller(m, ply)
+  if killerSlot > 0:
+    return KillerBase + killerSlot * 1_000
+
+  # 4. History heuristic
+  let stm      = b.stm.ord
+  let fromSq   = m.fromSq.int
+  let toSq     = m.toSq.int
+  let fromThrt = if b.threats.hasSq(m.fromSq): 1 else: 0
+  let toThrt   = if b.threats.hasSq(m.toSq):   1 else: 0
+  return system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
 
 proc sortMoves*(b: Board, ml: var MoveList, ttMove: Move, ply: int) =
   var scores: array[256, int]
