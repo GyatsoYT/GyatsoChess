@@ -33,6 +33,7 @@ type SearchInfo* = object
   stopFlag*:   ptr Atomic[bool]
   pvTable*:    array[MaxPly + 1, array[MaxPly + 1, Move]]
   pvLen*:      array[MaxPly + 1, int]
+  silent*:     bool
 
 proc shouldStop(info: var SearchInfo): bool {.inline.} =
   if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
@@ -333,6 +334,7 @@ proc elapsedMs(info: SearchInfo): int64 {.inline.} =
 
 proc printInfo(depth, selDepth, score: int, nodes: uint64,
                elapsed: int64, info: SearchInfo) =
+  if info.silent: return
   let nps = if elapsed > 0: nodes * 1000 div cast[uint64](elapsed) else: nodes
   var line = "info depth " & $depth &
              " seldepth " & $selDepth &

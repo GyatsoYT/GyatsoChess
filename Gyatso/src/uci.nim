@@ -8,6 +8,7 @@ import timeman
 import search
 import tt
 import history
+import bench
 
 var
   gStopFlag*:      Atomic[bool]
@@ -252,3 +253,21 @@ proc runUciLoop*() =
 
       elif line == "perft":
         reply "Usage: perft <depth>"
+
+      elif line == "bench":
+        stopSearch()
+        joinSearch()
+        runBench(DefaultBenchDepth)
+
+      elif line.startsWith("bench "):
+        stopSearch()
+        joinSearch()
+        let depthStr = line[6..^1].strip()
+        var d = DefaultBenchDepth
+        try: d = parseInt(depthStr)
+        except ValueError:
+          reply "Invalid depth: " & depthStr
+        if d > 0:
+          runBench(d)
+        else:
+          reply "Depth must be >= 1"
