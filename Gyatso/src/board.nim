@@ -538,10 +538,7 @@ proc makeNullMove*(b: var Board) =
     
   # Clear EP square
   b.epSquare = NoSquare
-  
-  # Increment halfmove clock
-  inc b.halfmove
-  
+    
   # Update STM, gamePly, fullmove
   if b.stm == Black:
     inc b.fullmove
@@ -572,20 +569,12 @@ proc unmakeNullMove*(b: var Board) =
     dec b.fullmove
   dec b.gamePly
 
-func isRepetition*(b: Board, plyFromRoot: int): bool =
+func isRepetition*(b: Board): bool {.inline.} =
   let limit = max(0, b.histLen - system.int(b.halfmove))
-  let rootIdx = b.histLen - plyFromRoot
-  var count = 0
   var i = b.histLen - 2
   while i >= limit:
     if b.history[i].hash == b.hash:
-      inc count
-      if i < rootIdx:
-        if count >= 1:
-          return true
-      else:
-        if count >= 2:
-          return true
+      return true
     dec(i, 2)
   return false
 
@@ -618,9 +607,8 @@ func isInsufficientMaterial*(b: Board): bool =
         return true
   return false
 
-func isDraw*(b: Board, plyFromRoot: int): bool {.inline.} =
-  b.isFiftyMove() or b.isInsufficientMaterial() or b.isRepetition(plyFromRoot)
+func isDraw*(b: Board): bool {.inline.} =
+  b.isFiftyMove() or b.isInsufficientMaterial() or b.isRepetition()
 
 func isGameOver*(b: var Board): bool =
-  # stub: for now just check draws. We will fill no legal moves check later.
-  b.isDraw(0)
+  b.isDraw()

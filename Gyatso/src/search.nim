@@ -76,6 +76,10 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   if ply > info.selDepth:
     info.selDepth = ply
 
+  # Draw detection in qsearch
+  if b.isRepetition() or b.isFiftyMove():
+    return 0
+
   let standPat = evaluate(b, nnueState)
   var bestScore = standPat
 
@@ -125,7 +129,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   info.pvLen[ply] = 0
 
   if ply > 0:
-    if b.isRepetition(ply) or b.isFiftyMove():
+    if b.isRepetition() or b.isFiftyMove():
       return 0
 
   # Probe TT
