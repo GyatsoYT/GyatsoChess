@@ -144,14 +144,19 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     elif ttBound == BoundBeta and ttScore >= beta:
       return ttScore
 
+  let inCheck = not b.checkers.isEmpty
+
+  # Internal Iterative Reduction (IIR)
+  var depth = depth
+  if depth >= IirMinDepth and ttMove == NullMove and not inCheck:
+    dec depth
+
   if depth <= 0:
     return qSearch(b, alpha, beta, ply, info, stack)
 
   if stack[ply].staticEval == Unknown:
     stack[ply].staticEval = evaluate(b, nnueState)
   let staticEval = stack[ply].staticEval
-
-  let inCheck = not b.checkers.isEmpty
 
   # Reverse Futility Pruning (RFP)
   if not pvNode and

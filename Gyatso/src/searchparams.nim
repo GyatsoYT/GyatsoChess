@@ -13,6 +13,8 @@ const
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75
+  # Internal Iterative Reduction
+  IirMinDepth* = 4
   SeePruneCutoff* = 50
   # Aspiration Windows
   AspMinDepth*      = 3
