@@ -98,6 +98,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     stack[ply].move = m
     nnuePush(b, m, nnueState)
     b.makeMove(m)
+    prefetchTT(cast[system.uint64](b.hash))
     let score = -qSearch(b, -beta, -curAlpha, ply + 1, info, stack)
     b.unmakeMove(m)
     nnuePop(nnueState)
@@ -255,6 +256,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply + 1].staticEval = Unknown
     nnuePush(b, m, nnueState)
     b.makeMove(m)
+    prefetchTT(cast[system.uint64](b.hash))
 
     var score = -Infinity
 

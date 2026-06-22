@@ -14,6 +14,12 @@ var
   ttTable*: ptr UncheckedArray[TTEntry] = nil
   ttMask*: uint64 = 0
 
+func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
+
+proc prefetchTT*(key: uint64) {.inline.} =
+  if ttTable != nil and ttMask != 0:
+    prefetch(addr ttTable[key and ttMask], 0, 3)
+
 func packData*(move: Move, score: int16, depth: int8, bound: uint8): uint64 {.inline.} =
   result = (uint64(uint16(move)) shl 0) or
            (uint64(cast[uint16](score)) shl 16) or
