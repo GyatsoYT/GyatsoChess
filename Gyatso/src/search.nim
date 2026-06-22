@@ -258,11 +258,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
 
+    # Check Extension
+    let givesCheck = not b.checkers.isEmpty
+    let extension = if givesCheck and depth >= 1 and ply < MaxPly - 1: 1 else: 0
+    let newDepth = depth - 1 + extension
+
     var score = -Infinity
 
     if movesSearched == 0:
       # First move — full window
-      score = -negamax[pvNode](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+      score = -negamax[pvNode](b, newDepth, -beta, -curAlpha, ply + 1, info, stack)
     else:
       # Late Move Reductions
       var reduction = 0
@@ -271,19 +276,19 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         let tableIndex = min(movesSearched, 63)
         reduction = LMR[tableDepth][tableIndex]
 
-      let reducedDepth = if reduction > 0: max(1, depth - 1 - reduction)
-                         else: depth - 1
+      let reducedDepth = if reduction > 0: max(1, newDepth - reduction)
+                         else: newDepth
 
       # Null-window search
       score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
 
       # Re-search at full depth if LMR raised alpha
       if reduction > 0 and score > curAlpha:
-        score = -negamax[false](b, depth - 1, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+        score = -negamax[false](b, newDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
 
       # PVS re-search with full window
       if score > curAlpha and score < beta:
-        score = -negamax[true](b, depth - 1, -beta, -curAlpha, ply + 1, info, stack)
+        score = -negamax[true](b, newDepth, -beta, -curAlpha, ply + 1, info, stack)
 
     b.unmakeMove(m)
     nnuePop(nnueState)
