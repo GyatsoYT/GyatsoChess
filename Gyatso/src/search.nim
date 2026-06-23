@@ -160,9 +160,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   if depth <= 0:
     return qSearch(b, alpha, beta, ply, info, stack)
 
-  if stack[ply].staticEval == Unknown:
+  if inCheck:
+    stack[ply].staticEval = Unknown
+  elif stack[ply].staticEval == Unknown:
     stack[ply].staticEval = evaluate(b, nnueState)
   let staticEval = stack[ply].staticEval
+
+  # Improving flag and delta (improvement) calculation
+  var improving = false
+  var improvement = 0
+  if not inCheck and staticEval != Unknown:
+    if ply >= 2 and stack[ply - 2].staticEval != Unknown:
+      improvement = staticEval - stack[ply - 2].staticEval
+      improving = improvement > 0
+    elif ply >= 4 and stack[ply - 4].staticEval != Unknown:
+      improvement = staticEval - stack[ply - 4].staticEval
+      improving = improvement > 0
+    else:
+      improving = true  # no prior data — assume improving
 
   # Reverse Futility Pruning (RFP)
   if not pvNode and
@@ -170,10 +185,12 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      ply > 0 and
      depth <= RfpDepth and
      abs(beta) < MateThreshold:
-    let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth
+    let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth -
+                    clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp)
     if staticEval - rfpMargin >= beta:
       return staticEval - rfpMargin
 
+  # Null Move Pruning (NMP)
   if depth >= NmpMinDepth and
      ply   >= NmpMinPly and
      staticEval != Unknown and
