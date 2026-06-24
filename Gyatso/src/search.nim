@@ -220,10 +220,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       if depth > NmpVerificationDepth:
         stack[ply + 1].staticEval = Unknown
         let verScore = negamax[false](b, depth - R - 1, beta - 1, beta,
-                               ply, info, stack, skipNullMove = true)
-        if verScore < beta:
-          discard
-        else:
+                               ply + 1, info, stack, skipNullMove = true)
+        if verScore >= beta:
           return beta
       else:
         return beta
@@ -396,6 +394,9 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
   var bestMove  = NullMove
   var bestScore = -Infinity
 
+  var completedBestMove  = NullMove
+  var completedBestScore = -Infinity
+
   # Initialise the search stack for a fresh search
   var stack: SearchStack
   for i in 0 .. MaxPly + 1:
@@ -413,13 +414,14 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     stack[0].staticEval = Unknown
 
-    var alphaWindow  = AspInitAlpha
-    var betaWindow   = AspInitBeta
-    var aspRetries   = 0
+    var alphaWindow   = AspInitAlpha
+    var betaWindow    = AspInitBeta
+    var aspRetries    = 0
     var failHighCount = 0
-    var searchDepth  = depth
+    var searchDepth   = depth
 
     var score = -Infinity
+    var converged = false
 
     while true:
       var alpha = -Infinity
@@ -439,18 +441,19 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
         break
 
       if depth < AspMinDepth or aspRetries >= AspMaxRetries:
+        converged = true
         break
 
       if score <= alpha:
-        alphaWindow  = (alphaWindow * AspWideNum) div AspWideDen
+        alphaWindow     = (alphaWindow * AspWideNum) div AspWideDen
         aspirationScore = score
         inc aspRetries
-        failHighCount = 0
-        searchDepth   = depth
+        failHighCount   = 0
+        searchDepth     = depth
         continue
 
       elif score >= beta:
-        betaWindow   = (betaWindow * AspWideNum) div AspWideDen
+        betaWindow      = (betaWindow * AspWideNum) div AspWideDen
         aspirationScore = score
         inc aspRetries
         inc failHighCount
@@ -460,28 +463,42 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
           searchDepth = depth
         continue
 
+      converged = true
       break
 
     let stopped = (info.stopFlag != nil and info.stopFlag[].load(moAcquire)) or
                   shouldStop(info)
-    if stopped and depth > 1:
-      break
 
-    bestScore = score
-    bestMove  = if info.pvLen[0] > 0: info.pvTable[0][0] else: NullMove
+    let pvValid = info.pvLen[0] > 0 and info.pvTable[0][0] != NullMove
 
-    aspirationScore = bestScore
+    if not stopped or depth == 1:
+      if pvValid:
+        bestScore = score
+        bestMove  = info.pvTable[0][0]
+        if converged:
+          completedBestMove  = bestMove
+          completedBestScore = bestScore
+      elif converged and not stopped:
+        discard
+
+    aspirationScore = if pvValid: score else: aspirationScore
 
     let elapsed = elapsedMs(info)
-    printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
+    # Only print info when we have a valid PV to show
+    if pvValid:
+      printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
 
     if stopped:
       break
 
   if bestMove == NullMove:
-    if info.pvLen[0] > 0 and info.pvTable[0][0] != NullMove:
+    if completedBestMove != NullMove:
+      bestMove  = completedBestMove
+      bestScore = completedBestScore
+    elif info.pvLen[0] > 0 and info.pvTable[0][0] != NullMove:
       bestMove = info.pvTable[0][0]
     else:
+      # Absolute last resort
       var ml: MoveList
       generateMoves(b, ml)
       if ml.len > 0:
