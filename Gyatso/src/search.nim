@@ -291,6 +291,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         let tableIndex = min(movesSearched, 63)
         reduction = LMR[tableDepth][tableIndex]
 
+        # Non-improving reduction
+        if isQuietMove(b, m) and not improving:
+          inc reduction
+
+        # Clamp reduction to valid range
+        reduction = max(0, min(reduction, depth - 1))
+
       let reducedDepth = if reduction > 0: max(1, newDepth - reduction)
                          else: newDepth
 
