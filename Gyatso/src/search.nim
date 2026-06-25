@@ -88,6 +88,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     return standPat
 
   var curAlpha = max(alpha, standPat)
+  let inCheckQ = not b.checkers.isEmpty
 
   var ml: MoveList
   generateCaptures(b, ml)
@@ -95,6 +96,11 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   for idx in 0 ..< ml.len:
     let m = ml.moves[idx]
+
+    # SEE Pruning
+    if not inCheckQ and not m.isPromotion() and not see(b, m, 0):
+      continue
+
     stack[ply].move = m
     nnuePush(b, m, nnueState)
     b.makeMove(m)
