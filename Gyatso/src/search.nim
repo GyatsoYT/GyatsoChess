@@ -498,7 +498,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
     let elapsed = elapsedMs(info)
     # Only print info when we have a valid PV to show
-    if pvValid:
+    if pvValid and not stopped:
       printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
 
     if stopped:
