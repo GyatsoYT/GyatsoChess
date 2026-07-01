@@ -18,7 +18,8 @@ var nnueState* {.threadvar.}: NNUEState
 const Unknown* = high(int)
 type
   SearchStackEntry* = object
-    move*:       Move  
+    move*:       Move
+    piece*:      int
     staticEval*: int
 
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
@@ -91,8 +92,10 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let inCheckQ = not b.checkers.isEmpty
 
   var ml: MoveList
+  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
   generateCaptures(b, ml)
-  sortMoves(b, ml, NullMove, ply)
+  sortMoves(b, ml, NullMove, ply, prevPiece, prevToSq)
 
   for idx in 0 ..< ml.len:
     let m = ml.moves[idx]
@@ -239,7 +242,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     return if not b.checkers.isEmpty: -MateValue + ply
            else: 0
 
-  sortMoves(b, ml, ttMove, ply)
+  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
+  sortMoves(b, ml, ttMove, ply, prevPiece, prevToSq)
 
   var bestScore = -Infinity
   var curAlpha = alpha
@@ -273,7 +278,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        not see(b, m, StaticPruning[depth]):
       continue
 
-    stack[ply].move = m
+    stack[ply].move  = m
+    stack[ply].piece  = ord(b.mailbox[m.fromSq.int])
     stack[ply + 1].staticEval = Unknown
     nnuePush(b, m, nnueState)
     b.makeMove(m)
@@ -337,14 +343,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           info.pvTable[ply][k + 1] = info.pvTable[ply + 1][k]
         info.pvLen[ply] = childLen + 1
         if curAlpha >= beta:
-          # Store killer if the cutoff move is quiet (not a capture/promotion)
           if isQuietMove(b, m):
             storeKiller(ply, m)
-            let bonus = getBonus(depth)
+            let bonus  = getBonus(depth)
+            let malus  = -bonus
             updateHistory(b, m, bonus)
-            for i in 0 ..< triedQuietsLen:
-              if triedQuiets[i] != m:
-                updateHistory(b, triedQuiets[i], -getPenalty(depth))
+            if prevPiece >= 0:
+              let curPiece = stack[ply].piece
+              let curToSq  = m.toSq.int
+              updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
+              for i in 0 ..< triedQuietsLen:
+                if triedQuiets[i] != m:
+                  updateHistory(b, triedQuiets[i], malus)
+                  let tPiece = ord(b.mailbox[triedQuiets[i].fromSq.int])
+                  updateContHist(prevPiece, prevToSq, tPiece, triedQuiets[i].toSq.int, malus)
+            else:
+              for i in 0 ..< triedQuietsLen:
+                if triedQuiets[i] != m:
+                  updateHistory(b, triedQuiets[i], malus)
           storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply)
           return bestScore
 
@@ -357,10 +373,21 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   let bound = if bestScore > alpha: BoundExact else: BoundAlpha
   if bestMove != NullMove and isQuietMove(b, bestMove):
     let bonus = getBonus(depth)
+    let malus = -bonus
     updateHistory(b, bestMove, bonus)
-    for i in 0 ..< triedQuietsLen:
-      if triedQuiets[i] != bestMove:
-        updateHistory(b, triedQuiets[i], -getPenalty(depth))
+    if prevPiece >= 0:
+      let bmPiece = ord(b.mailbox[bestMove.fromSq.int])
+      let bmToSq  = bestMove.toSq.int
+      updateContHist(prevPiece, prevToSq, bmPiece, bmToSq, bonus)
+      for i in 0 ..< triedQuietsLen:
+        if triedQuiets[i] != bestMove:
+          updateHistory(b, triedQuiets[i], malus)
+          let tPiece = ord(b.mailbox[triedQuiets[i].fromSq.int])
+          updateContHist(prevPiece, prevToSq, tPiece, triedQuiets[i].toSq.int, malus)
+    else:
+      for i in 0 ..< triedQuietsLen:
+        if triedQuiets[i] != bestMove:
+          updateHistory(b, triedQuiets[i], malus)
   storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply)
   return bestScore
 
@@ -410,10 +437,10 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
   var completedBestMove  = NullMove
   var completedBestScore = -Infinity
 
-  # Initialise the search stack for a fresh search
   var stack: SearchStack
   for i in 0 .. MaxPly + 1:
     stack[i].move       = NullMove
+    stack[i].piece      = 0
     stack[i].staticEval = Unknown
 
   # aspirationScore seeds the windows for depth >= AspMinDepth

@@ -49,7 +49,8 @@ const
   KillerBase*          = 900_000
   BadCaptureBase*      = -1_000_000
 
-proc scoreMove*(b: Board, m: Move, ttMove: Move, ply: int): int =
+proc scoreMove*(b: Board, m: Move, ttMove: Move, ply: int,
+                prevPiece, prevToSq: int): int =
 
   # 1. TT move
   if m == ttMove:
@@ -125,20 +126,25 @@ proc scoreMove*(b: Board, m: Move, ttMove: Move, ply: int): int =
   if killerSlot > 0:
     return KillerBase + killerSlot * 1_000
 
-  # 4. History heuristic
   let stm      = b.stm.ord
   let fromSq   = m.fromSq.int
   let toSq     = m.toSq.int
   let fromThrt = if b.threats.hasSq(m.fromSq): 1 else: 0
   let toThrt   = if b.threats.hasSq(m.toSq):   1 else: 0
-  return system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
+  let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
+  let contScore =
+    if prevPiece >= 0:
+      let curPiece = ord(b.mailbox[m.fromSq.int])
+      getContHistScore(prevPiece, prevToSq, curPiece, toSq)
+    else: 0
+  return histScore + contScore
 
-proc sortMoves*(b: Board, ml: var MoveList, ttMove: Move, ply: int) =
+proc sortMoves*(b: Board, ml: var MoveList, ttMove: Move, ply: int,
+                prevPiece, prevToSq: int) =
   var scores: array[256, int]
   for i in 0 ..< ml.len:
-    scores[i] = scoreMove(b, ml.moves[i], ttMove, ply)
+    scores[i] = scoreMove(b, ml.moves[i], ttMove, ply, prevPiece, prevToSq)
 
-  # Insertion sort
   for i in 1 ..< ml.len:
     let keyMove  = ml.moves[i]
     let keyScore = scores[i]
