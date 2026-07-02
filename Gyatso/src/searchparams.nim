@@ -29,6 +29,7 @@ const
 var
   LMR*: array[MaxPly, array[64, int]]
   StaticPruning*: array[MaxPly, int]
+  LmpTable*: array[MaxPly, int]
 
 proc initTables*() =
   for depth in 1 ..< MaxPly:
@@ -37,3 +38,6 @@ proc initTables*() =
 
   for depth in 0 ..< MaxPly:
     StaticPruning[depth] = -SeePruneCutoff * depth * depth # quiet moves
+
+  for depth in 0 ..< MaxPly:
+    LmpTable[depth] = 3 + depth * depth

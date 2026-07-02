@@ -270,6 +270,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       if staticEval + fpMargin <= curAlpha:
         continue
 
+    # Late Move Pruning (LMP)
+    if movesSearched > 0 and
+       depth <= 7 and
+       not inCheck and
+       not pvNode and
+       isQuietMove(b, m) and
+       curAlpha < MateThreshold and
+       movesSearched >= LmpTable[depth]:
+      continue
+    
     # Quiet SEE Pruning
     if movesSearched > 0 and
        not inCheck and
