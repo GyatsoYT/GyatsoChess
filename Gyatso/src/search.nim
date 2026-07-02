@@ -281,6 +281,14 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].move  = m
     stack[ply].piece  = ord(b.mailbox[m.fromSq.int])
     stack[ply + 1].staticEval = Unknown
+
+    # Pre-compute history values before makeMove
+    let isQuiet      = isQuietMove(b, m) and not m.isPromotion()
+    let lmrStm       = b.stm.ord
+    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
+    let toAttacked   = if b.threats.hasSq(m.toSq):   1 else: 0
+    let lmrHistScore = system.int(historyTable[lmrStm][m.fromSq.int][m.toSq.int][fromAttacked][toAttacked])
+
     nnuePush(b, m, nnueState)
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
@@ -304,10 +312,19 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         reduction = LMR[tableDepth][tableIndex]
 
         # Non-improving reduction
-        if isQuietMove(b, m) and not improving:
+        if isQuiet and not improving:
           inc reduction
 
-        # Clamp reduction to valid range
+        # History-based LMR adjustment
+        if isQuiet:
+          var histAdj = lmrHistScore
+          # 1-ply continuation history adjustment
+          if prevPiece >= 0:
+            let curPiece  = stack[ply].piece
+            histAdj += getContHistScore(prevPiece, prevToSq, curPiece, m.toSq.int)
+          reduction -= histAdj div 8192
+
+        # Clamp reduction to valid range (after all adjustments)
         reduction = max(0, min(reduction, depth - 1))
 
       let reducedDepth = if reduction > 0: max(1, newDepth - reduction)
