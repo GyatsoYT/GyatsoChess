@@ -10,52 +10,86 @@ import tt
 import history
 import bench
 
-var
-  gStopFlag*:      Atomic[bool]
-  gSearchThread*:  Thread[void]
-  gSearchRunning*: bool = false
-  gSearchLock*:    Lock
-
 type GoParams = object
   b:    Board
   info: SearchInfo
 
-var gGoParams: GoParams
+var
+  gStopFlag*:     Atomic[bool]
+  gSearchLock*:   Lock
+  gWorkCond*:     Cond
+  gDoneCond*:     Cond
+  gHasWork:       bool = false
+  gSearchRunning*: bool = false
+  gQuitWorker:    bool = false
+  gWorkerThread*: Thread[void]
+  gGoParams:      GoParams
 
-initLock(gSearchLock)
-
-proc searchThread() {.thread.} =
+proc workerLoop() {.thread.} =
   initThreadAttacks()
-  var params = gGoParams
-  var b      = params.b
 
-  let (bestMove, _) = iterativeDeepening(b, params.info)
+  while true:
+    acquire(gSearchLock)
+    while not gHasWork and not gQuitWorker:
+      wait(gWorkCond, gSearchLock)
 
-  let mv = if bestMove == NullMove: "0000"
-           else: moveToAlgebraic(bestMove)
-  echo "bestmove " & mv
-  stdout.flushFile()
+    if gQuitWorker:
+      release(gSearchLock)
+      break
 
-  withLock(gSearchLock):
+    gHasWork      = false
+    gSearchRunning = true
+    var params    = gGoParams
+    release(gSearchLock)
+
+    var b = params.b
+    let (bestMove, _) = iterativeDeepening(b, params.info)
+
+    let mv = if bestMove == NullMove: "0000"
+             else: moveToAlgebraic(bestMove)
+    echo "bestmove " & mv
+    stdout.flushFile()
+
+    acquire(gSearchLock)
     gSearchRunning = false
+    signal(gDoneCond)
+    release(gSearchLock)
+
+proc initWorker*() =
+  initLock(gSearchLock)
+  initCond(gWorkCond)
+  initCond(gDoneCond)
+  createThread(gWorkerThread, workerLoop)
 
 proc startSearch(b: Board, info: SearchInfo) =
-  if gSearchRunning:
-    gStopFlag.store(true, moRelease)
-    joinThread(gSearchThread)
-
+  gStopFlag.store(true, moRelease)
+  acquire(gSearchLock)
+  while gSearchRunning:
+    wait(gDoneCond, gSearchLock)
   gStopFlag.store(false, moRelease)
-  gGoParams      = GoParams(b: b, info: info)
-  gSearchRunning = true
-  createThread(gSearchThread, searchThread)
+  gGoParams = GoParams(b: b, info: info)
+  gHasWork  = true
+  signal(gWorkCond)
+  release(gSearchLock)
 
 proc stopSearch() =
   gStopFlag.store(true, moRelease)
 
 proc joinSearch() =
-  if gSearchRunning:
-    joinThread(gSearchThread)
-    gSearchRunning = false
+  acquire(gSearchLock)
+  while gSearchRunning:
+    wait(gDoneCond, gSearchLock)
+  release(gSearchLock)
+
+proc shutdownWorker() =
+  gStopFlag.store(true, moRelease)
+  acquire(gSearchLock)
+  while gSearchRunning:
+    wait(gDoneCond, gSearchLock)
+  gQuitWorker = true
+  signal(gWorkCond)
+  release(gSearchLock)
+  joinThread(gWorkerThread)
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -190,6 +224,8 @@ proc handlePerft(args: string, b: var Board) =
   perftBenchmark(b, depth)
 
 proc runUciLoop*() =
+  initWorker()
+
   var currentBoard = parseFen(StartPos)
 
   while true:
@@ -200,8 +236,7 @@ proc runUciLoop*() =
 
     case line:
     of "quit":
-      stopSearch()
-      joinSearch()
+      shutdownWorker()
       break
 
     of "uci":

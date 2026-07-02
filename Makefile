@@ -4,17 +4,26 @@ SRC       = Gyatso/src/main.nim
 NIM      ?= nim
 NETFILE   = Gyatso/Net/GyatsoNet512HM.bin
 
-# Detect OS
 ifeq ($(OS),Windows_NT)
-    DETECTED_OS := Windows
-    EXE_SUFFIX  := .exe
-    NO_PLT      :=
-    LD_LLD      :=
+    ifeq ($(MSYSTEM),)
+        DETECTED_OS := Windows
+        EXE_SUFFIX  := .exe
+        NO_PLT      :=
+        LD_LLD      := -fuse-ld=lld
+        NULL_DEV    := NUL
+    else
+        DETECTED_OS := Linux
+        EXE_SUFFIX  :=
+        NO_PLT      := -fno-plt
+        LD_LLD      := -fuse-ld=lld
+        NULL_DEV    := /dev/null
+    endif
 else
     DETECTED_OS := Linux
     EXE_SUFFIX  :=
     NO_PLT      := -fno-plt
     LD_LLD      := -fuse-ld=lld
+    NULL_DEV    := /dev/null
 endif
 
 ARCH_DEFS = -d:avx2 -d:bmi2 -d:simd
@@ -33,7 +42,7 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
          -fomit-frame-pointer -flto -march=native \
          -mavx2 -mbmi2 $(NO_PLT)
 
-LDFLAGS = -O3 -flto -fuse-ld=lld
+LDFLAGS = -O3 -flto $(LD_LLD)
 
 .PHONY: all build clean help check-deps
 
@@ -41,9 +50,9 @@ all: build
 
 check-deps:
 ifeq ($(DETECTED_OS),Linux)
-	@which lld > /dev/null 2>&1 || (echo "ERROR: lld not found. Install LLVM (includes lld) from https://releases.llvm.org/" && exit 1)
+	@which lld > $(NULL_DEV) 2>&1 || (echo "ERROR: lld not found. Install LLVM (includes lld) from https://releases.llvm.org/" && exit 1)
 endif
-	@$(NIM) --version > /dev/null 2>&1 || (echo "ERROR: nim not found." && exit 1)
+	@$(NIM) --version > $(NULL_DEV) 2>&1 || (echo "ERROR: nim not found." && exit 1)
 
 build: check-deps
 ifdef EVALFILE
