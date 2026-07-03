@@ -446,6 +446,8 @@ proc printInfo(depth, selDepth, score: int, nodes: uint64,
   stdout.flushFile()
 
 proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
+  newTTGeneration()
+
   # Age history table
   ageHistory()
 
