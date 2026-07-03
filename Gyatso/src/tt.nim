@@ -5,13 +5,18 @@ const
   BoundAlpha* = 1'u8
   BoundBeta*  = 2'u8
 
+  EntriesPerCluster* = 3
+
 type
   TTEntry* = object
     key*: uint64
     data*: uint64
 
+  TTCluster* = object
+    entries*: array[EntriesPerCluster, TTEntry]
+
 var
-  ttTable*: ptr UncheckedArray[TTEntry] = nil
+  ttTable*: ptr UncheckedArray[TTCluster] = nil
   ttMask*: uint64 = 0
 
 func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
@@ -36,63 +41,81 @@ proc initTT*(sizeMB: int) =
   if ttTable != nil:
     deallocShared(ttTable)
     ttTable = nil
-  
+
   if sizeMB <= 0:
     ttMask = 0
     return
 
-  let entrySize = sizeof(TTEntry)
+  let clusterSize = sizeof(TTCluster)
   let bytes = sizeMB * 1024 * 1024
-  
-  var numEntries = 1'u64
-  while numEntries * uint64(entrySize) * 2'u64 <= uint64(bytes):
-    numEntries = numEntries shl 1
-    
-  if numEntries == 0:
-    numEntries = 1024
-    
-  ttMask = numEntries - 1
-  ttTable = cast[ptr UncheckedArray[TTEntry]](allocShared0(numEntries * uint64(entrySize)))
+
+  var numClusters = 1'u64
+  while numClusters * uint64(clusterSize) * 2'u64 <= uint64(bytes):
+    numClusters = numClusters shl 1
+
+  if numClusters == 0:
+    numClusters = 1024
+
+  ttMask = numClusters - 1
+  ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(numClusters * uint64(clusterSize)))
 
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int, depth: var int, bound: var uint8): bool =
   if ttTable == nil or ttMask == 0: return false
-  
-  let idx = key and ttMask
-  let dataVal = ttTable[idx].data
-  let keyVal = ttTable[idx].key
-  
-  if (keyVal xor dataVal) == key:
-    var m: Move
-    var s: int16
-    var d: int8
-    var b: uint8
-    unpackData(dataVal, m, s, d, b)
-    
-    move = m
-    depth = int(d)
-    bound = b
-    
-    var finalScore = int(s)
-    if finalScore > MateThreshold:
-      finalScore = finalScore - ply
-    elif finalScore < -MateThreshold:
-      finalScore = finalScore + ply
-    score = finalScore
-    return true
-    
+
+  let cluster = addr ttTable[key and ttMask]
+
+  for i in 0 ..< EntriesPerCluster:
+    let dataVal = cluster.entries[i].data
+    let keyVal  = cluster.entries[i].key
+
+    if (keyVal xor dataVal) == key:
+      var m: Move
+      var s: int16
+      var d: int8
+      var b: uint8
+      unpackData(dataVal, m, s, d, b)
+
+      move  = m
+      depth = int(d)
+      bound = b
+
+      var finalScore = int(s)
+      if finalScore > MateThreshold:
+        finalScore = finalScore - ply
+      elif finalScore < -MateThreshold:
+        finalScore = finalScore + ply
+      score = finalScore
+      return true
+
   return false
 
 proc storeTT*(key: uint64, move: Move, score: int16, depth: int8, bound: uint8, ply: int) =
   if ttTable == nil or ttMask == 0: return
-  
-  let idx = key and ttMask
+
+  let cluster = addr ttTable[key and ttMask]
+
   var storedScore = score
   if score > MateThreshold:
     storedScore = score + int16(ply)
   elif score < -MateThreshold:
     storedScore = score - int16(ply)
-    
+
   let dataVal = packData(move, storedScore, depth, bound)
-  
-  ttTable[idx].data = dataVal
-  ttTable[idx].key = key xor dataVal
+
+  # Replacement policy: prefer an entry with a matching key, else the shallowest
+  var target = 0
+  var minDepth = int(cast[int8](uint8((cluster.entries[0].data shr 32) and 0xFF'u64)))
+
+  for i in 0 ..< EntriesPerCluster:
+    let entryData = cluster.entries[i].data
+    let entryKey  = cluster.entries[i].key
+    if (entryKey xor entryData) == key:
+      target = i
+      break
+    let d = int(cast[int8](uint8((entryData shr 32) and 0xFF'u64)))
+    if d < minDepth:
+      minDepth = d
+      target = i
+
+  cluster.entries[target].data = dataVal
+  cluster.entries[target].key  = key xor dataVal

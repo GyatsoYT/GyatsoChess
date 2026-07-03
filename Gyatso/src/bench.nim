@@ -59,7 +59,7 @@ proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
 proc clearTT() =
   ## Zero out the transposition table between positions for reproducibility.
   if ttTable != nil and ttMask > 0:
-    zeroMem(ttTable, sizeof(TTEntry) * int(ttMask + 1))
+    zeroMem(ttTable, sizeof(TTCluster) * int(ttMask + 1))
 
 proc runBench*(depth: int = DefaultBenchDepth) =
   var totalNodes: uint64 = 0
