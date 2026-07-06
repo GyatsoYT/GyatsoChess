@@ -227,21 +227,29 @@ proc generateCaptures*(b: Board, ml: var MoveList) =
   let them   = us.opposite()
   let kingSq = b.kingSquare(us)
   let theirs = b.byColor[them.ord]
-  let promos = not b.byColor[us.ord] and promotionRank(us)
+  let ours   = b.byColor[us.ord]
+  let promos = not ours and promotionRank(us)
 
   generateKingMoves(b, ml, theirs)
   if b.checkers.moreThanOne(): return
 
-  let baseMask: Bitboard =
+  let pawnMask: Bitboard =
     if b.checkers.isEmpty():
       theirs or promos
     else:
       let checker = b.checkers.lsb()
       (b.checkers or rayBetween(kingSq, checker)) and (theirs or promos)
 
-  generatePawnMoves(b, ml, baseMask)
-  generateKnightMoves(b, ml, baseMask)
-  generateSliderMoves(b, ml, baseMask)
+  let pieceMask: Bitboard =
+    if b.checkers.isEmpty():
+      theirs
+    else:
+      let checker = b.checkers.lsb()
+      (b.checkers or rayBetween(kingSq, checker)) and theirs
+
+  generatePawnMoves(b, ml, pawnMask)
+  generateKnightMoves(b, ml, pieceMask)
+  generateSliderMoves(b, ml, pieceMask)
 
 proc generateQuiets*(b: Board, ml: var MoveList) =
   ml.clear()
@@ -251,20 +259,28 @@ proc generateQuiets*(b: Board, ml: var MoveList) =
   let theirs    = b.byColor[them.ord]
   let ours      = b.byColor[us.ord]
   let promoRank = promotionRank(us)
+  let empty     = not ours and not theirs
 
-  generateKingMoves(b, ml, not ours and not theirs)
+  generateKingMoves(b, ml, empty)
   if b.checkers.moreThanOne(): return
 
-  let dstMask: Bitboard =
+  let pawnMask: Bitboard =
     if b.checkers.isEmpty():
-      not ours and not theirs and not promoRank
+      empty and not promoRank
     else:
       let checker = b.checkers.lsb()
-      (b.checkers or rayBetween(kingSq, checker)) and not theirs and not promoRank
+      (b.checkers or rayBetween(kingSq, checker)) and empty and not promoRank
 
-  generatePawnMoves(b, ml, dstMask)
-  generateKnightMoves(b, ml, dstMask)
-  generateSliderMoves(b, ml, dstMask)
+  let pieceMask: Bitboard =
+    if b.checkers.isEmpty():
+      empty
+    else:
+      let checker = b.checkers.lsb()
+      (b.checkers or rayBetween(kingSq, checker)) and empty
+
+  generatePawnMoves(b, ml, pawnMask)
+  generateKnightMoves(b, ml, pieceMask)
+  generateSliderMoves(b, ml, pieceMask)
 
   if b.checkers.isEmpty():
     generateCastlingMoves(b, ml)

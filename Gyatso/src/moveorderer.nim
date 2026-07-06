@@ -170,7 +170,7 @@ proc initMovePicker*(b: ptr Board,
 proc skipQuiets*(picker: var MovePicker) {.inline.} =
   picker.skipQuietsMark = true
   if picker.stage == StageQuiets:
-    picker.stage = if picker.isQSearch: StageDone else: StageBadNoisies
+    picker.stage = StageBadNoisies
 
 proc next*(picker: var MovePicker): Move =
   let b = picker.board
@@ -207,14 +207,14 @@ proc next*(picker: var MovePicker): Move =
             picker.badScores[picker.badCount] = picker.noisyScores[picker.noisyCur - 1]
             inc picker.badCount
 
-      if picker.isQSearch and not picker.inCheck:
-        picker.stage = StageDone
+      if picker.isQSearch:
+        picker.stage = if picker.inCheck: StageBadNoisies else: StageDone
       else:
         picker.stage = StageGenQuiets
 
     of StageGenQuiets:
       if picker.skipQuietsMark:
-        picker.stage = if picker.isQSearch: StageDone else: StageBadNoisies
+        picker.stage = StageBadNoisies
       else:
         var ml: MoveList
         generateQuiets(b[], ml)
@@ -230,7 +230,7 @@ proc next*(picker: var MovePicker): Move =
 
     of StageQuiets:
       if picker.skipQuietsMark:
-        picker.stage = if picker.isQSearch: StageDone else: StageBadNoisies
+        picker.stage = StageBadNoisies
         continue
 
       while picker.quietCur < picker.quietCount:
@@ -240,7 +240,7 @@ proc next*(picker: var MovePicker): Move =
         if m == picker.ttMove: continue
         return m
 
-      picker.stage = if picker.isQSearch: StageDone else: StageBadNoisies
+      picker.stage = StageBadNoisies
 
     of StageBadNoisies:
       while picker.badCur < picker.badCount:
