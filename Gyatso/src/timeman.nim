@@ -1,4 +1,15 @@
-proc calcMoveTime*(myTime, myInc, movestogo: int): int =
-  ## Returns allocated milliseconds for this move.
-  let mtg = if movestogo > 0: min(movestogo, 50) else: 30
-  max(10, (myTime div mtg) + myInc - 50)   # 50 ms overhead
+import searchparams
+
+type TimeInfo* = object
+  softLimit*: int64
+  hardLimit*: int64
+
+proc calcTimeInfo*(myTime, myInc, movestogo: int): TimeInfo =
+  ## Returns allocated soft and hard limits in milliseconds for this move.
+  let timeBase = myTime div TmTimeDiv + myInc * TmIncNum div TmIncDen
+  let hard = int64(timeBase * TmHardNum div TmHardDen)
+  let soft = int64(timeBase * TmSoftNum div TmSoftDen)
+  TimeInfo(
+    softLimit: max(10'i64, soft),
+    hardLimit: max(10'i64, hard)
+  )

@@ -25,6 +25,14 @@ const
   AspWideDen* = 2
   AspMaxRetries* = 6
   AspFailHighMaxReduction* = 2
+  TmTimeDiv* = 20
+  TmIncNum* = 3
+  TmIncDen* = 4
+  TmHardNum* = 76
+  TmHardDen* = 100
+  TmSoftNum* = 52
+  TmSoftDen* = 100
+  StabilityScale*: array[0..4, int] = [100, 92, 85, 75, 65]
 
 var
   LMR*: array[MaxPly, array[64, int]]

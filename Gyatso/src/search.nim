@@ -25,9 +25,10 @@ type
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
 type SearchInfo* = object
-  startTime*:  MonoTime
-  allocMs*:    int64
-  depthLimit*: int
+  startTime*:   MonoTime
+  softLimitMs*: int64
+  hardLimitMs*: int64
+  depthLimit*:  int
   nodeLimit*:  uint64
   nodes*:      uint64
   selDepth*:   int
@@ -42,7 +43,7 @@ proc shouldStop(info: var SearchInfo): bool {.inline.} =
   if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
     if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
     return true
-  if (getMonoTime() - info.startTime).inMilliseconds >= info.allocMs:
+  if (getMonoTime() - info.startTime).inMilliseconds >= info.hardLimitMs:
     if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
     return true
   return false
@@ -478,6 +479,8 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
   # aspirationScore seeds the windows for depth >= AspMinDepth
   var aspirationScore = bestScore
+  var bestmoveStability = 0
+  var prevBestMove = NullMove
 
   for depth in 1 .. maxDepth:
     info.selDepth = depth
@@ -560,6 +563,20 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     # Only print info when we have a valid PV to show
     if pvValid and not stopped:
       printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
+
+      if bestMove == prevBestMove:
+        inc bestmoveStability
+      else:
+        bestmoveStability = 0
+      prevBestMove = bestMove
+
+      let stabIdx = min(bestmoveStability, StabilityScale.high)
+      let stabilityFactor = StabilityScale[stabIdx]
+      let adjustedSoftLimit = info.softLimitMs * int64(stabilityFactor) div 100
+
+      if elapsed >= adjustedSoftLimit:
+        if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+        break
 
     if stopped:
       break

@@ -44,7 +44,8 @@ proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
 
   var info: SearchInfo
   info.startTime  = getMonoTime()
-  info.allocMs    = high(int64)     # no time limit
+  info.softLimitMs= high(int32)
+  info.hardLimitMs= high(int32)
   info.depthLimit = data.depth
   info.nodeLimit  = 0
   info.nodes      = 0

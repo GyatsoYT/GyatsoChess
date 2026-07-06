@@ -185,25 +185,34 @@ proc handleGo(line: string, b: Board) =
       discard
     inc i
 
-  var allocMs: int
+  var softMs: int64
+  var hardMs: int64
   if infinite or (depth > 0 and movetime == 0 and wtime == 0 and btime == 0):
-    allocMs = high(int) div 2
+    softMs = int64(high(int32))
+    hardMs = int64(high(int32))
   elif movetime > 0:
-    allocMs = movetime
+    softMs = int64(movetime)
+    hardMs = int64(movetime)
   else:
     let myTime = if b.stm == White: wtime else: btime
     let myInc  = if b.stm == White: winc  else: binc
-    allocMs = if myTime > 0: calcMoveTime(myTime, myInc, movestogo)
-              else: high(int) div 2
+    if myTime > 0:
+      let tInfo = calcTimeInfo(myTime, myInc, movestogo)
+      softMs = tInfo.softLimit
+      hardMs = tInfo.hardLimit
+    else:
+      softMs = int64(high(int32))
+      hardMs = int64(high(int32))
 
   var info = SearchInfo(
-    startTime:  getMonoTime(),
-    allocMs:    int64(allocMs),
-    depthLimit: depth,
-    nodeLimit:  0,
-    nodes:      0,
-    selDepth:   0,
-    stopFlag:   addr gStopFlag
+    startTime:   getMonoTime(),
+    softLimitMs: softMs,
+    hardLimitMs: hardMs,
+    depthLimit:  depth,
+    nodeLimit:   0,
+    nodes:       0,
+    selDepth:    0,
+    stopFlag:    addr gStopFlag
   )
 
   startSearch(b, info)
