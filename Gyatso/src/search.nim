@@ -91,17 +91,18 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   var curAlpha = max(alpha, standPat)
   let inCheckQ = not b.checkers.isEmpty
 
-  var ml: MoveList
   let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
-  generateCaptures(b, ml)
-  sortMoves(b, ml, NullMove, ply, prevPiece, prevToSq)
 
-  for idx in 0 ..< ml.len:
-    let m = ml.moves[idx]
+  var picker = initMovePicker(
+    addr b, NullMove, ply, prevPiece, prevToSq,
+    inCheck = inCheckQ, isQSearch = true)
 
-    # SEE Pruning
-    if not inCheckQ and not m.isPromotion() and not see(b, m, 0):
+  while true:
+    let m = picker.next()
+    if m == NullMove: break
+
+    if not inCheckQ and m.isPromotion() and not see(b, m, 0):
       continue
 
     stack[ply].move = m
@@ -235,27 +236,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
-  var ml: MoveList
-  generateMoves(b, ml)
-
-  if ml.len == 0:
-    return if not b.checkers.isEmpty: -MateValue + ply
-           else: 0
-
   let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
-  sortMoves(b, ml, ttMove, ply, prevPiece, prevToSq)
+
+  var picker = initMovePicker(
+    addr b, ttMove, ply, prevPiece, prevToSq,
+    inCheck = inCheck, isQSearch = false)
 
   var bestScore = -Infinity
-  var curAlpha = alpha
-  var bestMove = NullMove
+  var curAlpha  = alpha
+  var bestMove  = NullMove
 
   var triedQuiets: array[128, Move]
   var triedQuietsLen = 0
-  var movesSearched = 0
+  var movesSearched  = 0
 
-  for idx in 0 ..< ml.len:
-    let m = ml.moves[idx]
+  while true:
+    let m = picker.next()
+    if m == NullMove: break
 
     # Futility Pruning
     if movesSearched > 0 and
@@ -268,6 +266,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        curAlpha < MateThreshold:
       let fpMargin = FpMarginConst + FpMarginScale * depth
       if staticEval + fpMargin <= curAlpha:
+        picker.skipQuiets()
         continue
 
     # Late Move Pruning (LMP)
@@ -278,8 +277,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        isQuietMove(b, m) and
        curAlpha < MateThreshold and
        movesSearched >= LmpTable[depth]:
+      picker.skipQuiets()
       continue
-    
+
     # Quiet SEE Pruning
     if movesSearched > 0 and
        not inCheck and
@@ -396,6 +396,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       if triedQuietsLen < triedQuiets.len:
         triedQuiets[triedQuietsLen] = m
         inc triedQuietsLen
+
+  if movesSearched == 0:
+    return if inCheck: -MateValue + ply
+           else: 0
 
   let bound = if bestScore > alpha: BoundExact else: BoundAlpha
   if bestMove != NullMove and isQuietMove(b, bestMove):
@@ -567,7 +571,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     elif info.pvLen[0] > 0 and info.pvTable[0][0] != NullMove:
       bestMove = info.pvTable[0][0]
     else:
-      # Absolute last resort
+      # Absolute last resort — generate moves and take the first
       var ml: MoveList
       generateMoves(b, ml)
       if ml.len > 0:

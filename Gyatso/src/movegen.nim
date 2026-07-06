@@ -183,7 +183,7 @@ proc generatePawnMoves(b: Board, ml: var MoveList, dstMask: Bitboard) =
     let epBit = epSq.bit
 
     let capturedSq = if us == White: epSq + (-8) else: epSq + 8
-    let epInMask = not (dstMask and (epBit or capturedSq.bit)).isEmpty()
+    let epInMask = not (dstMask and capturedSq.bit).isEmpty()
 
     if epInMask:
       let leftAttacker = pawnAttackLeft(leftMovable, us) and epBit
@@ -242,4 +242,30 @@ proc generateCaptures*(b: Board, ml: var MoveList) =
   generatePawnMoves(b, ml, baseMask)
   generateKnightMoves(b, ml, baseMask)
   generateSliderMoves(b, ml, baseMask)
+
+proc generateQuiets*(b: Board, ml: var MoveList) =
+  ml.clear()
+  let us        = b.stm
+  let them      = us.opposite()
+  let kingSq    = b.kingSquare(us)
+  let theirs    = b.byColor[them.ord]
+  let ours      = b.byColor[us.ord]
+  let promoRank = promotionRank(us)
+
+  generateKingMoves(b, ml, not ours and not theirs)
+  if b.checkers.moreThanOne(): return
+
+  let dstMask: Bitboard =
+    if b.checkers.isEmpty():
+      not ours and not theirs and not promoRank
+    else:
+      let checker = b.checkers.lsb()
+      (b.checkers or rayBetween(kingSq, checker)) and not theirs and not promoRank
+
+  generatePawnMoves(b, ml, dstMask)
+  generateKnightMoves(b, ml, dstMask)
+  generateSliderMoves(b, ml, dstMask)
+
+  if b.checkers.isEmpty():
+    generateCastlingMoves(b, ml)
 
