@@ -11,21 +11,22 @@ import history
 import bench
 
 type GoParams = object
-  b:    Board
+  b: Board
   info: SearchInfo
 
 var
-  gStopFlag*:     Atomic[bool]
-  gSearchLock*:   Lock
-  gWorkCond*:     Cond
-  gDoneCond*:     Cond
-  gHasWork:       bool = false
+  gStopFlag*: Atomic[bool]
+  gSearchLock*: Lock
+  gWorkCond*: Cond
+  gDoneCond*: Cond
+  gHasWork: bool = false
   gSearchRunning*: bool = false
-  gQuitWorker:    bool = false
+  gQuitWorker: bool = false
   gWorkerThread*: Thread[void]
-  gGoParams:      GoParams
+  gGoParams: GoParams
 
 proc workerLoop() {.thread.} =
+  initHistoryData()
   initThreadAttacks()
 
   while true:
@@ -35,11 +36,12 @@ proc workerLoop() {.thread.} =
 
     if gQuitWorker:
       release(gSearchLock)
+      freeHistoryData()
       break
 
-    gHasWork      = false
+    gHasWork = false
     gSearchRunning = true
-    var params    = gGoParams
+    var params = gGoParams
     release(gSearchLock)
 
     var b = params.b
@@ -68,7 +70,7 @@ proc startSearch(b: Board, info: SearchInfo) =
     wait(gDoneCond, gSearchLock)
   gStopFlag.store(false, moRelease)
   gGoParams = GoParams(b: b, info: info)
-  gHasWork  = true
+  gHasWork = true
   signal(gWorkCond)
   release(gSearchLock)
 
@@ -122,7 +124,7 @@ proc handlePosition(line: string, b: var Board) =
     for tok in movePart.split(' '):
       if tok.len < 4: continue
       let fromSq = parseSquare(tok[0..1])
-      let toSq   = parseSquare(tok[2..3])
+      let toSq = parseSquare(tok[2..3])
       var ml: MoveList
       generateMoves(b, ml)
       var found = false
@@ -137,7 +139,7 @@ proc handlePosition(line: string, b: var Board) =
               of 'r': pt == PromoRook
               of 'b': pt == PromoBishop
               of 'n': pt == PromoKnight
-              else:   false)
+              else: false)
             if not matches: continue
           b.makeMove(m)
           found = true
@@ -146,14 +148,14 @@ proc handlePosition(line: string, b: var Board) =
 proc handleGo(line: string, b: Board) =
   let tokens = line.split()
   var
-    depth     = 0
-    movetime  = 0
-    wtime     = 0
-    btime     = 0
-    winc      = 0
-    binc      = 0
+    depth = 0
+    movetime = 0
+    wtime = 0
+    btime = 0
+    winc = 0
+    binc = 0
     movestogo = 0
-    infinite  = false
+    infinite = false
 
   var i = 1
   while i < tokens.len:
@@ -195,7 +197,7 @@ proc handleGo(line: string, b: Board) =
     hardMs = int64(movetime)
   else:
     let myTime = if b.stm == White: wtime else: btime
-    let myInc  = if b.stm == White: winc  else: binc
+    let myInc = if b.stm == White: winc else: binc
     if myTime > 0:
       let tInfo = calcTimeInfo(myTime, myInc, movestogo)
       softMs = tInfo.softLimit
@@ -205,14 +207,14 @@ proc handleGo(line: string, b: Board) =
       hardMs = int64(high(int32))
 
   var info = SearchInfo(
-    startTime:   getMonoTime(),
+    startTime: getMonoTime(),
     softLimitMs: softMs,
     hardLimitMs: hardMs,
-    depthLimit:  depth,
-    nodeLimit:   0,
-    nodes:       0,
-    selDepth:    0,
-    stopFlag:    addr gStopFlag
+    depthLimit: depth,
+    nodeLimit: 0,
+    nodes: 0,
+    selDepth: 0,
+    stopFlag: addr gStopFlag
   )
 
   startSearch(b, info)
@@ -223,7 +225,7 @@ proc handlePerft(args: string, b: var Board) =
     reply "Usage: perft <depth>"
     return
   var depth = 0
-  try:   depth = parseInt(depthStr)
+  try: depth = parseInt(depthStr)
   except ValueError:
     reply "Invalid depth: " & depthStr
     return
@@ -261,7 +263,7 @@ proc runUciLoop*() =
     of "ucinewgame":
       stopSearch()
       joinSearch()
-      clearHistory()
+      clearAllHistory()
       currentBoard = parseFen(StartPos)
 
     of "stop":
@@ -274,10 +276,10 @@ proc runUciLoop*() =
     else:
       if line.startsWith("setoption "):
         let parts = line.split()
-        var nameIdx  = -1
+        var nameIdx = -1
         var valueIdx = -1
         for idx in 0 ..< parts.len:
-          if parts[idx] == "name"  and idx + 1 < parts.len: nameIdx  = idx + 1
+          if parts[idx] == "name" and idx + 1 < parts.len: nameIdx = idx + 1
           if parts[idx] == "value" and idx + 1 < parts.len: valueIdx = idx + 1
         if nameIdx >= 0 and valueIdx >= 0:
           case parts[nameIdx].toLowerAscii():

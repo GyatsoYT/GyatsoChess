@@ -29,12 +29,13 @@ const
   ]
 
 type BenchWorkerData = object
-  fen:      string
-  depth:    int
+  fen: string
+  depth: int
   bestMove: Move
-  nodes:    uint64
+  nodes: uint64
 
 proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
+  initHistoryData()
   initThreadAttacks()
 
   var b = parseFen(data.fen)
@@ -43,19 +44,19 @@ proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   stopFlag.store(false, moRelaxed)
 
   var info: SearchInfo
-  info.startTime  = getMonoTime()
-  info.softLimitMs= high(int32)
-  info.hardLimitMs= high(int32)
+  info.startTime = getMonoTime()
+  info.softLimitMs = high(int32)
+  info.hardLimitMs = high(int32)
   info.depthLimit = data.depth
-  info.nodeLimit  = 0
-  info.nodes      = 0
-  info.selDepth   = 0
-  info.stopFlag   = addr stopFlag
-  info.silent     = true            # suppress per-depth info lines
+  info.nodeLimit = 0
+  info.nodes = 0
+  info.selDepth = 0
+  info.stopFlag = addr stopFlag
+  info.silent = true # suppress per-depth info lines
 
   let (bestMove, _) = iterativeDeepening(b, info)
   data.bestMove = bestMove
-  data.nodes    = info.nodes
+  data.nodes = info.nodes
 
 proc clearTT() =
   ## Zero out the transposition table between positions for reproducibility.
@@ -72,10 +73,10 @@ proc runBench*(depth: int = DefaultBenchDepth) =
 
   for i, fen in BenchmarkPositions:
     clearTT()
-    clearHistory()
+    clearAllHistory()
 
     var data: BenchWorkerData
-    data.fen   = fen
+    data.fen = fen
     data.depth = depth
 
     let posStart = getMonoTime()
@@ -85,8 +86,8 @@ proc runBench*(depth: int = DefaultBenchDepth) =
     joinThread(t)
 
     let posTimeMs = (getMonoTime() - posStart).inMilliseconds
-    let nodes     = data.nodes
-    totalNodes   += nodes
+    let nodes = data.nodes
+    totalNodes += nodes
 
     let mv = if data.bestMove == NullMove: "0000"
              else: moveToAlgebraic(data.bestMove)

@@ -4,6 +4,7 @@ import evaluate
 import uci
 import tt
 import searchparams
+import history
 import bench
 
 when isMainModule:
@@ -12,7 +13,8 @@ when isMainModule:
   initTT(16)
   initTables()
   initNNUE()
-  
+  initHistoryModule()
+
   let args = commandLineParams()
   if args.len >= 1 and args[0].toLowerAscii() == "bench":
     var depth = DefaultBenchDepth
