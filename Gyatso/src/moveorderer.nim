@@ -74,6 +74,8 @@ type MovePicker* = object
   ply*:            int
   prevPiece*:      int
   prevToSq*:       int
+  prev2Piece*:     int
+  prev2ToSq*:      int
   stage*:          MovePickerStage
   noisyMoves:      array[256, Move]
   noisyScores:     array[256, int32]
@@ -128,7 +130,8 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
 
   int32(GoodCaptureBase + promoBonus + mvvlva)
 
-proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq: int): int32 {.inline.} =
+proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
+                prev2Piece, prev2ToSq: int): int32 {.inline.} =
   let killerSlot = isKiller(m, ply)
   if killerSlot > 0:
     return int32(KillerBase + killerSlot * 1_000)
@@ -139,23 +142,31 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq: int): int32 {.inlin
   let fromThrt  = if b.threats.hasSq(m.fromSq): 1 else: 0
   let toThrt    = if b.threats.hasSq(m.toSq):   1 else: 0
   let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
-  let contScore =
+  let curPiece  = ord(b.mailbox[m.fromSq.int])
+  let cont1 =
     if prevPiece >= 0:
-      let curPiece = ord(b.mailbox[m.fromSq.int])
       getContHistScore(prevPiece, prevToSq, curPiece, toSq)
     else: 0
+  let cont2 =
+    if prev2Piece >= 0:
+      getContHistScore2(prev2Piece, prev2ToSq, curPiece, toSq)
+    else: 0
+  let contScore = 2 * cont1 + cont2
 
   int32(histScore + contScore)
 
 proc initMovePicker*(b: ptr Board,
                      ttMove: Move,
-                     ply, prevPiece, prevToSq: int,
+                     ply, prevPiece, prevToSq,
+                     prev2Piece, prev2ToSq: int,
                      inCheck, isQSearch: bool): MovePicker {.inline.} =
   result.board          = b
   result.ttMove         = ttMove
   result.ply            = ply
   result.prevPiece      = prevPiece
   result.prevToSq       = prevToSq
+  result.prev2Piece     = prev2Piece
+  result.prev2ToSq      = prev2ToSq
   result.stage          = StageTTMove
   result.noisyCount     = 0
   result.noisyCur       = 0
@@ -224,7 +235,9 @@ proc next*(picker: var MovePicker): Move =
           picker.quietScores[i] = scoreQuiet(b[], ml.moves[i],
                                              picker.ply,
                                              picker.prevPiece,
-                                             picker.prevToSq)
+                                             picker.prevToSq,
+                                             picker.prev2Piece,
+                                             picker.prev2ToSq)
         picker.quietCur = 0
         picker.stage    = StageQuiets
 

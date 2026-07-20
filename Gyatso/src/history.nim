@@ -6,8 +6,9 @@ type
   HistoryTable*        = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
 
-var historyTable*        {.threadvar.}: HistoryTable
-var continuationHistory* {.threadvar.}: ContinuationHistory
+var historyTable*         {.threadvar.}: HistoryTable
+var continuationHistory*  {.threadvar.}: ContinuationHistory
+var continuationHistory2* {.threadvar.}: ContinuationHistory
 
 proc clearHistory*() =
   for col in 0..1:
@@ -20,7 +21,8 @@ proc clearHistory*() =
     for ps in 0..63:
       for cp in 0..11:
         for cs in 0..63:
-          continuationHistory[pp][ps][cp][cs] = 0
+          continuationHistory[pp][ps][cp][cs]  = 0
+          continuationHistory2[pp][ps][cp][cs] = 0
 
 proc ageHistory*() =
   for col in 0..1:
@@ -56,3 +58,9 @@ proc updateContHist*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inli
 
 proc getContHistScore*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
   system.int(continuationHistory[prevPiece][prevToSq][curPiece][curToSq])
+
+proc updateContHist2*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inline.} =
+  gravityUpdate(continuationHistory2[prevPiece][prevToSq][curPiece][curToSq], change)
+
+proc getContHistScore2*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
+  system.int(continuationHistory2[prevPiece][prevToSq][curPiece][curToSq])

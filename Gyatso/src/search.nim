@@ -97,6 +97,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   var picker = initMovePicker(
     addr b, NullMove, ply, prevPiece, prevToSq,
+    -1, -1,
     inCheck = inCheckQ, isQSearch = true)
 
   while true:
@@ -237,11 +238,14 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
-  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
-  let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
+  let prevPiece  = if ply > 0: stack[ply - 1].piece else: -1
+  let prevToSq   = if ply > 0: stack[ply - 1].move.toSq.int else: -1
+  let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply - 2].piece else: -1
+  let prev2ToSq  = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply - 2].move.toSq.int else: -1
 
   var picker = initMovePicker(
     addr b, ttMove, ply, prevPiece, prevToSq,
+    prev2Piece, prev2ToSq,
     inCheck = inCheck, isQSearch = false)
 
   var bestScore = -Infinity
@@ -328,11 +332,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
         # History-based LMR adjustment
         if isQuiet:
-          var histAdj = lmrHistScore
-          # 1-ply continuation history adjustment
+          let curPiece = stack[ply].piece
+          let curToSq  = m.toSq.int
+          var histAdj  = lmrHistScore
+          # 1-ply continuation history
           if prevPiece >= 0:
-            let curPiece  = stack[ply].piece
-            histAdj += getContHistScore(prevPiece, prevToSq, curPiece, m.toSq.int)
+            histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
+          # 2-ply continuation history
+          if prev2Piece >= 0:
+            histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
         # Clamp reduction to valid range (after all adjustments)
@@ -380,11 +388,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               let curPiece = stack[ply].piece
               let curToSq  = m.toSq.int
               updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
+              if prev2Piece >= 0:
+                updateContHist2(prev2Piece, prev2ToSq, curPiece, curToSq, bonus)
               for i in 0 ..< triedQuietsLen:
                 if triedQuiets[i] != m:
                   updateHistory(b, triedQuiets[i], malus)
                   let tPiece = ord(b.mailbox[triedQuiets[i].fromSq.int])
                   updateContHist(prevPiece, prevToSq, tPiece, triedQuiets[i].toSq.int, malus)
+                  if prev2Piece >= 0:
+                    updateContHist2(prev2Piece, prev2ToSq, tPiece, triedQuiets[i].toSq.int, malus)
             else:
               for i in 0 ..< triedQuietsLen:
                 if triedQuiets[i] != m:
@@ -411,11 +423,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       let bmPiece = ord(b.mailbox[bestMove.fromSq.int])
       let bmToSq  = bestMove.toSq.int
       updateContHist(prevPiece, prevToSq, bmPiece, bmToSq, bonus)
+      if prev2Piece >= 0:
+        updateContHist2(prev2Piece, prev2ToSq, bmPiece, bmToSq, bonus)
       for i in 0 ..< triedQuietsLen:
         if triedQuiets[i] != bestMove:
           updateHistory(b, triedQuiets[i], malus)
           let tPiece = ord(b.mailbox[triedQuiets[i].fromSq.int])
           updateContHist(prevPiece, prevToSq, tPiece, triedQuiets[i].toSq.int, malus)
+          if prev2Piece >= 0:
+            updateContHist2(prev2Piece, prev2ToSq, tPiece, triedQuiets[i].toSq.int, malus)
     else:
       for i in 0 ..< triedQuietsLen:
         if triedQuiets[i] != bestMove:
