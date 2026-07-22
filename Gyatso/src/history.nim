@@ -66,10 +66,11 @@ proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
 proc getBonus*(depth: int): int {.inline.} =
   min(1500, depth * depth + 2 * depth)
 
-proc gravityUpdate*(slot: var int16, change: int) {.inline.} =
-  let cur   = system.int(slot)
-  let delta = abs(change)
-  slot = int16(cur + change - (cur * delta div 16384))
+template updateHistoryStat*(stat: var int16, bonus: int) =
+  var s = system.int(stat)
+  let gravityDiv = 512 + (abs(bonus) shr 4)
+  s += (32 * bonus) - (s * abs(bonus)) div gravityDiv
+  stat = int16(clamp(s, -16384, 16384))
 
 proc updateHistory*(b: Board, m: Move, change: int) =
   let stm          = b.stm.ord
@@ -77,18 +78,18 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let toSq         = m.toSq.int
   let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
   let toAttacked   = if b.threats.hasSq(m.toSq):   1 else: 0
-  gravityUpdate(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][toAttacked], change)
+  updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][toAttacked], change)
 
 template historyTable*(): untyped = gHistData.historyTable
 
 proc updateContHist*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inline.} =
-  gravityUpdate(gHistData.continuationHistory[prevPiece][prevToSq][curPiece][curToSq], change)
+  updateHistoryStat(gHistData.continuationHistory[prevPiece][prevToSq][curPiece][curToSq], change)
 
 proc getContHistScore*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
   system.int(gHistData.continuationHistory[prevPiece][prevToSq][curPiece][curToSq])
 
 proc updateContHist2*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inline.} =
-  gravityUpdate(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq], change)
+  updateHistoryStat(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq], change)
 
 proc getContHistScore2*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
   system.int(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq])
