@@ -7,6 +7,8 @@ const
 
   EntriesPerCluster* = 3
 
+  NoEval* = 32767'i16
+
 type
   TTEntry* = object
     key*: uint64
@@ -29,19 +31,26 @@ proc prefetchTT*(key: uint64) {.inline.} =
 proc newTTGeneration*() {.inline.} =
   inc ttGeneration
 
-func packData*(move: Move, score: int16, depth: int8, bound: uint8, generation: uint8): uint64 {.inline.} =
-  result = (uint64(uint16(move))        shl 0)  or
-           (uint64(cast[uint16](score)) shl 16) or
-           (uint64(cast[uint8](depth))  shl 32) or
-           (uint64(bound and 0x3'u8)   shl 40) or
-           (uint64(generation)          shl 42)
+const GenMask* = 0x3F'u8
 
-func unpackData*(data: uint64, move: var Move, score: var int16, depth: var int8, bound: var uint8, generation: var uint8) {.inline.} =
+func packData*(move: Move, score: int16, depth: int8, bound: uint8,
+               generation: uint8, eval: int16): uint64 {.inline.} =
+  result = (uint64(uint16(move))              shl  0) or
+           (uint64(cast[uint16](score))       shl 16) or
+           (uint64(cast[uint8](depth))        shl 32) or
+           (uint64(bound and 0x3'u8)          shl 40) or
+           (uint64(generation and GenMask)    shl 42) or
+           (uint64(cast[uint16](eval))        shl 48)
+
+func unpackData*(data: uint64, move: var Move, score: var int16,
+                 depth: var int8, bound: var uint8, generation: var uint8,
+                 eval: var int16) {.inline.} =
   move       = Move(uint16(data and 0xFFFF'u64))
   score      = cast[int16](uint16((data shr 16) and 0xFFFF'u64))
   depth      = cast[int8](uint8((data shr 32) and 0xFF'u64))
   bound      = uint8((data shr 40) and 0x3'u64)
-  generation = uint8((data shr 42) and 0xFF'u64)
+  generation = uint8((data shr 42) and 0x3F'u64)
+  eval       = cast[int16](uint16(data shr 48))
 
 proc initTT*(sizeMB: int) =
   if ttTable != nil:
@@ -65,7 +74,8 @@ proc initTT*(sizeMB: int) =
   ttMask = numClusters - 1
   ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(numClusters * uint64(clusterSize)))
 
-proc probeTT*(key: uint64, ply: int, move: var Move, score: var int, depth: var int, bound: var uint8): bool =
+proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
+              depth: var int, bound: var uint8, eval: var int16): bool =
   if ttTable == nil or ttMask == 0: return false
 
   let cluster = addr ttTable[key and ttMask]
@@ -80,11 +90,13 @@ proc probeTT*(key: uint64, ply: int, move: var Move, score: var int, depth: var 
       var d: int8
       var b: uint8
       var g: uint8
-      unpackData(dataVal, m, s, d, b, g)
+      var e: int16
+      unpackData(dataVal, m, s, d, b, g, e)
 
       move  = m
       depth = int(d)
       bound = b
+      eval  = e
 
       var finalScore = int(s)
       if finalScore > MateThreshold:
@@ -96,7 +108,8 @@ proc probeTT*(key: uint64, ply: int, move: var Move, score: var int, depth: var 
 
   return false
 
-proc storeTT*(key: uint64, move: Move, score: int16, depth: int8, bound: uint8, ply: int) =
+proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
+              bound: uint8, ply: int, eval: int16) =
   if ttTable == nil or ttMask == 0: return
 
   let cluster = addr ttTable[key and ttMask]
@@ -107,11 +120,11 @@ proc storeTT*(key: uint64, move: Move, score: int16, depth: int8, bound: uint8, 
   elif score < -MateThreshold:
     storedScore = score - int16(ply)
 
-  let dataVal = packData(move, storedScore, depth, bound, ttGeneration)
+  let dataVal = packData(move, storedScore, depth, bound, ttGeneration, eval)
 
   # Replacement policy: always reuse a matching key slot; otherwise replace
   # the entry with the lowest score = depth - relativeAge * 2, where
-  # relativeAge = (256 + ttGeneration - entry.generation) mod 256.
+  # relativeAge = (64 + ttGeneration - entry.generation) mod 64.
   var target   = 0
   var minScore = high(int)
 
@@ -128,9 +141,10 @@ proc storeTT*(key: uint64, move: Move, score: int16, depth: int8, bound: uint8, 
     var es: int16
     var ed: int8
     var eb: uint8
-    unpackData(entryData, em, es, ed, eb, eg)
+    var ee: int16
+    unpackData(entryData, em, es, ed, eb, eg, ee)
 
-    let relativeAge  = int((256'u16 + uint16(ttGeneration) - uint16(eg)) and 255'u16)
+    let relativeAge  = int((64'u16 + uint16(ttGeneration) - uint16(eg)) and 63'u16)
     let replaceScore = int(ed) - relativeAge * 2
 
     if replaceScore < minScore:

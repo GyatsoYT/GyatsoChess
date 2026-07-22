@@ -147,12 +147,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       return 0
 
   # Probe TT
-  var ttMove = NullMove
+  var ttMove  = NullMove
   var ttScore = 0
   var ttDepth = 0
   var ttBound = 0'u8
+  var ttEval  = NoEval
   let hashVal = cast[system.uint64](b.hash)
-  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound)
+  let hasTT   = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval)
 
   if hasTT and ttDepth >= depth and ply > 0:
     if ttBound == BoundExact:
@@ -175,7 +176,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   if inCheck:
     stack[ply].staticEval = Unknown
   elif stack[ply].staticEval == Unknown:
-    stack[ply].staticEval = evaluate(b, nnueState)
+    if ttEval != NoEval:
+      stack[ply].staticEval = ttEval + 0
+    else:
+      stack[ply].staticEval = evaluate(b, nnueState)
   let staticEval = stack[ply].staticEval
 
   # Improving flag and delta (improvement) calculation
@@ -401,7 +405,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               for i in 0 ..< triedQuietsLen:
                 if triedQuiets[i] != m:
                   updateHistory(b, triedQuiets[i], malus)
-          storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply)
+          let evalToStore = if staticEval == Unknown: NoEval else: int16(staticEval)
+          storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply, evalToStore)
           return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
@@ -436,7 +441,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       for i in 0 ..< triedQuietsLen:
         if triedQuiets[i] != bestMove:
           updateHistory(b, triedQuiets[i], malus)
-  storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply)
+  let evalToStore2 = if staticEval == Unknown: NoEval else: int16(staticEval)
+  storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
   return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
