@@ -130,6 +130,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack,
+              cutnode: bool = false,
               skipNullMove: bool = false): int {.gcsafe.} =
   if ply >= MaxPly:
     return evaluate(b, nnueState)
@@ -224,7 +225,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     b.makeNullMove()
 
     let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,
-                             ply + 1, info, stack, skipNullMove = true)
+                             ply + 1, info, stack, cutnode = true, skipNullMove = true)
 
     b.unmakeNullMove()
     nnuePopNull(nnueState)
@@ -236,7 +237,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       if depth > NmpVerificationDepth:
         stack[ply + 1].staticEval = Unknown
         let verScore = negamax[false](b, depth - R - 1, beta - 1, beta,
-                               ply + 1, info, stack, skipNullMove = true)
+                               ply + 1, info, stack, cutnode = false, skipNullMove = true)
         if verScore >= beta:
           return beta
       else:
@@ -321,7 +322,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     if movesSearched == 0:
       # First move — full window
-      score = -negamax[pvNode](b, newDepth, -beta, -curAlpha, ply + 1, info, stack)
+      score = -negamax[pvNode](b, newDepth, -beta, -curAlpha, ply + 1, info, stack, cutnode = false)
     else:
       # Late Move Reductions
       var reduction = 0
@@ -347,6 +348,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
+        # Cut-node reduction
+        if cutnode and isQuiet:
+          inc reduction
+
         # Clamp reduction to valid range (after all adjustments)
         reduction = max(0, min(reduction, depth - 1))
 
@@ -354,15 +359,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                          else: newDepth
 
       # Null-window search
-      score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+      score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack, cutnode = not cutnode)
 
       # Re-search at full depth if LMR raised alpha
       if reduction > 0 and score > curAlpha:
-        score = -negamax[false](b, newDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack)
+        score = -negamax[false](b, newDepth, -curAlpha - 1, -curAlpha, ply + 1, info, stack, cutnode = not cutnode)
 
       # PVS re-search with full window
       if score > curAlpha and score < beta:
-        score = -negamax[true](b, newDepth, -beta, -curAlpha, ply + 1, info, stack)
+        score = -negamax[true](b, newDepth, -beta, -curAlpha, ply + 1, info, stack, cutnode = false)
 
     b.unmakeMove(m)
     nnuePop(nnueState)
@@ -533,7 +538,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
         info.pvLen[k] = 0
       stack[0].staticEval = Unknown
 
-      score = negamax[true](b, searchDepth, alpha, beta, 0, info, stack)
+      score = negamax[true](b, searchDepth, alpha, beta, 0, info, stack, cutnode = false)
 
       if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
         break
