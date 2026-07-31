@@ -159,7 +159,7 @@ proc selectBestThread*(): int =
 
   for i in 0 ..< gThreadPool.threadCount:
     let td = gThreadPool.threads[i]
-    if td.info.depthCompleted == 0 or td.info.pvTable[0][0] == NullMove: continue
+    if td.info.depthCompleted == 0 or td.info.completedMove == NullMove: continue
     if firstValid == -1: firstValid = i
     if td.info.score < minScore: minScore = td.info.score
 
@@ -168,14 +168,14 @@ proc selectBestThread*(): int =
   var bestThread = firstValid
   for i in 0 ..< gThreadPool.threadCount:
     let td = gThreadPool.threads[i]
-    if td.info.depthCompleted == 0 or td.info.pvTable[0][0] == NullMove: continue
+    if td.info.depthCompleted == 0 or td.info.completedMove == NullMove: continue
 
-    let mv      = td.info.pvTable[0][0]
+    let mv      = td.info.completedMove
     let moveIdx = (mv.fromSq.int * 64 + mv.toSq.int) and 4095
     let weight  = int64(td.info.score - minScore + 50) * int64(td.info.depthCompleted)
     votes[moveIdx] += weight
 
-    let bestMv  = gThreadPool.threads[bestThread].info.pvTable[0][0]
+    let bestMv  = gThreadPool.threads[bestThread].info.completedMove
     let bestIdx = (bestMv.fromSq.int * 64 + bestMv.toSq.int) and 4095
     if votes[moveIdx] > votes[bestIdx]:
       bestThread = i

@@ -146,19 +146,18 @@ proc handleGo(line: string, b: Board) =
   # Block until all helpers stop.
   waitHelpers()
 
-  let winner = selectBestThread()
+  let winner  = selectBestThread()
   let winTd   = gThreadPool.threads[winner]
-  let bestMove = winTd.info.pvTable[0][0]
+  let bestMove = winTd.info.completedMove
   let mv = if bestMove == NullMove: "0000" else: moveToAlgebraic(bestMove)
 
-  let t0Move = gThreadPool.threads[0].info.pvTable[0][0]
-  if winner != 0 or (bestMove != NullMove and bestMove != t0Move):
-    let elapsed = (getMonoTime() - startTime).inMilliseconds
-    let allNodes = totalNodes()
-    var winInfo = winTd.info
-    winInfo.silent = false
-    printInfo(winTd.info.depthCompleted, winTd.info.selDepth,
-              winTd.info.score, allNodes, elapsed, winInfo)
+  # Always print a final info line from the winner so the last PV matches bestmove.
+  let elapsed  = (getMonoTime() - startTime).inMilliseconds
+  let allNodes = totalNodes()
+  var finalInfo = winTd.info
+  finalInfo.silent = false
+  printInfo(winTd.info.depthCompleted, winTd.info.selDepth,
+            winTd.info.score, allNodes, elapsed, finalInfo)
 
   reply "bestmove " & mv
 
