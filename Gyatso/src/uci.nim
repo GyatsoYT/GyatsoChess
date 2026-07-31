@@ -155,8 +155,10 @@ proc handleGo(line: string, b: Board) =
   if winner != 0 or (bestMove != NullMove and bestMove != t0Move):
     let elapsed = (getMonoTime() - startTime).inMilliseconds
     let allNodes = totalNodes()
+    var winInfo = winTd.info
+    winInfo.silent = false
     printInfo(winTd.info.depthCompleted, winTd.info.selDepth,
-              winTd.info.score, allNodes, elapsed, winTd.info)
+              winTd.info.score, allNodes, elapsed, winInfo)
 
   reply "bestmove " & mv
 
