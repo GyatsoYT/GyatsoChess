@@ -156,6 +156,9 @@ proc handleGo(line: string, b: Board) =
   let allNodes = totalNodes()
   var finalInfo = winTd.info
   finalInfo.silent = false
+  finalInfo.pvLen[0] = winTd.info.completedPVLen
+  for i in 0 ..< winTd.info.completedPVLen:
+    finalInfo.pvTable[0][i] = winTd.info.completedPV[i]
   printInfo(winTd.info.depthCompleted, winTd.info.selDepth,
             winTd.info.score, allNodes, elapsed, finalInfo)
 

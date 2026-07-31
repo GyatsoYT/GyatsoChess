@@ -42,6 +42,8 @@ type SearchInfo* = object
   depthCompleted*: int
   score*:          int
   completedMove*:  Move
+  completedPVLen*: int
+  completedPV*:    array[MaxPly + 1, Move]
 
 proc shouldStop(info: var SearchInfo): bool {.inline.} =
   if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
@@ -600,6 +602,9 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
           info.depthCompleted = depth
           info.score          = bestScore
           info.completedMove  = bestMove
+          info.completedPVLen = info.pvLen[0]
+          for i in 0 ..< info.pvLen[0]:
+            info.completedPV[i] = info.pvTable[0][i]
       elif converged and not stopped:
         discard
 
