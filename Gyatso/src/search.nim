@@ -15,6 +15,8 @@ import see
 
 var nnueState* {.threadvar.}: NNUEState
 
+var gNodeAggregator*: proc(): uint64 {.nimcall, gcsafe.} = nil
+
 const Unknown* = high(int)
 type
   SearchStackEntry* = object
@@ -25,27 +27,31 @@ type
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
 type SearchInfo* = object
-  startTime*:   MonoTime
-  softLimitMs*: int64
-  hardLimitMs*: int64
-  depthLimit*:  int
-  nodeLimit*:  uint64
-  nodes*:      uint64
-  selDepth*:   int
-  stopFlag*:   ptr Atomic[bool]
-  pvTable*:    array[MaxPly + 1, array[MaxPly + 1, Move]]
-  pvLen*:      array[MaxPly + 1, int]
-  silent*:     bool
+  id*:            int
+  startTime*:     MonoTime
+  softLimitMs*:   int64
+  hardLimitMs*:   int64
+  depthLimit*:    int
+  nodeLimit*:     uint64
+  nodes*:         uint64
+  selDepth*:      int
+  stopFlag*:      ptr Atomic[bool]
+  pvTable*:       array[MaxPly + 1, array[MaxPly + 1, Move]]
+  pvLen*:         array[MaxPly + 1, int]
+  silent*:        bool
+  depthCompleted*: int
+  score*:          int
 
 proc shouldStop(info: var SearchInfo): bool {.inline.} =
   if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
     return true
-  if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
-    if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
-    return true
-  if (getMonoTime() - info.startTime).inMilliseconds >= info.hardLimitMs:
-    if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
-    return true
+  if info.id == 0:
+    if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
+      if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+      return true
+    if (getMonoTime() - info.startTime).inMilliseconds >= info.hardLimitMs:
+      if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+      return true
   return false
 
 const StopCheckFreq = 2047'u64
@@ -352,7 +358,17 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         if cutnode and isQuiet:
           inc reduction
 
-        # Clamp reduction to valid range (after all adjustments)
+        # Clamp reduction to valid range
+        if gSmpThreadCount > 1:
+          let phase = system.int((info.nodes + system.uint64(info.id) * 23) mod 100)
+          let jitter =
+            if   phase <  3: -2
+            elif phase <  8: -1
+            elif phase < 92:  0
+            elif phase < 97:  1
+            else:             2
+          reduction += jitter
+
         reduction = max(0, min(reduction, depth - 1))
 
       let reducedDepth = if reduction > 0: max(1, newDepth - reduction)
@@ -453,8 +469,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
   (getMonoTime() - info.startTime).inMilliseconds
 
-proc printInfo(depth, selDepth, score: int, nodes: uint64,
-               elapsed: int64, info: SearchInfo) =
+proc printInfo*(depth, selDepth, score: int, nodes: uint64,
+                elapsed: int64, info: SearchInfo) =
   if info.silent: return
   let nps = if elapsed > 0: nodes * 1000 div cast[uint64](elapsed) else: nodes
   var line = "info depth " & $depth &
@@ -478,10 +494,9 @@ proc printInfo(depth, selDepth, score: int, nodes: uint64,
   stdout.flushFile()
 
 proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
-  newTTGeneration()
-
-  # Age history table
-  ageHistory()
+  if info.id == 0:
+    newTTGeneration()
+    ageHistory()
 
   # Clear killer table for fresh search
   for i in 0 .. MaxPly:
@@ -581,15 +596,17 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
         if converged:
           completedBestMove  = bestMove
           completedBestScore = bestScore
+          info.depthCompleted = depth
+          info.score          = bestScore
       elif converged and not stopped:
         discard
 
     aspirationScore = if pvValid: score else: aspirationScore
 
     let elapsed = elapsedMs(info)
-    # Only print info when we have a valid PV to show
-    if pvValid and not stopped:
-      printInfo(depth, info.selDepth, bestScore, info.nodes, elapsed, info)
+    if info.id == 0 and pvValid and not stopped:
+      let displayNodes = if gNodeAggregator != nil: gNodeAggregator() else: info.nodes
+      printInfo(depth, info.selDepth, bestScore, displayNodes, elapsed, info)
 
       if bestMove == prevBestMove:
         inc bestmoveStability

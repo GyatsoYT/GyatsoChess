@@ -5,7 +5,7 @@ import history
 import see
 import movegen
 
-var killerMoves*: array[MaxPly + 1, array[2, Move]]
+var killerMoves* {.threadvar.}: array[MaxPly + 1, array[2, Move]]
 
 proc storeKiller*(ply: int, m: Move) {.inline.} =
   if killerMoves[ply][0] != m:

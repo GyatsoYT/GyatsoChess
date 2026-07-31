@@ -1,7 +1,6 @@
-import std/[strutils, atomics, monotimes, locks]
+import std/[strutils, atomics, monotimes, times]
 import coretypes
 import board
-import attacks
 import movegen
 import perft
 import timeman
@@ -9,89 +8,7 @@ import search
 import tt
 import history
 import bench
-
-type GoParams = object
-  b: Board
-  info: SearchInfo
-
-var
-  gStopFlag*: Atomic[bool]
-  gSearchLock*: Lock
-  gWorkCond*: Cond
-  gDoneCond*: Cond
-  gHasWork: bool = false
-  gSearchRunning*: bool = false
-  gQuitWorker: bool = false
-  gWorkerThread*: Thread[void]
-  gGoParams: GoParams
-
-proc workerLoop() {.thread.} =
-  initHistoryData()
-  initThreadAttacks()
-
-  while true:
-    acquire(gSearchLock)
-    while not gHasWork and not gQuitWorker:
-      wait(gWorkCond, gSearchLock)
-
-    if gQuitWorker:
-      release(gSearchLock)
-      freeHistoryData()
-      break
-
-    gHasWork = false
-    gSearchRunning = true
-    var params = gGoParams
-    release(gSearchLock)
-
-    var b = params.b
-    let (bestMove, _) = iterativeDeepening(b, params.info)
-
-    let mv = if bestMove == NullMove: "0000"
-             else: moveToAlgebraic(bestMove)
-    echo "bestmove " & mv
-    stdout.flushFile()
-
-    acquire(gSearchLock)
-    gSearchRunning = false
-    signal(gDoneCond)
-    release(gSearchLock)
-
-proc initWorker*() =
-  initLock(gSearchLock)
-  initCond(gWorkCond)
-  initCond(gDoneCond)
-  createThread(gWorkerThread, workerLoop)
-
-proc startSearch(b: Board, info: SearchInfo) =
-  gStopFlag.store(true, moRelease)
-  acquire(gSearchLock)
-  while gSearchRunning:
-    wait(gDoneCond, gSearchLock)
-  gStopFlag.store(false, moRelease)
-  gGoParams = GoParams(b: b, info: info)
-  gHasWork = true
-  signal(gWorkCond)
-  release(gSearchLock)
-
-proc stopSearch() =
-  gStopFlag.store(true, moRelease)
-
-proc joinSearch() =
-  acquire(gSearchLock)
-  while gSearchRunning:
-    wait(gDoneCond, gSearchLock)
-  release(gSearchLock)
-
-proc shutdownWorker() =
-  gStopFlag.store(true, moRelease)
-  acquire(gSearchLock)
-  while gSearchRunning:
-    wait(gDoneCond, gSearchLock)
-  gQuitWorker = true
-  signal(gWorkCond)
-  release(gSearchLock)
-  joinThread(gWorkerThread)
+import threads
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -127,7 +44,6 @@ proc handlePosition(line: string, b: var Board) =
       let toSq = parseSquare(tok[2..3])
       var ml: MoveList
       generateMoves(b, ml)
-      var found = false
       for i in 0 ..< ml.len:
         let m = ml.moves[i]
         if m.fromSq == fromSq and m.toSq == toSq:
@@ -142,7 +58,6 @@ proc handlePosition(line: string, b: var Board) =
               else: false)
             if not matches: continue
           b.makeMove(m)
-          found = true
           break
 
 proc handleGo(line: string, b: Board) =
@@ -193,11 +108,11 @@ proc handleGo(line: string, b: Board) =
     softMs = int64(high(int32))
     hardMs = int64(high(int32))
   elif movetime > 0:
-    softMs = int64(movetime)
+    softMs = int64(high(int32))
     hardMs = int64(movetime)
   else:
     let myTime = if b.stm == White: wtime else: btime
-    let myInc = if b.stm == White: winc else: binc
+    let myInc  = if b.stm == White: winc  else: binc
     if myTime > 0:
       let tInfo = calcTimeInfo(myTime, myInc, movestogo)
       softMs = tInfo.softLimit
@@ -206,18 +121,44 @@ proc handleGo(line: string, b: Board) =
       softMs = int64(high(int32))
       hardMs = int64(high(int32))
 
-  var info = SearchInfo(
-    startTime: getMonoTime(),
-    softLimitMs: softMs,
-    hardLimitMs: hardMs,
-    depthLimit: depth,
-    nodeLimit: 0,
-    nodes: 0,
-    selDepth: 0,
-    stopFlag: addr gStopFlag
-  )
+  let startTime = getMonoTime()
 
-  startSearch(b, info)
+  dispatchHelpers(b, startTime, softMs, hardMs, depth, 0)
+
+  var t0 = gThreadPool.threads[0]
+  t0.board          = b
+  t0.info.id        = 0
+  t0.info.startTime = startTime
+  t0.info.softLimitMs  = softMs
+  t0.info.hardLimitMs  = hardMs
+  t0.info.depthLimit   = depth
+  t0.info.nodeLimit    = 0
+  t0.info.nodes        = 0
+  t0.info.selDepth     = 0
+  t0.info.silent       = false
+  t0.info.stopFlag     = addr gThreadPool.stopFlag
+  t0.info.depthCompleted = 0
+  t0.info.score        = 0
+  zeroMem(addr t0.stack, sizeof(SearchStack))
+
+  discard iterativeDeepening(t0.board, t0.info)
+
+  # Block until all helpers stop.
+  waitHelpers()
+
+  let winner = selectBestThread()
+  let winTd   = gThreadPool.threads[winner]
+  let bestMove = winTd.info.pvTable[0][0]
+  let mv = if bestMove == NullMove: "0000" else: moveToAlgebraic(bestMove)
+
+  let t0Move = gThreadPool.threads[0].info.pvTable[0][0]
+  if winner != 0 or (bestMove != NullMove and bestMove != t0Move):
+    let elapsed = (getMonoTime() - startTime).inMilliseconds
+    let allNodes = totalNodes()
+    printInfo(winTd.info.depthCompleted, winTd.info.selDepth,
+              winTd.info.score, allNodes, elapsed, winTd.info)
+
+  reply "bestmove " & mv
 
 proc handlePerft(args: string, b: var Board) =
   let depthStr = args.strip()
@@ -234,9 +175,10 @@ proc handlePerft(args: string, b: var Board) =
     return
   perftBenchmark(b, depth)
 
-proc runUciLoop*() =
-  initWorker()
+proc stopSearch() =
+  gThreadPool.stopFlag.store(true, moRelease)
 
+proc runUciLoop*() =
   var currentBoard = parseFen(StartPos)
 
   while true:
@@ -247,14 +189,16 @@ proc runUciLoop*() =
 
     case line:
     of "quit":
-      shutdownWorker()
+      stopSearch()
+      destroyThreadPool()
+      freeSharedHistory()
       break
 
     of "uci":
       reply "id name Gyatso Rewrite"
       reply "id author Gyatso Neesham"
       reply "option name Hash type spin default 16 min 1 max 65536"
-      reply "option name Threads type spin default 1 min 1 max 1"
+      reply "option name Threads type spin default 1 min 1 max 512"
       reply "uciok"
 
     of "isready":
@@ -262,13 +206,12 @@ proc runUciLoop*() =
 
     of "ucinewgame":
       stopSearch()
-      joinSearch()
+      waitHelpers()
       clearAllHistory()
       currentBoard = parseFen(StartPos)
 
     of "stop":
       stopSearch()
-      joinSearch()
 
     of "d":
       reply currentBoard.toFen()
@@ -276,15 +219,21 @@ proc runUciLoop*() =
     else:
       if line.startsWith("setoption "):
         let parts = line.split()
-        var nameIdx = -1
+        var nameIdx  = -1
         var valueIdx = -1
         for idx in 0 ..< parts.len:
-          if parts[idx] == "name" and idx + 1 < parts.len: nameIdx = idx + 1
+          if parts[idx] == "name"  and idx + 1 < parts.len: nameIdx  = idx + 1
           if parts[idx] == "value" and idx + 1 < parts.len: valueIdx = idx + 1
         if nameIdx >= 0 and valueIdx >= 0:
           case parts[nameIdx].toLowerAscii():
           of "hash":
             try: initTT(parseInt(parts[valueIdx]))
+            except ValueError: discard
+          of "threads":
+            try:
+              let n = parseInt(parts[valueIdx])
+              if n >= 1 and n <= MaxSearchThreads:
+                initThreadPool(n)
             except ValueError: discard
           else: discard
 
@@ -302,12 +251,10 @@ proc runUciLoop*() =
 
       elif line == "bench":
         stopSearch()
-        joinSearch()
         runBench(DefaultBenchDepth)
 
       elif line.startsWith("bench "):
         stopSearch()
-        joinSearch()
         let depthStr = line[6..^1].strip()
         var d = DefaultBenchDepth
         try: d = parseInt(depthStr)

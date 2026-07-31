@@ -251,8 +251,11 @@ func `[]`*(ml: MoveList, idx: int): Move {.inline.} =
 
 # Constants
 const
-  MaxPly* = 128
-  MaxMoves* = 256
-  Infinity* = 32000
-  MateValue* = 30000
-  MateThreshold* = MateValue - MaxPly
+  MaxPly*           = 128
+  MaxMoves*         = 256
+  Infinity*         = 32000
+  MateValue*        = 30000
+  MateThreshold*    = MateValue - MaxPly
+  MaxSearchThreads* = 512
+
+var gSmpThreadCount*: int = 1

@@ -6,6 +6,7 @@ import tt
 import searchparams
 import history
 import bench
+import threads
 
 when isMainModule:
   initAttacks()
@@ -14,6 +15,7 @@ when isMainModule:
   initTables()
   initNNUE()
   initHistoryModule()
+  initThreadPool(1)
 
   let args = commandLineParams()
   if args.len >= 1 and args[0].toLowerAscii() == "bench":

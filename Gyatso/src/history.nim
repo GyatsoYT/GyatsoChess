@@ -7,48 +7,53 @@ type
   HistoryTable*        = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
 
-type HistoryData = object
+type HistoryData* = object
   historyTable*:         HistoryTable
   continuationHistory*:  ContinuationHistory
   continuationHistory2*: ContinuationHistory
 
-var gHistData {.threadvar.}: ptr HistoryData
+var gHistData* {.threadvar.}: ptr HistoryData
 
-const MaxSearchThreads* = 256
+var gSharedHistData*: ptr HistoryData = nil
 
-var gHistRegistry:     array[MaxSearchThreads, ptr HistoryData]
-var gHistRegistryLen:  int  = 0
-var gHistLock:         Lock
+var gHistRegistry:    array[MaxSearchThreads, ptr HistoryData]
+var gHistRegistryLen: int = 0
+var gHistLock:        Lock
 
 proc initHistoryModule*() =
   initLock(gHistLock)
+  gSharedHistData = cast[ptr HistoryData](allocShared0(sizeof(HistoryData)))
 
 proc initHistoryData*() =
-  gHistData = cast[ptr HistoryData](alloc0(sizeof(HistoryData)))
+  gHistData = gSharedHistData
   withLock(gHistLock):
-    assert gHistRegistryLen < MaxSearchThreads, "too many search threads"
-    gHistRegistry[gHistRegistryLen] = gHistData
-    inc gHistRegistryLen
-
-proc freeHistoryData*() =
-  if gHistData == nil: return
-  withLock(gHistLock):
+    var alreadyRegistered = false
     for i in 0 ..< gHistRegistryLen:
       if gHistRegistry[i] == gHistData:
-        gHistRegistry[i] = gHistRegistry[gHistRegistryLen - 1]
-        dec gHistRegistryLen
+        alreadyRegistered = true
         break
-  dealloc(gHistData)
+    if not alreadyRegistered:
+      assert gHistRegistryLen < MaxSearchThreads, "too many search threads"
+      gHistRegistry[gHistRegistryLen] = gHistData
+      inc gHistRegistryLen
+
+proc freeHistoryData*() =
   gHistData = nil
+
+proc freeSharedHistory*() =
+  if gSharedHistData != nil:
+    deallocShared(gSharedHistData)
+    gSharedHistData = nil
+    withLock(gHistLock):
+      gHistRegistryLen = 0
 
 proc clearHistory*() =
   if gHistData != nil:
     zeroMem(gHistData, sizeof(HistoryData))
 
 proc clearAllHistory*() =
-  withLock(gHistLock):
-    for i in 0 ..< gHistRegistryLen:
-      zeroMem(gHistRegistry[i], sizeof(HistoryData))
+  if gSharedHistData != nil:
+    zeroMem(gSharedHistData, sizeof(HistoryData))
 
 proc ageHistory*() =
   for col in 0..1:
