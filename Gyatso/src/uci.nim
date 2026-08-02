@@ -199,7 +199,7 @@ proc runUciLoop*() =
       break
 
     of "uci":
-      reply "id name Gyatso Rewrite"
+      reply "id name Gyatso 1.4.0"
       reply "id author Gyatso Neesham"
       reply "option name Hash type spin default 16 min 1 max 65536"
       reply "option name Threads type spin default 1 min 1 max 512"
