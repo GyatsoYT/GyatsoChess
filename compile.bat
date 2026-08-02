@@ -15,16 +15,18 @@ set /p choice="Select build type (1/2): "
 
 echo.
 echo Select Target Architecture Extensions:
-echo 1. Default (auto-detect: NEON on ARM64, scalar elsewhere)
-echo 2. AVX2   (x86-64 with AVX2 support)
-echo 3. AVX512 (x86-64 with AVX-512 support)
-echo 4. NEON   (explicit ARM64 / Apple Silicon)
-set /p arch_choice="Select extensions (1/2/3/4): "
+echo 1. Default   (auto-detect: NEON on ARM64, scalar elsewhere)
+echo 2. AVX2      (x86-64 AVX2 NNUE + Magic Bitboards)
+echo 3. AVX2+BMI2 (x86-64 AVX2 NNUE + BMI2 PEXT/PDEP Bitboards)
+echo 4. AVX512    (x86-64 AVX-512 NNUE + BMI2 Bitboards)
+echo 5. NEON      (explicit ARM64 / Apple Silicon)
+set /p arch_choice="Select extensions (1/2/3/4/5): "
 
 set AVX_FLAGS=
 if "%arch_choice%"=="2" set AVX_FLAGS=-d:avx2
-if "%arch_choice%"=="3" set AVX_FLAGS=-d:avx2 -d:avx512
-if "%arch_choice%"=="4" set AVX_FLAGS=-d:neon
+if "%arch_choice%"=="3" set AVX_FLAGS=-d:avx2 -d:bmi2
+if "%arch_choice%"=="4" set AVX_FLAGS=-d:avx2 -d:bmi2 -d:avx512
+if "%arch_choice%"=="5" set AVX_FLAGS=-d:neon
 
 if "%choice%"=="1" goto NORMAL
 if "%choice%"=="2" goto PGO
@@ -78,7 +80,11 @@ echo   send("perft 5") >> pgo_runner_temp.nim
 echo   wait("Nodes") >> pgo_runner_temp.nim
 echo   send("perft 6") >> pgo_runner_temp.nim
 echo   wait("Nodes") >> pgo_runner_temp.nim
-echo   send("go depth 18") >> pgo_runner_temp.nim
+echo   send("perft 7") >> pgo_runner_temp.nim
+echo   wait("Nodes") >> pgo_runner_temp.nim
+echo   send("bench") >> pgo_runner_temp.nim
+echo   wait("BENCHMARK RESULTS") >> pgo_runner_temp.nim
+echo   send("go movetime 30000") >> pgo_runner_temp.nim
 echo   wait("bestmove") >> pgo_runner_temp.nim
 echo   send("quit") >> pgo_runner_temp.nim
 echo   echo "[Runner] Waiting for engine to exit..." >> pgo_runner_temp.nim
@@ -97,7 +103,7 @@ echo [Stage 3] Running Workload...
 rem Set env var to ensure profile is written clearly (optional but safer)
 set LLVM_PROFILE_FILE=default_%%m.profraw
 rem Compile and run the runner
-nim c -r -d:danger --passC:"-O3" pgo_runner_temp.nim
+nim c -r --cc:clang -d:danger --passC:"-O3" pgo_runner_temp.nim
 if errorlevel 1 goto ERROR
 
 echo.

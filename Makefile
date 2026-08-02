@@ -1,4 +1,4 @@
-﻿EXE      ?= Gyatso
+EXE      ?= Gyatso
 EVALFILE ?= Gyatso/Net/GyatsoNet512HM.bin
 SRC       = Gyatso/src/main.nim
 NIM      ?= nim

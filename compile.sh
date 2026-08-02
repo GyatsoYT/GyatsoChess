@@ -13,19 +13,22 @@ read choice
 
 echo
 echo "Select Target Architecture Extensions:"
-echo "1. Default (auto-detect: NEON on ARM64, scalar elsewhere)"
-echo "2. AVX2   (x86-64 with AVX2 support)"
-echo "3. AVX512 (x86-64 with AVX-512 support)"
-echo "4. NEON   (explicit ARM64 / Apple Silicon)"
-printf "Select extensions (1/2/3/4): "
+echo "1. Default   (auto-detect: NEON on ARM64, scalar elsewhere)"
+echo "2. AVX2      (x86-64 AVX2 NNUE + Magic Bitboards)"
+echo "3. AVX2+BMI2 (x86-64 AVX2 NNUE + BMI2 PEXT/PDEP Bitboards)"
+echo "4. AVX512    (x86-64 AVX-512 NNUE + BMI2 Bitboards)"
+echo "5. NEON      (explicit ARM64 / Apple Silicon)"
+printf "Select extensions (1/2/3/4/5): "
 read arch_choice
 
 AVX_FLAGS=""
 if [ "$arch_choice" = "2" ]; then
     AVX_FLAGS="-d:avx2"
 elif [ "$arch_choice" = "3" ]; then
-    AVX_FLAGS="-d:avx2 -d:avx512"
+    AVX_FLAGS="-d:avx2 -d:bmi2"
 elif [ "$arch_choice" = "4" ]; then
+    AVX_FLAGS="-d:avx2 -d:bmi2 -d:avx512"
+elif [ "$arch_choice" = "5" ]; then
     AVX_FLAGS="-d:neon"
 fi
 
@@ -78,7 +81,11 @@ proc main() =
   wait("Nodes")
   send("perft 6")
   wait("Nodes")
-  send("go depth 18")
+  send("perft 7")
+  wait("Nodes")
+  send("bench")
+  wait("BENCHMARK RESULTS")
+  send("go movetime 30000")
   wait("bestmove")
   send("quit")
   echo "[Runner] Waiting for engine to exit..."
@@ -97,7 +104,7 @@ EOF
     echo
     echo "[Stage 3] Running Workload..."
     # Compile and run the runner
-    nim c -r -d:danger --passC:"-O3" pgo_runner_temp.nim
+    nim c --cc:clang -r -d:danger --passC:"-O3" pgo_runner_temp.nim
     if [ $? -ne 0 ]; then
         echo "Workload failed!"
         exit 1
