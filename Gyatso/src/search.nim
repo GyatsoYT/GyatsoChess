@@ -33,6 +33,7 @@ type SearchInfo* = object
   hardLimitMs*:   int64
   depthLimit*:    int
   nodeLimit*:     uint64
+  softNodeLimit*: uint64
   nodes*:         uint64
   selDepth*:      int
   stopFlag*:      ptr Atomic[bool]
@@ -626,6 +627,10 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
       let adjustedSoftLimit = info.softLimitMs * int64(stabilityFactor) div 100
 
       if elapsed >= adjustedSoftLimit:
+        if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+        break
+
+      if info.softNodeLimit > 0 and info.nodes >= info.softNodeLimit:
         if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
         break
 
