@@ -172,6 +172,17 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     elif ttBound == BoundAlpha and ttScore <= alpha:
       return ttScore
     elif ttBound == BoundBeta and ttScore >= beta:
+      # TT-Hit History Reward
+      if ttMove != NullMove and isQuietMove(b, ttMove):
+        let ttBonus = getBonus(depth) div 2
+        updateHistory(b, ttMove, ttBonus)
+        if ply > 0:
+          let ttPrevPiece = stack[ply - 1].piece
+          let ttPrevToSq  = stack[ply - 1].move.toSq.int
+          if stack[ply - 1].move != NullMove:
+            let ttCurPiece = ord(b.mailbox[ttMove.fromSq.int])
+            let ttCurToSq  = ttMove.toSq.int
+            updateContHist(ttPrevPiece, ttPrevToSq, ttCurPiece, ttCurToSq, ttBonus)
       return ttScore
 
   let inCheck = not b.checkers.isEmpty
