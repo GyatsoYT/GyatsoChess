@@ -13,7 +13,7 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HM.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HMReloaded.bin")
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
