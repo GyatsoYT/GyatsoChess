@@ -157,6 +157,14 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     if b.isRepetition() or b.isFiftyMove():
       return 0
 
+  # Mate Distance Pruning
+  var alpha = alpha
+  var beta  = beta
+  alpha = max(alpha, -MateValue + ply)
+  beta  = min(beta,   MateValue - ply - 1)
+  if alpha >= beta:
+    return alpha
+
   # Probe TT
   var ttMove  = NullMove
   var ttScore = 0
