@@ -91,7 +91,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   # Draw detection in qsearch
   if b.isRepetition() or b.isFiftyMove():
-    return 0
+    return system.int((info.nodes mod 5)) - 2
 
   let standPat = evaluate(b, nnueState)
   var bestScore = standPat
@@ -155,7 +155,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   if ply > 0:
     if b.isRepetition() or b.isFiftyMove():
-      return 0
+
+      return system.int((info.nodes mod 5)) - 2
 
   # Mate Distance Pruning
   var alpha = alpha
