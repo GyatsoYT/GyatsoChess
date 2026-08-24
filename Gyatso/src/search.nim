@@ -93,10 +93,28 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   if b.isRepetition() or b.isFiftyMove():
     return system.int((info.nodes mod 5)) - 2
 
+  # Probe TT — use depth=0 for qsearch entries
+  var ttMove  = NullMove
+  var ttScore = 0
+  var ttDepth = 0
+  var ttBound = 0'u8
+  var ttEval  = NoEval
+  let hashVal = cast[system.uint64](b.hash)
+  let hasTT   = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval)
+
+  if hasTT:
+    if ttBound == BoundExact:
+      return ttScore
+    elif ttBound == BoundAlpha and ttScore <= alpha:
+      return ttScore
+    elif ttBound == BoundBeta and ttScore >= beta:
+      return ttScore
+
   let standPat = evaluate(b, nnueState)
   var bestScore = standPat
 
   if standPat >= beta:
+    storeTT(hashVal, NullMove, standPat.int16, 0'i8, BoundBeta, ply, standPat.int16)
     return standPat
 
   var curAlpha = max(alpha, standPat)
@@ -106,9 +124,11 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let prevToSq  = if ply > 0: stack[ply - 1].move.toSq.int else: -1
 
   var picker = initMovePicker(
-    addr b, NullMove, ply, prevPiece, prevToSq,
+    addr b, ttMove, ply, prevPiece, prevToSq,
     -1, -1,
     inCheck = inCheckQ, isQSearch = true)
+
+  var bestMove = NullMove
 
   while true:
     let m = picker.next()
@@ -130,11 +150,15 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
     if score > bestScore:
       bestScore = score
+      bestMove  = m
       if score >= beta:
+        storeTT(hashVal, bestMove, bestScore.int16, 0'i8, BoundBeta, ply, standPat.int16)
         return bestScore
       if score > curAlpha:
         curAlpha = score
 
+  let bound = if bestScore > alpha: BoundExact else: BoundAlpha
+  storeTT(hashVal, bestMove, bestScore.int16, 0'i8, bound, ply, standPat.int16)
   return bestScore
 
 proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
