@@ -32,3 +32,22 @@ proc nnuePopNull*(state: var NNUEState) {.inline.} =
 
 proc verifyEval*(b: Board, state: var NNUEState) {.inline.} =
   verifyNNUE(addr gNetwork, b, state)
+
+proc getBucketScore*(b: Board, bucket: int, state: var NNUEState): int {.inline.} =
+  ## Returns the evaluation for a specific output bucket.
+  let ply = state.current
+  if b.stm == White:
+    var wAcc = state.white[ply]
+    var bAcc = state.black[ply]
+    result = forwardWithBucket(addr gNetwork, bucket, wAcc, bAcc)
+  else:
+    var bAcc = state.black[ply]
+    var wAcc = state.white[ply]
+    result = forwardWithBucket(addr gNetwork, bucket, bAcc, wAcc)
+  # Always return from white's perspective for display
+  if b.stm == Black:
+    result = -result
+
+proc getActiveBucket*(b: Board): int {.inline.} =
+  ## Returns the output bucket index that will be used for this position.
+  outputBucket(b)

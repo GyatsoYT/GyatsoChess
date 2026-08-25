@@ -1,4 +1,4 @@
-import std/[strutils, atomics, monotimes, times]
+import std/[strutils, atomics, monotimes, times, strformat]
 import coretypes
 import board
 import movegen
@@ -9,6 +9,8 @@ import tt
 import history
 import bench
 import threads
+import nnuetypes
+import evaluate
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -179,6 +181,40 @@ proc handlePerft(args: string, b: var Board) =
     return
   perftBenchmark(b, depth)
 
+proc handleEval(b: Board) =
+  var state: NNUEState
+  refreshNNUE(b, state)
+
+  let activeBucket = getActiveBucket(b)
+  let stmStr = if b.stm == White: "White" else: "Black"
+
+  reply "info string NNUE evaluation using GyatsoNet512HMOB.bin (768x512x2->8ob)"
+  reply ""
+  reply fmt" NNUE network contributions ({stmStr} to move)"
+  reply "+------------+------------+------------+------------+"
+  reply "|   Bucket   |  Material  | Positional |   Total    |"
+  reply "|            |   (PSQT)   |  (Layers)  |            |"
+  reply "+------------+------------+------------+------------+"
+
+  for bucket in 0..<NUM_OUT_BUCKETS:
+    let rawScore = getBucketScore(b, bucket, state)
+    let marker   = if bucket == activeBucket: " <-- this bucket is used" else: ""
+    let sign     = if rawScore >= 0: "+" else: "-"
+    let absScore = abs(rawScore)
+    let valStr   = fmt"{sign}  {absScore div 100}.{absScore mod 100:02}"
+    reply fmt"|  {bucket:<10}|     0.00   |  {valStr}   |  {valStr}   |{marker}"
+
+  reply "+------------+------------+------------+------------+"
+  reply ""
+
+  let finalScore = evaluate(b, state)
+  let whiteScore = if b.stm == White: finalScore else: -finalScore
+  let sign  = if whiteScore >= 0: "+" else: "-"
+  let absV  = abs(whiteScore)
+  reply fmt"NNUE evaluation        {sign}{absV div 100}.{absV mod 100:02} (white side)"
+  reply fmt"Final evaluation       {sign}{absV div 100}.{absV mod 100:02} (white side)"
+
+
 proc stopSearch() =
   gThreadPool.stopFlag.store(true, moRelease)
 
@@ -252,6 +288,9 @@ proc runUciLoop*() =
 
       elif line == "perft":
         reply "Usage: perft <depth>"
+
+      elif line == "eval":
+        handleEval(currentBoard)
 
       elif line == "bench":
         stopSearch()

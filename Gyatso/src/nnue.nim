@@ -13,7 +13,14 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HMReloaded.bin")
+func outputBucket*(board: Board): int {.inline.} =
+    const DIVISOR = (31 + NUM_OUT_BUCKETS - 1) div NUM_OUT_BUCKETS
+    let totalPieces = board.occupied.popcount()
+    let nonKing = max(0, totalPieces - 2)
+    let clamped = min(nonKing, 30)
+    result = min(clamped div DIVISOR, NUM_OUT_BUCKETS - 1)
+
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HMOB.bin")
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
@@ -29,16 +36,20 @@ proc loadNetworkFromStream*(s: Stream): NNUENetwork =
         littleEndian16(addr val, addr raw)
         result.ftBias[i] = val
 
-    for i in 0..<(HL * 2):
+    for bucket in 0..<NUM_OUT_BUCKETS:
+        for i in 0..<(HL * 2):
+            var raw = s.readInt16()
+            var val: int16
+            littleEndian16(addr val, addr raw)
+            result.l1Weight[bucket][i] = val
+
+    for bucket in 0..<NUM_OUT_BUCKETS:
         var raw = s.readInt16()
         var val: int16
         littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
+        result.l1Bias[bucket] = int32(val)
 
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    discard s.readStr(48)
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -162,7 +173,6 @@ proc apply*(q: var UpdateQueue, net: ptr NNUENetwork,
     q.reset()
 
 proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
-    ## Full recompute of accumulator from board state
     let perspKingSq = board.kingSquare(perspective)
     net.initAccumulator(acc)
     var occ = board.occupied
@@ -182,56 +192,45 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.whiteNeedsRefresh[0] = false
     state.blackNeedsRefresh[0] = false
 
-proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+proc forwardWithBucket*(net: ptr NNUENetwork, bucket: int,
+                        stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+    ## SCReLU forward pass for an explicit output bucket.
     when not defined(simd):
         var output: int32 = 0
-
-        # STM half
         for i in 0..<HL:
-            let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-
-        # NSTM half
+            let clipped = clamp(stmAcc.data[i].int32, 0'i32, QA.int32)
+            output += clipped * clipped * net.l1Weight[bucket][i].int32
         for i in 0..<HL:
-            let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
-
+            let clipped = clamp(nstmAcc.data[i].int32, 0'i32, QA.int32)
+            output += clipped * clipped * net.l1Weight[bucket][HL + i].int32
+        return system.int((output div QA + net.l1Bias[bucket]) * EVAL_SCALE div (QA * QB))
     else:
         var
-            sum = vecZero32()
-            qa = vecSetOne16(QA.int16)
+            sum  = vecZero32()
+            qa   = vecSetOne16(QA.int16)
             zero = vecZero16()
-
-        # STM half: weight indices 0..<HL
         var i = 0
         while i < HL:
-            let inp = vecLoad(addr stmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[i])
+            let inp     = vecLoad(addr stmAcc.data[i])
+            let wt      = vecLoad(addr net.l1Weight[bucket][i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
+            sum = vecAdd32(sum, vecMadd16(vecMullo16(clipped, wt), clipped))
             i += CHUNK_SIZE
-
-        # NSTM half: weight indices HL..<HL*2
         i = 0
         while i < HL:
-            let inp = vecLoad(addr nstmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[HL + i])
+            let inp     = vecLoad(addr nstmAcc.data[i])
+            let wt      = vecLoad(addr net.l1Weight[bucket][HL + i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
+            sum = vecAdd32(sum, vecMadd16(vecMullo16(clipped, wt), clipped))
             i += CHUNK_SIZE
+        return system.int((vecReduceAdd32(sum) div QA + net.l1Bias[bucket]) * EVAL_SCALE div (QA * QB))
 
-        let rawSum = vecReduceAdd32(sum)
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+proc forward*(net: ptr NNUENetwork, board: Board,
+              stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+    ## SCReLU forward with automatic bucket selection by piece count.
+    forwardWithBucket(net, outputBucket(board), stmAcc, nstmAcc)
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
-    ## Lazy refresh: recompute accumulator if king crossed mirror boundary
     let ply = state.current
     if state.whiteNeedsRefresh[ply]:
         net.refreshAccumulator(board, state.white[ply], White)
@@ -241,30 +240,27 @@ proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUE
         state.blackNeedsRefresh[ply] = false
 
 proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
-    # Ensure accumulators are valid before evaluation
     ensureAccumulatorReady(net, board, state)
     let ply = state.current
     if board.stm == White:
-        result = forward(net, state.white[ply], state.black[ply])
+        result = forward(net, board, state.white[ply], state.black[ply])
     else:
-        result = forward(net, state.black[ply], state.white[ply])
+        result = forward(net, board, state.black[ply], state.white[ply])
 
-    # Clamp to safe range
     const MaxEval = MateValue - MaxPly - 100
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
 proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
                          perspective: Color, state: var NNUEState) =
-    let us = board.stm
+    let us   = board.stm
     let them = us.opposite()
     let fromSq = m.fromSq
-    let toSq = m.toSq
+    let toSq   = m.toSq
     let movingPiece = board.mailbox[fromSq.int]
-    let movingPt = movingPiece.pieceType
+    let movingPt    = movingPiece.pieceType
     let movingColor = movingPiece.color
 
-    # Get perspective king square for horizontal mirroring
     let perspKingSq = board.kingSquare(perspective)
 
     var queue: UpdateQueue
@@ -274,24 +270,23 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
     if m.isCastling:
         let kingFrom = fromSq
-        let kingTo = toSq
+        let kingTo   = toSq
 
         var rookFrom, rookTo: Square
-        # Kingside: king lands on g-file (file index 6)
         if toSq.file == 6:
             if us == White:
-                rookFrom = makeSquare(0, 7)  # H1
-                rookTo   = makeSquare(0, 5)  # F1
+                rookFrom = makeSquare(0, 7)
+                rookTo   = makeSquare(0, 5)
             else:
-                rookFrom = makeSquare(7, 7)  # H8
-                rookTo   = makeSquare(7, 5)  # F8
+                rookFrom = makeSquare(7, 7)
+                rookTo   = makeSquare(7, 5)
         else:
             if us == White:
-                rookFrom = makeSquare(0, 0)  # A1
-                rookTo   = makeSquare(0, 3)  # D1
+                rookFrom = makeSquare(0, 0)
+                rookTo   = makeSquare(0, 3)
             else:
-                rookFrom = makeSquare(7, 0)  # A8
-                rookTo   = makeSquare(7, 3)  # D8
+                rookFrom = makeSquare(7, 0)
+                rookTo   = makeSquare(7, 3)
 
         let kingAddIdx = featureIndex(perspective, us, King, kingTo, perspKingSq)
         let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
@@ -302,7 +297,7 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
         queue.queueAddSub(rookAddIdx, rookSubIdx)
 
     elif m.isEnPassant:
-        let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
+        let capSq  = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
         let addIdx = featureIndex(perspective, us, Pawn, toSq, perspKingSq)
         let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
         let subIdx2 = featureIndex(perspective, them, Pawn, capSq, perspKingSq)
@@ -340,6 +335,7 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
             let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
             let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
             queue.queueAddSub(addIdx, subIdx)
+
     if perspective == White:
         queue.apply(net, state.white[ply], state.white[ply + 1])
     else:
@@ -348,7 +344,7 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                       state: var NNUEState) =
     let ply = state.current
-    let us = board.stm
+    let us  = board.stm
     let movingPt = board.mailbox[m.fromSq.int].pieceType
 
     ensureAccumulatorReady(net, board, state)
@@ -366,7 +362,6 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                     state.blackNeedsRefresh[ply + 1] = true
                 continue
 
-        # Normal incremental update
         computeUpdateQueue(net, board, m, perspective, state)
         if perspective == White:
             state.whiteNeedsRefresh[ply + 1] = false

@@ -1,12 +1,13 @@
 import coretypes
 
 const
-  ALIGNMENT* = 64
-  FT_IN*     = 768   
-  HL*        = 512  
-  QA*        = 255   
-  QB*        = 64    
-  EVAL_SCALE* = 400
+  ALIGNMENT*       = 64
+  FT_IN*           = 768
+  HL*              = 512
+  QA*              = 255
+  QB*              = 64
+  EVAL_SCALE*      = 400
+  NUM_OUT_BUCKETS* = 8
 
 type
   Accumulator* = object
@@ -15,8 +16,8 @@ type
   NNUENetwork* = object
     ftWeight* {.align(ALIGNMENT).}: array[FT_IN, array[HL, int16]]
     ftBias*   {.align(ALIGNMENT).}: array[HL, int16]
-    l1Weight* {.align(ALIGNMENT).}: array[HL * 2, int16]
-    l1Bias*:  int32
+    l1Weight* {.align(ALIGNMENT).}: array[NUM_OUT_BUCKETS, array[HL * 2, int16]]
+    l1Bias*:  array[NUM_OUT_BUCKETS, int32]
 
   NNUEState* = object
     current*: int
