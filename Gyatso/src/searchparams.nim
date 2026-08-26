@@ -25,6 +25,11 @@ const
   AspWideDen* = 2
   AspMaxRetries* = 6
   AspFailHighMaxReduction* = 2
+  # ProbCut
+  ProbCutMinDepth* = 5
+  ProbCutReduction* = 3
+  ProbCutMargin* = 180
+  ProbCutLerpWeight* = 0.27
   TmTimeDiv* = 20
   TmIncNum* = 3
   TmIncDen* = 4

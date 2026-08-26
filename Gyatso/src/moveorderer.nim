@@ -38,7 +38,7 @@ const mvvlvaAttackerPenalty: array[PieceType, int] = [
 func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
   mvvlvaVictimBonus[victimPt] * 8 - mvvlvaAttackerPenalty[attackerPt]
 
-proc pickBest(moves: var array[256, Move],
+proc pickBest*(moves: var array[256, Move],
               scores: var array[256, int32],
               cur, count: int): Move {.inline.} =
   var bestPacked = system.uint64(0)
@@ -103,7 +103,7 @@ func isTTMoveLegal(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant and b.epSquare != m.toSq: return false
   true
 
-proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
+proc scoreNoisy*(b: Board, m: Move): int32 {.inline.} =
   let isPromo = m.isPromotion
   let isCap   = isCapture(b, m)
 

@@ -259,3 +259,7 @@ const
   MaxSearchThreads* = 512
 
 var gSmpThreadCount*: int = 1
+
+func lerp*(a, b: int, t: float): int {.inline, noSideEffect.} =
+  int(float(a) + t * float(b - a))
+

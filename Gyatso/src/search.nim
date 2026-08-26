@@ -266,6 +266,53 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
+  # ProbCut
+  if cutnode and
+     depth >= ProbCutMinDepth and
+     not inCheck and
+     abs(beta) < MateThreshold:
+    let probCutBeta = beta + ProbCutMargin
+    let probCutDepth = depth - ProbCutReduction
+
+    var ml: MoveList
+    generateCaptures(b, ml)
+    var noisyScores: array[256, int32]
+    for i in 0 ..< ml.len:
+      noisyScores[i] = scoreNoisy(b, ml.moves[i])
+
+    for i in 0 ..< ml.len:
+      let m = pickBest(ml.moves, noisyScores, i, ml.len)
+      if not see(b, m, 0):
+        continue
+
+      stack[ply].move = m
+      stack[ply].piece = ord(b.mailbox[m.fromSq.int])
+      stack[ply + 1].staticEval = Unknown
+
+      nnuePush(b, m, nnueState)
+      b.makeMove(m)
+      prefetchTT(cast[system.uint64](b.hash))
+
+      # Try noisy moves at reduced depth against beta + margin
+      var score = -qSearch(b, -probCutBeta, -probCutBeta + 1, ply + 1, info, stack)
+
+      # Verify with shallow full search on fail-high
+      if score >= probCutBeta and probCutDepth > 0:
+        score = -negamax[false](b, probCutDepth - 1, -probCutBeta, -probCutBeta + 1,
+                                ply + 1, info, stack, cutnode = not cutnode)
+
+      b.unmakeMove(m)
+      nnuePop(nnueState)
+
+      if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+        return 0
+
+      if score >= probCutBeta:
+        let softScore = lerp(score, beta, ProbCutLerpWeight)
+        let evalToStore = if staticEval == Unknown: NoEval else: int16(staticEval)
+        storeTT(hashVal, m, softScore.int16, probCutDepth.int8, BoundBeta, ply, evalToStore)
+        return softScore
+
   let prevPiece  = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq   = if ply > 0: stack[ply - 1].move.toSq.int else: -1
   let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply - 2].piece else: -1
