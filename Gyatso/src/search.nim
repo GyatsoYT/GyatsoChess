@@ -23,6 +23,7 @@ type
     move*:       Move
     piece*:      int
     staticEval*: int
+    ttPv*:       bool
 
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
@@ -172,8 +173,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var ttDepth = 0
   var ttBound = 0'u8
   var ttEval  = NoEval
+  var ttPvHit = false
   let hashVal = cast[system.uint64](b.hash)
-  let hasTT   = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval)
+  let hasTT   = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval, ttPvHit)
+
+  stack[ply].ttPv = stack[ply].ttPv or ttPvHit or pvNode
 
   if hasTT and ttDepth >= depth and ply > 0:
     if ttBound == BoundExact:
@@ -220,7 +224,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       improving = true  # no prior data — assume improving
 
   # Reverse Futility Pruning (RFP)
-  if not pvNode and
+  if not stack[ply].ttPv and
      not inCheck and
      ply > 0 and
      depth <= RfpDepth and
@@ -324,6 +328,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].move  = m
     stack[ply].piece  = ord(b.mailbox[m.fromSq.int])
     stack[ply + 1].staticEval = Unknown
+    stack[ply + 1].ttPv       = false
 
     # Pre-compute history values before makeMove
     let isQuiet      = isQuietMove(b, m) and not m.isPromotion()
@@ -374,6 +379,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         # Cut-node reduction
         if cutnode and isQuiet:
           inc reduction
+
+        # TT-PV reduction: reduce less when this position was previously on a PV
+        if stack[ply].ttPv:
+          dec reduction
 
         # Clamp reduction to valid range
         if gSmpThreadCount > 1:
@@ -444,7 +453,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 if triedQuiets[i] != m:
                   updateHistory(b, triedQuiets[i], malus)
           let evalToStore = if staticEval == Unknown: NoEval else: int16(staticEval)
-          storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply, evalToStore)
+          storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply, evalToStore, stack[ply].ttPv)
           return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
@@ -480,7 +489,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         if triedQuiets[i] != bestMove:
           updateHistory(b, triedQuiets[i], malus)
   let evalToStore2 = if staticEval == Unknown: NoEval else: int16(staticEval)
-  storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
+  storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2, stack[ply].ttPv)
   return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
@@ -535,6 +544,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     stack[i].move       = NullMove
     stack[i].piece      = 0
     stack[i].staticEval = Unknown
+    stack[i].ttPv       = false
 
   # aspirationScore seeds the windows for depth >= AspMinDepth
   var aspirationScore = bestScore
