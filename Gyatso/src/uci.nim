@@ -1,4 +1,4 @@
-import std/[strutils, atomics, monotimes, times]
+import std/[strutils, atomics, monotimes, times, strformat]
 import coretypes
 import board
 import movegen
@@ -9,6 +9,8 @@ import tt
 import history
 import bench
 import threads
+import evaluate
+import nnuetypes
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -219,6 +221,40 @@ proc runUciLoop*() =
 
     of "d":
       reply currentBoard.toFen()
+
+    of "eval":
+      var state: NNUEState
+      refreshNNUE(currentBoard, state)
+      let ply = state.current
+      var stmAcc  = if currentBoard.stm == White: state.white[ply] else: state.black[ply]
+      var nstmAcc = if currentBoard.stm == White: state.black[ply] else: state.white[ply]
+      let allEvals  = nnueAllBuckets(currentBoard, stmAcc, nstmAcc)
+      let activeBucket = nnueBucket(currentBoard)
+
+      let stmStr = if currentBoard.stm == White: "White" else: "Black"
+      reply "\n NNUE network contributions (" & stmStr & " to move)"
+      reply "+------------+------------+------------+------------+"
+      reply "|   Bucket   |  Material  | Positional |   Total    |"
+      reply "|            |   (PSQT)   |  (Layers)  |            |"
+      reply "+------------+------------+------------+------------+"
+      for b in 0..<NUM_OUTPUT_BUCKETS:
+        let rawCp = allEvals[b]
+        let pawns = rawCp.float64 / 100.0
+        let sign  = if rawCp >= 0: "+" else: "-"
+        let absPawns = abs(pawns)
+        let marker = if b == activeBucket: " <-- this bucket is used" else: ""
+        let cell = fmt"{sign}  {absPawns:5.2f}"
+        reply fmt"|  {b:<9} |     0.00   |  {cell}   |  {cell}   |{marker}"
+      reply "+------------+------------+------------+------------+"
+
+      let finalCp  = allEvals[activeBucket]
+      let finalPaw = finalCp.float64 / 100.0
+      let finalSign = if finalCp >= 0: "+" else: "-"
+      let sideStr = if currentBoard.stm == White: "white side" else: "black side"
+      reply ""
+      reply fmt"NNUE evaluation        {finalSign}{abs(finalPaw):.2f} ({sideStr})"
+      reply fmt"Final evaluation       {finalSign}{abs(finalPaw):.2f} ({sideStr}) [with output buckets, active={activeBucket}]"
+      reply ""
 
     else:
       if line.startsWith("setoption "):

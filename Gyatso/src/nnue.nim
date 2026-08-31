@@ -13,7 +13,7 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HMReloadedV2.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet512HMOB.bin")
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
@@ -29,16 +29,18 @@ proc loadNetworkFromStream*(s: Stream): NNUENetwork =
         littleEndian16(addr val, addr raw)
         result.ftBias[i] = val
 
-    for i in 0..<(HL * 2):
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
+    for b in 0..<NUM_OUTPUT_BUCKETS:
+        for neuron in 0..<(HL * 2):
+            var raw = s.readInt16()
+            var val: int16
+            littleEndian16(addr val, addr raw)
+            result.l1Weight[b][neuron] = val
 
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    for b in 0..<NUM_OUTPUT_BUCKETS:
+        var rawBias = s.readInt16()
+        var val16: int16
+        littleEndian16(addr val16, addr rawBias)
+        result.l1Bias[b] = val16
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -182,24 +184,34 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.whiteNeedsRefresh[0] = false
     state.blackNeedsRefresh[0] = false
 
-proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+func outputBucket*(board: Board): int {.inline.} =
+    var count = 0
+    var occ = board.occupied
+    while occ != Bitboard(0):
+        let sq = poplsb(occ)
+        let piece = board.mailbox[sq.int]
+        if piece != NoPiece and piece.pieceType != King:
+            inc count
+    result = min(count * NUM_OUTPUT_BUCKETS div 32, NUM_OUTPUT_BUCKETS - 1)
+
+proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator, bucket: int): int {.inline.} =
     when not defined(simd):
         var output: int32 = 0
 
         # STM half
         for i in 0..<HL:
             let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
+            let weight = net.l1Weight[bucket][i].int32
             let clipped = clamp(input, 0, QA.int32)
             output += (clipped * weight).int16 * clipped
 
         # NSTM half
         for i in 0..<HL:
             let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
+            let weight = net.l1Weight[bucket][HL + i].int32
             let clipped = clamp(input, 0, QA.int32)
             output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+        return system.int((output div QA + net.l1Bias[bucket].int32) * EVAL_SCALE div (QA * QB))
 
     else:
         var
@@ -211,7 +223,7 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         var i = 0
         while i < HL:
             let inp = vecLoad(addr stmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[i])
+            let wt = vecLoad(addr net.l1Weight[bucket][i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
             let product = vecMadd16(vecMullo16(clipped, wt), clipped)
             sum = vecAdd32(sum, product)
@@ -221,14 +233,18 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         i = 0
         while i < HL:
             let inp = vecLoad(addr nstmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[HL + i])
+            let wt = vecLoad(addr net.l1Weight[bucket][HL + i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
             let product = vecMadd16(vecMullo16(clipped, wt), clipped)
             sum = vecAdd32(sum, product)
             i += CHUNK_SIZE
 
         let rawSum = vecReduceAdd32(sum)
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+        return system.int((rawSum div QA + net.l1Bias[bucket].int32) * EVAL_SCALE div (QA * QB))
+
+proc forwardAllBuckets*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): array[NUM_OUTPUT_BUCKETS, int] =
+    for b in 0..<NUM_OUTPUT_BUCKETS:
+        result[b] = forward(net, stmAcc, nstmAcc, b)
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
     ## Lazy refresh: recompute accumulator if king crossed mirror boundary
@@ -244,10 +260,11 @@ proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): in
     # Ensure accumulators are valid before evaluation
     ensureAccumulatorReady(net, board, state)
     let ply = state.current
+    let bucket = outputBucket(board)
     if board.stm == White:
-        result = forward(net, state.white[ply], state.black[ply])
+        result = forward(net, state.white[ply], state.black[ply], bucket)
     else:
-        result = forward(net, state.black[ply], state.white[ply])
+        result = forward(net, state.black[ply], state.white[ply], bucket)
 
     # Clamp to safe range
     const MaxEval = MateValue - MaxPly - 100

@@ -32,3 +32,9 @@ proc nnuePopNull*(state: var NNUEState) {.inline.} =
 
 proc verifyEval*(b: Board, state: var NNUEState) {.inline.} =
   verifyNNUE(addr gNetwork, b, state)
+
+proc nnueBucket*(b: Board): int {.inline.} =
+  outputBucket(b)
+
+proc nnueAllBuckets*(b: Board, stmAcc, nstmAcc: var Accumulator): array[NUM_OUTPUT_BUCKETS, int] {.inline.} =
+  forwardAllBuckets(addr gNetwork, stmAcc, nstmAcc)
