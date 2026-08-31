@@ -16,6 +16,13 @@ const
   FpMarginScale* = 75
   # Internal Iterative Reduction
   IirMinDepth* = 4
+  # Singular Extension
+  SeMinDepth* = 7
+  SeDepthOffset* = 3
+  SeMarginConst* = 0
+  SeMarginScale* = 2
+  SeDepthSub* = 1
+  SeDepthDiv* = 2
   SeePruneCutoff* = 50
   # Aspiration Windows
   AspMinDepth* = 3
