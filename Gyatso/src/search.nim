@@ -357,6 +357,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
       if singularScore < sBeta:
         singularExtension = 1
+      elif singularScore >= beta:
+        return intLerp[100](singularScore, beta, 40)
 
     stack[ply].move  = m
     stack[ply].piece  = ord(b.mailbox[m.fromSq.int])

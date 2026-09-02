@@ -249,6 +249,9 @@ func len*(ml: MoveList): int {.inline.} =
 func `[]`*(ml: MoveList, idx: int): Move {.inline.} =
   ml.moves[idx]
 
+func intLerp*[kOne: static int](a, b, t: int): int {.inline.} =
+  (a * (kOne - t) + b * t) div kOne
+  
 # Constants
 const
   MaxPly*           = 128
