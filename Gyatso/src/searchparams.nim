@@ -23,6 +23,10 @@ const
   SeMarginScale* = 2
   SeDepthSub* = 1
   SeDepthDiv* = 2
+  SePositiveExt* = 1
+  SeMultiCutLerp* = 40
+  # Negative Extension
+  SeNegativeExtTtBeta* = 2
   SeePruneCutoff* = 50
   # Aspiration Windows
   AspMinDepth* = 3
