@@ -24,6 +24,8 @@ const
   SeDepthSub* = 1
   SeDepthDiv* = 2
   SePositiveExt* = 1
+  SeDoubleExt* = 2
+  SeDoubleMargin* = 20
   SeMultiCutLerp* = 40
   # Negative Extension
   SeNegativeExtTtBeta* = 2
