@@ -29,6 +29,11 @@ const
   SeMultiCutLerp* = 40
   # Negative Extension
   SeNegativeExtTtBeta* = 2
+  # ProbCut
+  ProbCutMinDepth* = 5
+  ProbCutDepthSub* = 4
+  ProbCutMargin* = 110
+  ProbCutLerp* = 27
   SeePruneCutoff* = 50
   # Aspiration Windows
   AspMinDepth* = 3

@@ -276,6 +276,63 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply - 2].piece else: -1
   let prev2ToSq  = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply - 2].move.toSq.int else: -1
 
+  # ProbCut Pruning
+  if not pvNode and
+     cutnode and
+     depth >= ProbCutMinDepth and
+     ply > 0 and
+     not inCheck and
+     not isSingularSearch and
+     abs(beta) < MateThreshold:
+
+    let probCutDepth = depth - ProbCutDepthSub
+    let probBeta = beta + ProbCutMargin
+
+    if not (hasTT and ttDepth >= probCutDepth and ttBound == BoundAlpha and ttScore < probBeta):
+      if hasTT and ttDepth >= probCutDepth and ttBound != BoundAlpha and ttScore >= probBeta:
+        return if abs(ttScore) >= MateThreshold: ttScore else: intLerp[100](ttScore, beta, ProbCutLerp)
+
+      let ttCapture = if ttMove != NullMove and (isCapture(b, ttMove) or ttMove.isPromotion()): ttMove else: NullMove
+
+      var probPicker = initMovePicker(
+        addr b, ttCapture, ply, prevPiece, prevToSq,
+        -1, -1,
+        inCheck = false, isQSearch = true)
+
+      while true:
+        let m = probPicker.next()
+        if m == NullMove: break
+        if m == excludedMove: continue
+
+        stack[ply].move = m
+        stack[ply].piece = ord(b.mailbox[m.fromSq.int])
+        stack[ply + 1].staticEval = Unknown
+
+        nnuePush(b, m, nnueState)
+        b.makeMove(m)
+        prefetchTT(cast[system.uint64](b.hash))
+
+        # Perform preliminary qsearch
+        var score = -qSearch(b, -probBeta, -probBeta + 1, ply + 1, info, stack)
+
+        # If qsearch held, verify with shallow full search
+        if score >= probBeta and probCutDepth > 1:
+          score = -negamax[false](b, probCutDepth - 1, -probBeta, -probBeta + 1,
+                                  ply + 1, info, stack, cutnode = not cutnode)
+          info.pvLen[ply] = 0
+
+        b.unmakeMove(m)
+        nnuePop(nnueState)
+
+        if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+          return 0
+
+        if score >= probBeta:
+          let evalToStore = if staticEval == Unknown: NoEval else: int16(staticEval)
+          let clampedScore = clamp(score, -Infinity + 1, Infinity - 1)
+          storeTT(hashVal, m, clampedScore.int16, probCutDepth.int8, BoundBeta, ply, evalToStore)
+          return if abs(score) >= MateThreshold: score else: intLerp[100](score, beta, ProbCutLerp)
+
   var picker = initMovePicker(
     addr b, ttMove, ply, prevPiece, prevToSq,
     prev2Piece, prev2ToSq,
