@@ -22,6 +22,7 @@ func `==`*(a, b: CastlingRights): bool {.borrow, inline.}
 type
   UndoInfo* = object
     hash*:     ZobristKey
+    pawnKey*:  ZobristKey
     castling*: CastlingRights
     epSquare*: Square
     halfmove*: uint8
@@ -42,6 +43,7 @@ type
     halfmove*:  uint8
     fullmove*:  uint16
     hash*:      ZobristKey
+    pawnKey*:   ZobristKey
     gamePly*:   int
     checkers*:  Bitboard
     pinHV*:     Bitboard
@@ -77,6 +79,8 @@ proc putPiece(b: var Board, p: Piece, sq: Square) {.inline.} =
   b.occupied = b.occupied or sqBit
   b.mailbox[sq.int] = p
   b.hash = b.hash xor pieceKeys[p.ord][sq.int]
+  if p.pieceType == Pawn:
+    b.pawnKey = b.pawnKey xor pawnKeys[p.color.ord][sq.int]
 
 proc removePiece(b: var Board, sq: Square) {.inline.} =
   let p = b.mailbox[sq.int]
@@ -87,6 +91,8 @@ proc removePiece(b: var Board, sq: Square) {.inline.} =
     b.occupied = b.occupied and not sqBit
     b.mailbox[sq.int] = NoPiece
     b.hash = b.hash xor pieceKeys[p.ord][sq.int]
+    if p.pieceType == Pawn:
+      b.pawnKey = b.pawnKey xor pawnKeys[p.color.ord][sq.int]
 
 proc movePiece(b: var Board, fromSq, toSq: Square) {.inline.} =
   let p = b.mailbox[fromSq.int]
@@ -282,6 +288,7 @@ proc parseFen*(fen: string): Board =
   result.byColor[1] = Bitboard(0)
   result.occupied = Bitboard(0)
   result.hash = ZobristKey(0)
+  result.pawnKey = ZobristKey(0)
   
   for sq in 0..63:
     let p = result.mailbox[sq]
@@ -291,6 +298,8 @@ proc parseFen*(fen: string): Board =
       result.byColor[p.color.ord] = result.byColor[p.color.ord] or sqBit
       result.occupied = result.occupied or sqBit
       result.hash = result.hash xor pieceKeys[p.ord][sq]
+      if p.pieceType == Pawn:
+        result.pawnKey = result.pawnKey xor pawnKeys[p.color.ord][sq]
       
   if result.stm == Black:
     result.hash = result.hash xor sideKey
@@ -381,6 +390,7 @@ proc makeMove*(b: var Board, m: Move) =
   # Save to history
   b.history[b.histLen] = UndoInfo(
     hash: b.hash,
+    pawnKey: b.pawnKey,
     castling: b.castling,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
@@ -511,6 +521,7 @@ proc unmakeMove*(b: var Board, m: Move) =
   b.epSquare = undo.epSquare
   b.halfmove = undo.halfmove
   b.hash = undo.hash
+  b.pawnKey = undo.pawnKey
   b.checkers = undo.checkers
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
@@ -522,6 +533,7 @@ proc makeNullMove*(b: var Board) =
   # Save to history
   b.history[b.histLen] = UndoInfo(
     hash: b.hash,
+    pawnKey: b.pawnKey,
     castling: b.castling,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
@@ -558,6 +570,7 @@ proc unmakeNullMove*(b: var Board) =
   b.epSquare = undo.epSquare
   b.halfmove = undo.halfmove
   b.hash = undo.hash
+  b.pawnKey = undo.pawnKey
   b.checkers = undo.checkers
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12

@@ -207,6 +207,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       stack[ply].staticEval = ttEval + 0
     else:
       stack[ply].staticEval = evaluate(b, nnueState)
+    let rawEval = stack[ply].staticEval
+    let corrRaw = getPawnCorrHistScore(b.stm.ord, cast[system.uint64](b.pawnKey))
+    stack[ply].staticEval = rawEval + corrRaw div CorrHistScale
   let staticEval = stack[ply].staticEval
 
   # Improving flag and delta (improvement) calculation
@@ -491,6 +494,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                     updateHistory(b, triedQuiets[i], malus)
             let evalToStore = if staticEval == Unknown: NoEval else: int16(staticEval)
             storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta, ply, evalToStore)
+            if not inCheck and staticEval != Unknown and abs(bestScore) < MateThreshold:
+              let corrBonus = clamp(bestScore - staticEval, -CorrHistMax, CorrHistMax)
+              updatePawnCorrHist(b.stm.ord, cast[system.uint64](b.pawnKey), corrBonus * CorrHistWeight)
           return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
@@ -530,6 +536,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             updateHistory(b, triedQuiets[i], malus)
     let evalToStore2 = if staticEval == Unknown: NoEval else: int16(staticEval)
     storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
+    if not inCheck and staticEval != Unknown and abs(bestScore) < MateThreshold:
+      let corrBonus = clamp(bestScore - staticEval, -CorrHistMax, CorrHistMax)
+      updatePawnCorrHist(b.stm.ord, cast[system.uint64](b.pawnKey), corrBonus * CorrHistWeight)
   return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =

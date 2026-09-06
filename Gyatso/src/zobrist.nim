@@ -19,6 +19,7 @@ type ZobristTable = object
   sideKey:      ZobristKey
   castlingKeys: array[16, ZobristKey]
   epKeys:       array[8, ZobristKey]
+  pawnKeys:     array[2, array[64, ZobristKey]]
 
 const ZT: ZobristTable = block:
   var state = 0xDEADBEEFCAFEBABE'u64
@@ -31,9 +32,13 @@ const ZT: ZobristTable = block:
     t.castlingKeys[i] = ZobristKey(splitmix64(state))
   for f in 0..7:
     t.epKeys[f] = ZobristKey(splitmix64(state))
+  for c in 0..1:
+    for sq in 0..63:
+      t.pawnKeys[c][sq] = ZobristKey(splitmix64(state))
   t
 
 template pieceKeys*: auto = ZT.pieceKeys
 template sideKey*: auto = ZT.sideKey
 template castlingKeys*: auto = ZT.castlingKeys
 template epKeys*: auto = ZT.epKeys
+template pawnKeys*: auto = ZT.pawnKeys

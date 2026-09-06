@@ -6,11 +6,13 @@ import std/locks
 type
   HistoryTable*        = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
+  PawnCorrHist*        = array[2, array[16384, int16]]
 
 type HistoryData* = object
   historyTable*:         HistoryTable
   continuationHistory*:  ContinuationHistory
   continuationHistory2*: ContinuationHistory
+  pawnCorrHist*:         PawnCorrHist
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -98,3 +100,11 @@ proc updateContHist2*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inl
 
 proc getContHistScore2*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
   system.int(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq])
+
+proc updatePawnCorrHist*(stm: int, pawnKey: uint64, bonus: int) {.inline.} =
+  let idx = system.int(pawnKey and 0x3FFF'u64)
+  updateHistoryStat(gHistData.pawnCorrHist[stm][idx], bonus)
+
+proc getPawnCorrHistScore*(stm: int, pawnKey: uint64): int {.inline.} =
+  let idx = system.int(pawnKey and 0x3FFF'u64)
+  system.int(gHistData.pawnCorrHist[stm][idx])

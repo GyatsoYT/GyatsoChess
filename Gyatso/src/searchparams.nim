@@ -46,6 +46,9 @@ const
   TmSoftNum* = 52
   TmSoftDen* = 100
   StabilityScale*: array[0..4, int] = [100, 92, 85, 75, 65]
+  CorrHistScale*   = 256
+  CorrHistMax*     = 128
+  CorrHistWeight*  = 32
 
 var
   LMR*: array[MaxPly, array[64, int]]
