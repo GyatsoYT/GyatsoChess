@@ -30,6 +30,8 @@ const
   # Negative Extension
   SeNegativeExtTtBeta* = 2
   SeePruneCutoff* = 50
+  SeePruningA* = 12
+  SeePruningB* = 41
   # Aspiration Windows
   AspMinDepth* = 3
   AspInitAlpha* = 20
@@ -50,6 +52,7 @@ const
 var
   LMR*: array[MaxPly, array[64, int]]
   StaticPruning*: array[MaxPly, int]
+  SEEPruning*: array[MaxPly, int]
   LmpTable*: array[MaxPly, int]
 
 proc initTables*() =
@@ -59,6 +62,9 @@ proc initTables*() =
 
   for depth in 0 ..< MaxPly:
     StaticPruning[depth] = -SeePruneCutoff * depth * depth # quiet moves
+
+  for depth in 0 ..< MaxPly:
+    SEEPruning[depth] = -(SeePruningA * depth * depth + SeePruningB * depth)
 
   for depth in 0 ..< MaxPly:
     LmpTable[depth] = 3 + depth * depth
