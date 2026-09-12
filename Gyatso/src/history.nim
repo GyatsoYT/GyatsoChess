@@ -1,16 +1,19 @@
 import coretypes
 import board
 import bitboard
+import zobrist
 import std/locks
 
 type
   HistoryTable*        = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
+  PawnHistory*         = array[512, array[12, array[64, int16]]]
 
 type HistoryData* = object
   historyTable*:         HistoryTable
   continuationHistory*:  ContinuationHistory
   continuationHistory2*: ContinuationHistory
+  pawnHistory*:          PawnHistory
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -63,6 +66,11 @@ proc ageHistory*() =
           for b in 0..1:
             let v = system.int(gHistData.historyTable[col][f][t][a][b])
             gHistData.historyTable[col][f][t][a][b] = int16(v * 3 div 4)
+  for p in 0..511:
+    for pc in 0..11:
+      for sq in 0..63:
+        let v = system.int(gHistData.pawnHistory[p][pc][sq])
+        gHistData.pawnHistory[p][pc][sq] = int16(v * 3 div 4)
 
 proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
   if m.isPromotion() or m.isEnPassant(): return false
@@ -84,8 +92,18 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
   let toAttacked   = if b.threats.hasSq(m.toSq):   1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][toAttacked], change)
+  let pIdx         = b.pawnKey and 511
+  let curPiece     = ord(b.mailbox[fromSq])
+  updateHistoryStat(gHistData.pawnHistory[pIdx][curPiece][toSq], change)
 
 template historyTable*(): untyped = gHistData.historyTable
+template pawnHistory*(): untyped = gHistData.pawnHistory
+
+proc updatePawnHist*(pawnIndex, piece, toSq, change: int) {.inline.} =
+  updateHistoryStat(gHistData.pawnHistory[pawnIndex][piece][toSq], change)
+
+proc getPawnHistScore*(pawnIndex, piece, toSq: int): int {.inline.} =
+  system.int(gHistData.pawnHistory[pawnIndex][piece][toSq])
 
 proc updateContHist*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inline.} =
   updateHistoryStat(gHistData.continuationHistory[prevPiece][prevToSq][curPiece][curToSq], change)

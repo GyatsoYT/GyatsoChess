@@ -5,6 +5,8 @@ func uint64*(k: ZobristKey): uint64 {.inline.} = cast[uint64](k)
 func `xor`*(a, b: ZobristKey): ZobristKey {.inline.} = ZobristKey(a.uint64 xor b.uint64)
 func `==`*(a, b: ZobristKey): bool {.inline.} = a.uint64 == b.uint64
 func `$`*(a: ZobristKey): string {.inline.} = $(a.uint64)
+func `and`*(a: ZobristKey, b: int): int {.inline.} = system.int(cast[uint64](a) and cast[uint64](b))
+func `and`*(a: ZobristKey, b: uint64): uint64 {.inline.} = cast[uint64](a) and b
 
 # Splitmix64 — fast, high quality, fully deterministic
 func splitmix64(state: var uint64): uint64 {.inline.} =

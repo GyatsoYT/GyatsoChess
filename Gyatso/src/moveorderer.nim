@@ -4,6 +4,7 @@ import bitboard
 import history
 import see
 import movegen
+import zobrist
 
 var killerMoves* {.threadvar.}: array[MaxPly + 1, array[2, Move]]
 
@@ -143,6 +144,8 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
   let toThrt    = if b.threats.hasSq(m.toSq):   1 else: 0
   let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
   let curPiece  = ord(b.mailbox[m.fromSq.int])
+  let pIdx      = b.pawnKey and 511
+  let pawnScore = system.int(pawnHistory[pIdx][curPiece][toSq])
   let cont1 =
     if prevPiece >= 0:
       getContHistScore(prevPiece, prevToSq, curPiece, toSq)
@@ -153,7 +156,7 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
     else: 0
   let contScore = 2 * cont1 + cont2
 
-  int32(histScore + contScore)
+  int32(histScore + pawnScore + contScore)
 
 proc initMovePicker*(b: ptr Board,
                      ttMove: Move,
