@@ -335,6 +335,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        not see(b, m, StaticPruning[depth]):
       continue
 
+    # Noisy SEE Pruning
+    if movesSearched > 0 and
+       not inCheck and
+       not isQuietMove(b, m) and
+       not m.isPromotion() and
+       abs(curAlpha) < MateThreshold and
+       not see(b, m, SEEPruning[depth]):
+      continue
+
     # Singular Extension
     var singularExtension = 0
     if movesSearched == 0 and
