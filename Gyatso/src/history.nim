@@ -1,16 +1,26 @@
 import coretypes
 import board
 import bitboard
+import zobrist
 import std/locks
+
+const
+  CorrHistSize*        = 16384
+  CorrHistMask*        = system.uint64(CorrHistSize - 1)
+  CorrHistGrain*       = 512
+  CorrHistWeightScale* = 256
+  CorrHistMax*         = CorrHistGrain * 32
 
 type
   HistoryTable*        = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
+  PawnCorrHist*        = array[2, array[CorrHistSize, int16]]
 
 type HistoryData* = object
   historyTable*:         HistoryTable
   continuationHistory*:  ContinuationHistory
   continuationHistory2*: ContinuationHistory
+  pawnCorrHist*:         PawnCorrHist
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -98,3 +108,23 @@ proc updateContHist2*(prevPiece, prevToSq, curPiece, curToSq, change: int) {.inl
 
 proc getContHistScore2*(prevPiece, prevToSq, curPiece, curToSq: int): int {.inline.} =
   system.int(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq])
+
+proc getPawnCorrection*(b: Board): int {.inline.} =
+  if gHistData == nil: return 0
+  let side = b.stm.ord
+  let pawnIdx = system.int(b.pawnHash.uint64 and CorrHistMask)
+  system.int(gHistData.pawnCorrHist[side][pawnIdx]) div CorrHistGrain
+
+proc updateCorrEntry(entry: var int16, newWeight, scaledDiff: int) {.inline.} =
+  let old = system.int(entry)
+  var update = old * (CorrHistWeightScale - newWeight) + scaledDiff * newWeight
+  update = update div CorrHistWeightScale
+  entry = int16(clamp(update, -CorrHistMax, CorrHistMax))
+
+proc updatePawnCorrection*(b: Board, depth, diff: int) {.inline.} =
+  if gHistData == nil: return
+  let side = b.stm.ord
+  let newWeight = min(16, 1 + depth)
+  let scaledDiff = clamp(diff, -1000, 1000) * CorrHistGrain
+  let pawnIdx = system.int(b.pawnHash.uint64 and CorrHistMask)
+  updateCorrEntry(gHistData.pawnCorrHist[side][pawnIdx], newWeight, scaledDiff)
