@@ -97,7 +97,8 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let inCheckQ = not b.checkers.isEmpty
   let rawQEval = evaluate(b, nnueState)
   let standPat = if inCheckQ: rawQEval
-                 else: clamp(rawQEval + getPawnCorrection(b), -MateThreshold + 1, MateThreshold - 1)
+                 else: clamp(rawQEval + getCorrection(b), -MateThreshold + 1,
+                     MateThreshold - 1)
   var bestScore = standPat
 
   if standPat >= beta:
@@ -211,8 +212,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let raw = if ttEval != NoEval: system.int(ttEval)
               else: evaluate(b, nnueState)
     stack[ply].rawEval = raw
-    let corr = getPawnCorrection(b)
-    stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1, MateThreshold - 1)
+    let corr = getCorrection(b)
+    stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1,
+        MateThreshold - 1)
   let staticEval = stack[ply].staticEval
 
   # Improving flag and delta (improvement) calculation
@@ -522,13 +524,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
                     updateHistory(b, triedQuiets[i], malus)
-            let evalToStore = if stack[ply].rawEval == Unknown: NoEval else: int16(stack[ply].rawEval)
+            let evalToStore = if stack[ply].rawEval ==
+                Unknown: NoEval else: int16(stack[ply].rawEval)
             storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta,
                 ply, evalToStore)
 
-            # Update pawn correction history on beta cutoff
-            if not inCheck and isQuietMove(b, m) and abs(score) < MateThreshold and score > staticEval:
-              updatePawnCorrection(b, depth, score - staticEval)
+            # Update correction history on beta cutoff
+            if not inCheck and isQuietMove(b, m) and abs(score) <
+                MateThreshold and score > staticEval:
+              updateCorrection(b, depth, score - staticEval)
           return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
@@ -567,15 +571,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         for i in 0 ..< triedQuietsLen:
           if triedQuiets[i] != bestMove:
             updateHistory(b, triedQuiets[i], malus)
-    let evalToStore2 = if stack[ply].rawEval == Unknown: NoEval else: int16(stack[ply].rawEval)
+    let evalToStore2 = if stack[ply].rawEval == Unknown: NoEval else: int16(
+        stack[ply].rawEval)
     storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
 
-    # Update pawn correction history on fail-low or exact bound
+    # Update correction history on fail-low or exact bound
     if not inCheck and
        abs(bestScore) < MateThreshold and
        (bestMove == NullMove or isQuietMove(b, bestMove)) and
        not (bound == BoundAlpha and bestScore >= staticEval):
-      updatePawnCorrection(b, depth, bestScore - staticEval)
+      updateCorrection(b, depth, bestScore - staticEval)
   return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
