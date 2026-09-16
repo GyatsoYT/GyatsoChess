@@ -28,6 +28,7 @@ type
     hash*: ZobristKey
     pawnHash*: ZobristKey
     nonPawnHash*: array[2, ZobristKey]
+    majorHash*: ZobristKey
     castling*: CastlingRights
     epSquare*: Square
     halfmove*: uint8
@@ -50,6 +51,7 @@ type
     hash*: ZobristKey
     pawnHash*: ZobristKey
     nonPawnHash*: array[2, ZobristKey]
+    majorHash*: ZobristKey
     gamePly*: int
     checkers*: Bitboard
     pinHV*: Bitboard
@@ -90,6 +92,8 @@ proc putPiece(b: var Board, p: Piece, sq: Square) {.inline.} =
   else:
     b.nonPawnHash[p.color.ord] = b.nonPawnHash[p.color.ord] xor pieceKeys[
         p.ord][sq.int]
+  if p == WhiteRook or p == BlackRook or p == WhiteQueen or p == BlackQueen:
+    b.majorHash = b.majorHash xor pieceKeys[p.ord][sq.int]
 
 proc removePiece(b: var Board, sq: Square) {.inline.} =
   let p = b.mailbox[sq.int]
@@ -105,6 +109,8 @@ proc removePiece(b: var Board, sq: Square) {.inline.} =
     else:
       b.nonPawnHash[p.color.ord] = b.nonPawnHash[p.color.ord] xor pieceKeys[
           p.ord][sq.int]
+    if p == WhiteRook or p == BlackRook or p == WhiteQueen or p == BlackQueen:
+      b.majorHash = b.majorHash xor pieceKeys[p.ord][sq.int]
 
 proc movePiece(b: var Board, fromSq, toSq: Square) {.inline.} =
   let p = b.mailbox[fromSq.int]
@@ -126,6 +132,8 @@ proc movePiece(b: var Board, fromSq, toSq: Square) {.inline.} =
       b.pawnHash = b.pawnHash xor delta
     else:
       b.nonPawnHash[p.color.ord] = b.nonPawnHash[p.color.ord] xor delta
+    if p == WhiteRook or p == BlackRook or p == WhiteQueen or p == BlackQueen:
+      b.majorHash = b.majorHash xor delta
 
 proc attackersTo*(b: Board, sq: Square, occ: Bitboard, them: Color): Bitboard =
   let offset = them.ord * 6
@@ -308,6 +316,7 @@ proc parseFen*(fen: string): Board =
   result.pawnHash = ZobristKey(0)
   result.nonPawnHash[0] = ZobristKey(0)
   result.nonPawnHash[1] = ZobristKey(0)
+  result.majorHash = ZobristKey(0)
 
   for sq in 0..63:
     let p = result.mailbox[sq]
@@ -322,6 +331,8 @@ proc parseFen*(fen: string): Board =
       else:
         result.nonPawnHash[p.color.ord] = result.nonPawnHash[
             p.color.ord] xor pieceKeys[p.ord][sq]
+      if p == WhiteRook or p == BlackRook or p == WhiteQueen or p == BlackQueen:
+        result.majorHash = result.majorHash xor pieceKeys[p.ord][sq]
 
   if result.stm == Black:
     result.hash = result.hash xor sideKey
@@ -415,6 +426,7 @@ proc makeMove*(b: var Board, m: Move) =
     hash: b.hash,
     pawnHash: b.pawnHash,
     nonPawnHash: b.nonPawnHash,
+    majorHash: b.majorHash,
     castling: b.castling,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
@@ -547,6 +559,7 @@ proc unmakeMove*(b: var Board, m: Move) =
   b.hash = undo.hash
   b.pawnHash = undo.pawnHash
   b.nonPawnHash = undo.nonPawnHash
+  b.majorHash = undo.majorHash
   b.checkers = undo.checkers
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
@@ -560,6 +573,7 @@ proc makeNullMove*(b: var Board) =
     hash: b.hash,
     pawnHash: b.pawnHash,
     nonPawnHash: b.nonPawnHash,
+    majorHash: b.majorHash,
     castling: b.castling,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
@@ -598,6 +612,7 @@ proc unmakeNullMove*(b: var Board) =
   b.hash = undo.hash
   b.pawnHash = undo.pawnHash
   b.nonPawnHash = undo.nonPawnHash
+  b.majorHash = undo.majorHash
   b.checkers = undo.checkers
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12

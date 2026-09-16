@@ -16,6 +16,7 @@ type
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
+  MajorCorrHist* = array[2, array[CorrHistSize, int16]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -23,6 +24,7 @@ type HistoryData* = object
   continuationHistory2*: ContinuationHistory
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
+  majorCorrHist*: MajorCorrHist
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -135,8 +137,14 @@ proc getNonPawnCorrection*(b: Board): int {.inline.} =
       bIdx]) div CorrHistGrain
   wCorr + bCorr
 
+proc getMajorCorrection*(b: Board): int {.inline.} =
+  if gHistData == nil: return 0
+  let side = b.stm.ord
+  let majorIdx = system.int(b.majorHash.uint64 and CorrHistMask)
+  system.int(gHistData.majorCorrHist[side][majorIdx]) div CorrHistGrain
+
 proc getCorrection*(b: Board): int {.inline.} =
-  getPawnCorrection(b) + getNonPawnCorrection(b)
+  getPawnCorrection(b) + getNonPawnCorrection(b) + getMajorCorrection(b)
 
 proc updateCorrEntry(entry: var int16, newWeight, scaledDiff: int) {.inline.} =
   let old = system.int(entry)
@@ -162,6 +170,15 @@ proc updateNonPawnCorrection*(b: Board, depth, diff: int) {.inline.} =
   updateCorrEntry(gHistData.nonPawnCorrHist[0][side][wIdx], newWeight, scaledDiff)
   updateCorrEntry(gHistData.nonPawnCorrHist[1][side][bIdx], newWeight, scaledDiff)
 
+proc updateMajorCorrection*(b: Board, depth, diff: int) {.inline.} =
+  if gHistData == nil: return
+  let side = b.stm.ord
+  let newWeight = min(16, 1 + depth)
+  let scaledDiff = clamp(diff, -1000, 1000) * CorrHistGrain
+  let majorIdx = system.int(b.majorHash.uint64 and CorrHistMask)
+  updateCorrEntry(gHistData.majorCorrHist[side][majorIdx], newWeight, scaledDiff)
+
 proc updateCorrection*(b: Board, depth, diff: int) {.inline.} =
   updatePawnCorrection(b, depth, diff)
   updateNonPawnCorrection(b, depth, diff)
+  updateMajorCorrection(b, depth, diff)
