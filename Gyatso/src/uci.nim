@@ -71,6 +71,9 @@ proc handleGo(line: string, b: Board) =
     binc = 0
     movestogo = 0
     infinite = false
+    nodes: uint64 = 0
+    sn: uint64 = 0
+    hn: uint64 = 0
 
   var i = 1
   while i < tokens.len:
@@ -98,13 +101,35 @@ proc handleGo(line: string, b: Board) =
       if i < tokens.len: movestogo = parseInt(tokens[i])
     of "infinite":
       infinite = true
+    of "nodes":
+      inc i
+      if i < tokens.len:
+        try: nodes = parseBiggestUInt(tokens[i])
+        except ValueError: discard
+    of "sn":
+      inc i
+      if i < tokens.len:
+        try: sn = parseBiggestUInt(tokens[i])
+        except ValueError: discard
+    of "hn":
+      inc i
+      if i < tokens.len:
+        try: hn = parseBiggestUInt(tokens[i])
+        except ValueError: discard
     else:
       discard
     inc i
 
+  if nodes > 0 and sn == 0:
+    sn = nodes
+  if sn > 0 and hn == 0:
+    hn = if sn > high(uint64) div 8: high(uint64) else: sn * 8
+  if sn > 0 and hn <= sn:
+    hn = if sn == high(uint64): high(uint64) else: sn + 1
+
   var softMs: int64
   var hardMs: int64
-  if infinite or (depth > 0 and movetime == 0 and wtime == 0 and btime == 0):
+  if infinite or ((depth > 0 or sn > 0 or hn > 0) and movetime == 0 and wtime == 0 and btime == 0):
     softMs = int64(high(int32))
     hardMs = int64(high(int32))
   elif movetime > 0:
@@ -123,7 +148,7 @@ proc handleGo(line: string, b: Board) =
 
   let startTime = getMonoTime()
 
-  dispatchHelpers(b, startTime, softMs, hardMs, depth, 0)
+  dispatchHelpers(b, startTime, softMs, hardMs, depth, hn, sn)
 
   var t0 = gThreadPool.threads[0]
   t0.board          = b
@@ -132,7 +157,8 @@ proc handleGo(line: string, b: Board) =
   t0.info.softLimitMs  = softMs
   t0.info.hardLimitMs  = hardMs
   t0.info.depthLimit   = depth
-  t0.info.nodeLimit    = 0
+  t0.info.nodeLimit    = hn
+  t0.info.softNodeLimit = sn
   t0.info.nodes        = 0
   t0.info.selDepth     = 0
   t0.info.silent       = false
