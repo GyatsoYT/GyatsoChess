@@ -47,7 +47,7 @@ proc pickBest(moves: var array[256, Move],
     let remaining = system.uint64(count - 1 - i)
     let adjusted  = system.uint32(scores[i]) xor 0x80000000'u32
     let packed    = (system.uint64(adjusted) shl 32) or remaining
-    if packed > bestPacked or i == cur:
+    if packed >= bestPacked:
       bestPacked = packed
       bestIdx    = i
   if bestIdx != cur:
@@ -104,8 +104,10 @@ func isTTMoveLegal(b: Board, m: Move): bool {.inline.} =
   true
 
 proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
-  let isPromo = m.isPromotion
-  let isCap   = isCapture(b, m)
+  let mt      = m.moveType
+  let isPromo = mt == Promotion
+  let isEP    = mt == EnPassant
+  let isCap   = isEP or (b.mailbox[m.toSq.int] != NoPiece)
 
   let attackerPt: PieceType =
     if isPromo:
@@ -118,9 +120,9 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
       b.mailbox[m.fromSq.int].pieceType
 
   let victimPt: PieceType =
-    if m.isEnPassant:  Pawn
-    elif isCap:        b.mailbox[m.toSq.int].pieceType
-    else:              NoPieceType
+    if isEP:    Pawn
+    elif isCap: b.mailbox[m.toSq.int].pieceType
+    else:       NoPieceType
 
   let mvvlva     = if victimPt != NoPieceType: mvvlvaScore(attackerPt, victimPt) else: 0
   let promoBonus =

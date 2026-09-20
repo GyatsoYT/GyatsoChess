@@ -51,20 +51,27 @@ const
 
 var
   LMR*: array[MaxPly, array[64, int]]
-  StaticPruning*: array[MaxPly, int]
-  SEEPruning*: array[MaxPly, int]
-  LmpTable*: array[MaxPly, int]
+
+const
+  StaticPruning*: array[MaxPly, int] = block:
+    var t: array[MaxPly, int]
+    for depth in 0 ..< MaxPly:
+      t[depth] = -SeePruneCutoff * depth * depth
+    t
+
+  SEEPruning*: array[MaxPly, int] = block:
+    var t: array[MaxPly, int]
+    for depth in 0 ..< MaxPly:
+      t[depth] = -(SeePruningA * depth * depth + SeePruningB * depth)
+    t
+
+  LmpTable*: array[MaxPly, int] = block:
+    var t: array[MaxPly, int]
+    for depth in 0 ..< MaxPly:
+      t[depth] = 3 + depth * depth
+    t
 
 proc initTables*() =
   for depth in 1 ..< MaxPly:
     for moves in 1 ..< 64:
       LMR[depth][moves] = int(0.8 + ln(depth.float) * ln(1.2 * moves.float) / 1.8)
-
-  for depth in 0 ..< MaxPly:
-    StaticPruning[depth] = -SeePruneCutoff * depth * depth # quiet moves
-
-  for depth in 0 ..< MaxPly:
-    SEEPruning[depth] = -(SeePruningA * depth * depth + SeePruningB * depth)
-
-  for depth in 0 ..< MaxPly:
-    LmpTable[depth] = 3 + depth * depth
