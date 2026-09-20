@@ -23,11 +23,12 @@ proc popLeastValuable(
   us:        Color
 ): PieceType {.inline.} =
   const order = [Pawn, Knight, Bishop, Rook, Queen, King]
-  for pt in order:
-    let bb = attackers and b.pieces(pt, us)
+  let offset = us.ord * 6
+  for i in 0..5:
+    let bb = attackers and b.byPiece[offset + i]
     if not bb.isEmpty:
       occ = occ xor bb.lsb.bit
-      return pt
+      return order[i]
   return NoPieceType
 
 func captureGain(b: Board, m: Move): int {.inline.} =
