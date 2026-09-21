@@ -19,6 +19,7 @@ proc isKiller(m: Move, ply: int): int {.inline.} =
 
 func isCapture*(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant: return true
+  if m.isCastling: return false  # toSq is own rook, not a capture
   b.mailbox[m.toSq.int] != NoPiece
 
 const
@@ -98,6 +99,7 @@ func isTTMoveLegal(b: Board, m: Move): bool {.inline.} =
   let moving = b.mailbox[m.fromSq.int]
   if moving == NoPiece: return false
   if moving.color != b.stm: return false
+  if m.isCastling: return true   # king->rook encoding: toSq is own rook, always legal to probe
   let dest = b.mailbox[m.toSq.int]
   if dest != NoPiece and dest.color == b.stm: return false
   if m.isEnPassant and b.epSquare != m.toSq: return false
@@ -140,9 +142,9 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
 
   let stm       = b.stm.ord
   let fromSq    = m.fromSq.int
-  let toSq      = m.toSq.int
+  let toSq      = m.histToSq.int
   let fromThrt  = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toThrt    = if b.threats.hasSq(m.toSq):   1 else: 0
+  let toThrt    = if b.threats.hasSq(m.histToSq):   1 else: 0
   let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
   let curPiece  = ord(b.mailbox[m.fromSq.int])
   let cont1 =

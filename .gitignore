@@ -21,6 +21,9 @@ htmldocs/
 *.py
 *.pyc
 
+#go files
+*.go
+
 # Editor specific files
 *~
 *.swp

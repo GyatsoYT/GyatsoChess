@@ -115,6 +115,9 @@ func flipFile*(sq: Square): Square {.inline.} =
 func isValid*(sq: Square): bool {.inline.} =
   int8(sq) >= 0 and int8(sq) <= 63
 
+func withFile*(sq: Square, f: int): Square {.inline.} =
+  makeSquare(sq.rank, f)
+
 # Colors
 type
   Color* = enum
@@ -222,6 +225,16 @@ func isEnPassant*(m: Move): bool {.inline, noSideEffect.} =
 func isQuiet*(m: Move): bool {.inline, noSideEffect.} =
   let mt = moveType(m)
   mt == Normal or mt == Castling
+
+
+func histToSq*(m: Move): Square {.inline, noSideEffect.} =
+  if moveType(m) == Castling:
+    let kf = m.fromSq.int and 7
+    let rf = m.toSq.int  and 7
+    let rank = m.fromSq.int and (not 7)
+    Square(rank or (if rf > kf: 6 else: 2))
+  else:
+    m.toSq
 
 # Null Move Constant
 const NullMove* = Move(0)

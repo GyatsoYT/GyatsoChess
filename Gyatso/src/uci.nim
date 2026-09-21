@@ -22,6 +22,22 @@ proc handlePosition(line: string, b: var Board) =
   if rest.startsWith("startpos"):
     b = parseFen(StartPos)
     rest = rest[8..^1]
+  elif rest.startsWith("frc "):
+    rest = rest[4..^1]
+    let movesIdx = rest.find(" moves ")
+    let idxStr = if movesIdx >= 0: rest[0 ..< movesIdx] else: rest
+    try:
+      b = fromFrcIndex(uint32(parseInt(idxStr)))
+    except: b = parseFen(StartPos)
+    rest = if movesIdx >= 0: rest[movesIdx..^1] else: ""
+  elif rest.startsWith("dfrc "):
+    rest = rest[5..^1]
+    let movesIdx = rest.find(" moves ")
+    let idxStr = if movesIdx >= 0: rest[0 ..< movesIdx] else: rest
+    try:
+      b = fromDfrcIndex(uint32(parseInt(idxStr)))
+    except: b = parseFen(StartPos)
+    rest = if movesIdx >= 0: rest[movesIdx..^1] else: ""
   elif rest.startsWith("fen "):
     rest = rest[4..^1]
     let movesIdx = rest.find(" moves ")
@@ -41,12 +57,21 @@ proc handlePosition(line: string, b: var Board) =
     for tok in movePart.split(' '):
       if tok.len < 4: continue
       let fromSq = parseSquare(tok[0..1])
-      let toSq = parseSquare(tok[2..3])
+      var toSq   = parseSquare(tok[2..3])
       var ml: MoveList
       generateMoves(b, ml)
+
+      var castlingRookSq = NoSquare
+      if not gChess960:
+        let srcPiece = b.mailbox[fromSq.int]
+        if srcPiece.pieceType == King and abs(fromSq.file - toSq.file) == 2:
+          let kingside = toSq.file > fromSq.file
+          castlingRookSq = b.castlingRooks.rook(b.stm, kingside)
+
       for i in 0 ..< ml.len:
         let m = ml.moves[i]
-        if m.fromSq == fromSq and m.toSq == toSq:
+        let matchTo = if castlingRookSq != NoSquare and m.isCastling(): castlingRookSq else: toSq
+        if m.fromSq == fromSq and m.toSq == matchTo:
           if m.isPromotion() and tok.len == 5:
             let promoCh = tok[4]
             let pt = m.promoType
@@ -227,6 +252,7 @@ proc runUciLoop*() =
     of "uci":
       reply "id name Gyatso 1.5.0"
       reply "id author Gyatso Neesham"
+      reply "option name UCI_Chess960 type check default false"
       reply "option name Hash type spin default 16 min 1 max 65536"
       reply "option name Threads type spin default 1 min 1 max 512"
       reply "uciok"
@@ -265,6 +291,8 @@ proc runUciLoop*() =
               if n >= 1 and n <= MaxSearchThreads:
                 initThreadPool(n)
             except ValueError: discard
+          of "uci_chess960":
+            gChess960 = parts[valueIdx].toLowerAscii() == "true"
           else: discard
 
       elif line.startsWith("position"):

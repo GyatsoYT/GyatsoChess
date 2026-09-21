@@ -4,31 +4,34 @@ import zobrist
 import attacks
 import std/strutils
 
+var gChess960*: bool = false
+
 type
-  CastlingRights* = distinct uint8
+  CastlingRooks* = object
+    wk*, wq*, bk*, bq*: Square
 
-func hasWK*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 1'u8) != 0
-func hasWQ*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 2'u8) != 0
-func hasBK*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 4'u8) != 0
-func hasBQ*(cr: CastlingRights): bool {.inline.} = (cast[uint8](cr) and 8'u8) != 0
+func rightsMask*(cr: CastlingRooks): int {.inline.} =
+  (if cr.wk != NoSquare: 1 else: 0) or
+  (if cr.wq != NoSquare: 2 else: 0) or
+  (if cr.bk != NoSquare: 4 else: 0) or
+  (if cr.bq != NoSquare: 8 else: 0)
 
-func revokeWK*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(
-    cast[uint8](cr) and (not 1'u8))
-func revokeWQ*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(
-    cast[uint8](cr) and (not 2'u8))
-func revokeBK*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(
-    cast[uint8](cr) and (not 4'u8))
-func revokeBQ*(cr: CastlingRights): CastlingRights {.inline.} = CastlingRights(
-    cast[uint8](cr) and (not 8'u8))
+func unsetRook*(cr: var CastlingRooks, sq: Square) {.inline.} =
+  if   cr.wk == sq: cr.wk = NoSquare
+  elif cr.wq == sq: cr.wq = NoSquare
+  elif cr.bk == sq: cr.bk = NoSquare
+  elif cr.bq == sq: cr.bq = NoSquare
 
-func `==`*(a, b: CastlingRights): bool {.borrow, inline.}
+func rook*(cr: CastlingRooks, us: Color, kingside: bool): Square {.inline.} =
+  if us == White: (if kingside: cr.wk else: cr.wq)
+  else:           (if kingside: cr.bk else: cr.bq)
 
 type
   UndoInfo* = object
     hash*: ZobristKey
     pawnHash*: ZobristKey
     nonPawnHash*: array[2, ZobristKey]
-    castling*: CastlingRights
+    castlingRooks*: CastlingRooks
     epSquare*: Square
     halfmove*: uint8
     captured*: Piece
@@ -43,7 +46,7 @@ type
     occupied*: Bitboard
     mailbox*: array[64, Piece]
     stm*: Color
-    castling*: CastlingRights
+    castlingRooks*: CastlingRooks
     epSquare*: Square
     halfmove*: uint8
     fullmove*: uint16
@@ -263,16 +266,55 @@ proc parseFen*(fen: string): Board =
     result.stm = White
 
   # 3. Castling availability
-  var castlingVal = 0'u8
+  result.castlingRooks.wk = NoSquare
+  result.castlingRooks.wq = NoSquare
+  result.castlingRooks.bk = NoSquare
+  result.castlingRooks.bq = NoSquare
+
+  # Find king files from mailbox
+  var wKingFile = -1
+  var bKingFile = -1
+  for f in 0..7:
+    if result.mailbox[makeSquare(0, f).int] == WhiteKing: wKingFile = f
+    if result.mailbox[makeSquare(7, f).int] == BlackKing: bKingFile = f
+
   if parts.len > 2 and parts[2] != "-":
-    for c in parts[2]:
-      case c
-      of 'K': castlingVal = castlingVal or 1'u8
-      of 'Q': castlingVal = castlingVal or 2'u8
-      of 'k': castlingVal = castlingVal or 4'u8
-      of 'q': castlingVal = castlingVal or 8'u8
-      else: discard
-  result.castling = CastlingRights(castlingVal)
+    if gChess960:
+      for c in parts[2]:
+        if c in 'A'..'H':
+          let f = ord(c) - ord('A')
+          if f < wKingFile: result.castlingRooks.wq = makeSquare(0, f)
+          else:             result.castlingRooks.wk = makeSquare(0, f)
+        elif c in 'a'..'h':
+          let f = ord(c) - ord('a')
+          if f < bKingFile: result.castlingRooks.bq = makeSquare(7, f)
+          else:             result.castlingRooks.bk = makeSquare(7, f)
+        elif c in {'K', 'Q', 'k', 'q'}:
+          let (rank, kf, forward) = case c
+            of 'K': (0, wKingFile, true)
+            of 'Q': (0, wKingFile, false)
+            of 'k': (7, bKingFile, true)
+            else:   (7, bKingFile, false)
+          let rookPiece = if rank == 0: WhiteRook else: BlackRook
+          var f = if forward: kf + 1 else: kf - 1
+          while f >= 0 and f <= 7:
+            let sq = makeSquare(rank, f)
+            if result.mailbox[sq.int] == rookPiece:
+              case c
+              of 'K': result.castlingRooks.wk = sq
+              of 'Q': result.castlingRooks.wq = sq
+              of 'k': result.castlingRooks.bk = sq
+              else:   result.castlingRooks.bq = sq
+              break
+            f += (if forward: 1 else: -1)
+    else:
+      for c in parts[2]:
+        case c
+        of 'K': result.castlingRooks.wk = H1
+        of 'Q': result.castlingRooks.wq = A1
+        of 'k': result.castlingRooks.bk = H8
+        of 'q': result.castlingRooks.bq = A8
+        else: discard
 
   # 4. En passant target square
   if parts.len > 3:
@@ -298,7 +340,6 @@ proc parseFen*(fen: string): Board =
   else:
     result.fullmove = 1
 
-  # Compute occupied, byColor, and hash from scratch
   for i in 0..11:
     result.byPiece[i] = Bitboard(0)
   result.byColor[0] = Bitboard(0)
@@ -326,8 +367,7 @@ proc parseFen*(fen: string): Board =
   if result.stm == Black:
     result.hash = result.hash xor sideKey
 
-  result.hash = result.hash xor castlingKeys[system.int(cast[uint8](
-      result.castling))]
+  result.hash = result.hash xor castlingKeys[result.castlingRooks.rightsMask]
 
   if result.epSquare != NoSquare:
     result.hash = result.hash xor epKeys[result.epSquare.file]
@@ -336,7 +376,7 @@ proc parseFen*(fen: string): Board =
 
 const StartPos* = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-func toFen*(b: Board): string =
+proc toFen*(b: Board): string =
   var placement = ""
   for rank in countdown(7, 0):
     var emptyCount = 0
@@ -375,10 +415,16 @@ func toFen*(b: Board): string =
   result.add(" ")
 
   var castlingStr = ""
-  if b.castling.hasWK: castlingStr.add('K')
-  if b.castling.hasWQ: castlingStr.add('Q')
-  if b.castling.hasBK: castlingStr.add('k')
-  if b.castling.hasBQ: castlingStr.add('q')
+  if gChess960:
+    if b.castlingRooks.wk != NoSquare: castlingStr.add(char(ord('A') + b.castlingRooks.wk.file))
+    if b.castlingRooks.wq != NoSquare: castlingStr.add(char(ord('A') + b.castlingRooks.wq.file))
+    if b.castlingRooks.bk != NoSquare: castlingStr.add(char(ord('a') + b.castlingRooks.bk.file))
+    if b.castlingRooks.bq != NoSquare: castlingStr.add(char(ord('a') + b.castlingRooks.bq.file))
+  else:
+    if b.castlingRooks.wk != NoSquare: castlingStr.add('K')
+    if b.castlingRooks.wq != NoSquare: castlingStr.add('Q')
+    if b.castlingRooks.bk != NoSquare: castlingStr.add('k')
+    if b.castlingRooks.bq != NoSquare: castlingStr.add('q')
   if castlingStr == "":
     result.add("-")
   else:
@@ -410,12 +456,11 @@ proc makeMove*(b: var Board, m: Move) =
   else:
     captured = b.mailbox[toSq.int]
 
-  # Save to history
   b.history[b.histLen] = UndoInfo(
     hash: b.hash,
     pawnHash: b.pawnHash,
     nonPawnHash: b.nonPawnHash,
-    castling: b.castling,
+    castlingRooks: b.castlingRooks,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
     captured: captured,
@@ -426,8 +471,7 @@ proc makeMove*(b: var Board, m: Move) =
   )
   inc b.histLen
 
-  # XOR out old castling and EP contributions from hash
-  b.hash = b.hash xor castlingKeys[system.int(cast[uint8](b.castling))]
+  b.hash = b.hash xor castlingKeys[b.castlingRooks.rightsMask]
   if b.epSquare != NoSquare:
     b.hash = b.hash xor epKeys[b.epSquare.file]
 
@@ -444,11 +488,13 @@ proc makeMove*(b: var Board, m: Move) =
     b.putPiece(makePiece(b.stm, pt), toSq)
 
   elif m.isCastling:
-    b.movePiece(fromSq, toSq)
-    if toSq == G1: b.movePiece(H1, F1)
-    elif toSq == C1: b.movePiece(A1, D1)
-    elif toSq == G8: b.movePiece(H8, F8)
-    elif toSq == C8: b.movePiece(A8, D8)
+    let rookSq = toSq
+    let kingDst = if fromSq.file < rookSq.file: fromSq.withFile(6) else: fromSq.withFile(2)
+    let rookDst = if fromSq.file < rookSq.file: fromSq.withFile(5) else: fromSq.withFile(3)
+    b.removePiece(fromSq)
+    b.removePiece(rookSq)
+    b.putPiece(makePiece(b.stm, King), kingDst)
+    b.putPiece(makePiece(b.stm, Rook), rookDst)
 
   elif m.isEnPassant:
     let capSq = toSq + (if b.stm == White: -8 else: 8)
@@ -460,20 +506,14 @@ proc makeMove*(b: var Board, m: Move) =
       b.removePiece(toSq)
     b.movePiece(fromSq, toSq)
 
-  # Update Castling Rights
-  if fromSq == E1:
-    b.castling = b.castling.revokeWK().revokeWQ()
-  elif fromSq == E8:
-    b.castling = b.castling.revokeBK().revokeBQ()
+  if movingPiece.pieceType == King:
+    if b.stm == White: b.castlingRooks.wk = NoSquare; b.castlingRooks.wq = NoSquare
+    else:              b.castlingRooks.bk = NoSquare; b.castlingRooks.bq = NoSquare
+  elif movingPiece.pieceType == Rook:
+    b.castlingRooks.unsetRook(fromSq)
 
-  if fromSq == H1 or toSq == H1:
-    b.castling = b.castling.revokeWK()
-  if fromSq == A1 or toSq == A1:
-    b.castling = b.castling.revokeWQ()
-  if fromSq == H8 or toSq == H8:
-    b.castling = b.castling.revokeBK()
-  if fromSq == A8 or toSq == A8:
-    b.castling = b.castling.revokeBQ()
+  if captured.pieceType == Rook:
+    b.castlingRooks.unsetRook(toSq)
 
   # Update EP target square
   b.epSquare = NoSquare
@@ -494,8 +534,7 @@ proc makeMove*(b: var Board, m: Move) =
   b.stm = b.stm.opposite()
   inc b.gamePly
 
-  # XOR in new castling, EP, and side keys
-  b.hash = b.hash xor castlingKeys[system.int(cast[uint8](b.castling))]
+  b.hash = b.hash xor castlingKeys[b.castlingRooks.rightsMask]
   if b.epSquare != NoSquare:
     b.hash = b.hash xor epKeys[b.epSquare.file]
   b.hash = b.hash xor sideKey
@@ -524,11 +563,13 @@ proc unmakeMove*(b: var Board, m: Move) =
       b.putPiece(undo.captured, toSq)
 
   elif m.isCastling:
-    b.movePiece(toSq, fromSq)
-    if toSq == G1: b.movePiece(F1, H1)
-    elif toSq == C1: b.movePiece(D1, A1)
-    elif toSq == G8: b.movePiece(F8, H8)
-    elif toSq == C8: b.movePiece(D8, A8)
+    let rookSq = toSq
+    let kingDst = if fromSq.file < rookSq.file: fromSq.withFile(6) else: fromSq.withFile(2)
+    let rookDst = if fromSq.file < rookSq.file: fromSq.withFile(5) else: fromSq.withFile(3)
+    b.removePiece(kingDst)
+    b.removePiece(rookDst)
+    b.putPiece(makePiece(b.stm, King), fromSq)
+    b.putPiece(makePiece(b.stm, Rook), rookSq)
 
   elif m.isEnPassant:
     b.movePiece(toSq, fromSq)
@@ -540,8 +581,7 @@ proc unmakeMove*(b: var Board, m: Move) =
     if undo.captured != NoPiece:
       b.putPiece(undo.captured, toSq)
 
-  # Restore remaining fields
-  b.castling = undo.castling
+  b.castlingRooks = undo.castlingRooks
   b.epSquare = undo.epSquare
   b.halfmove = undo.halfmove
   b.hash = undo.hash
@@ -555,12 +595,11 @@ proc unmakeMove*(b: var Board, m: Move) =
 proc makeNullMove*(b: var Board) =
   doAssert b.histLen < 1024
 
-  # Save to history
   b.history[b.histLen] = UndoInfo(
     hash: b.hash,
     pawnHash: b.pawnHash,
     nonPawnHash: b.nonPawnHash,
-    castling: b.castling,
+    castlingRooks: b.castlingRooks,
     epSquare: b.epSquare,
     halfmove: b.halfmove,
     captured: NoPiece,
@@ -591,8 +630,7 @@ proc unmakeNullMove*(b: var Board) =
   dec b.histLen
   let undo = b.history[b.histLen]
 
-  # Restore simple fields
-  b.castling = undo.castling
+  b.castlingRooks = undo.castlingRooks
   b.epSquare = undo.epSquare
   b.halfmove = undo.halfmove
   b.hash = undo.hash
@@ -652,3 +690,88 @@ func isDraw*(b: Board): bool {.inline.} =
 
 func isGameOver*(b: var Board): bool =
   b.isDraw()
+
+proc scharnaglToBackrank*(n: uint32): array[8, PieceType] =
+  const kN5 = [(0,0),(0,1),(0,2),(0,3),(1,1),(1,2),(1,3),(2,2),(2,3),(3,3)]
+  doAssert n < 960
+  for i in 0..7: result[i] = NoPieceType
+
+  proc placeNthFree(res: var array[8, PieceType], n: int, pt: PieceType) =
+    var free = 0
+    for i in 0..7:
+      if res[i] == NoPieceType:
+        if free == n: res[i] = pt; return
+        inc free
+
+  proc placeFirstFree(res: var array[8, PieceType], pt: PieceType) =
+    for i in 0..7:
+      if res[i] == NoPieceType: res[i] = pt; return
+
+  let n2 = n div 4;  let b1 = n mod 4
+  let n3 = n2 div 4; let b2 = n2 mod 4
+  let n4 = n3 div 6; let q  = n3 mod 6
+
+  result[system.int(b1) * 2 + 1] = Bishop
+  result[system.int(b2) * 2]     = Bishop
+  result.placeNthFree(system.int(q), Queen)
+  let (k1, k2) = kN5[n4]
+  result.placeNthFree(k1, Knight)
+  result.placeNthFree(k2, Knight)
+  result.placeFirstFree(Rook)
+  result.placeFirstFree(King)
+  result.placeFirstFree(Rook)
+
+proc buildFrcBoard(whiteBack, blackBack: array[8, PieceType]): Board =
+  for i in 0..63: result.mailbox[i] = NoPiece
+  result.stm = White
+  result.halfmove = 0
+  result.fullmove = 1
+  result.epSquare = NoSquare
+
+  for f in 0..7:
+    result.mailbox[makeSquare(0, f).int] = makePiece(White, whiteBack[f])
+    result.mailbox[makeSquare(1, f).int] = WhitePawn
+    result.mailbox[makeSquare(6, f).int] = BlackPawn
+    result.mailbox[makeSquare(7, f).int] = makePiece(Black, blackBack[f])
+
+  result.castlingRooks.wk = NoSquare
+  result.castlingRooks.wq = NoSquare
+  result.castlingRooks.bk = NoSquare
+  result.castlingRooks.bq = NoSquare
+
+  var seenWRook = false
+  var seenBRook = false
+  for f in 0..7:
+    if whiteBack[f] == Rook:
+      if not seenWRook: result.castlingRooks.wq = makeSquare(0, f); seenWRook = true
+      else:             result.castlingRooks.wk = makeSquare(0, f)
+    if blackBack[f] == Rook:
+      if not seenBRook: result.castlingRooks.bq = makeSquare(7, f); seenBRook = true
+      else:             result.castlingRooks.bk = makeSquare(7, f)
+
+  for sq in 0..63:
+    let p = result.mailbox[sq]
+    if p != NoPiece:
+      let sqBit = bit(Square(sq))
+      result.byPiece[p.ord] = result.byPiece[p.ord] or sqBit
+      result.byColor[p.color.ord] = result.byColor[p.color.ord] or sqBit
+      result.occupied = result.occupied or sqBit
+      result.hash = result.hash xor pieceKeys[p.ord][sq]
+      if p == WhitePawn or p == BlackPawn:
+        result.pawnHash = result.pawnHash xor pieceKeys[p.ord][sq]
+      else:
+        result.nonPawnHash[p.color.ord] = result.nonPawnHash[p.color.ord] xor pieceKeys[p.ord][sq]
+
+  result.hash = result.hash xor castlingKeys[result.castlingRooks.rightsMask]
+  updateAttackState(result)
+
+proc fromFrcIndex*(n: uint32): Board =
+  doAssert n < 960
+  let back = scharnaglToBackrank(n)
+  buildFrcBoard(back, back)
+
+proc fromDfrcIndex*(n: uint32): Board =
+  doAssert n < 960 * 960
+  let whiteBack = scharnaglToBackrank(n mod 960)
+  let blackBack  = scharnaglToBackrank(n div 960)
+  buildFrcBoard(whiteBack, blackBack)

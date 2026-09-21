@@ -274,28 +274,13 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
     if m.isCastling:
         let kingFrom = fromSq
-        let kingTo = toSq
+        let rookFrom = toSq
+        let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
+        let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
 
-        var rookFrom, rookTo: Square
-        # Kingside: king lands on g-file (file index 6)
-        if toSq.file == 6:
-            if us == White:
-                rookFrom = makeSquare(0, 7)  # H1
-                rookTo   = makeSquare(0, 5)  # F1
-            else:
-                rookFrom = makeSquare(7, 7)  # H8
-                rookTo   = makeSquare(7, 5)  # F8
-        else:
-            if us == White:
-                rookFrom = makeSquare(0, 0)  # A1
-                rookTo   = makeSquare(0, 3)  # D1
-            else:
-                rookFrom = makeSquare(7, 0)  # A8
-                rookTo   = makeSquare(7, 3)  # D8
-
-        let kingAddIdx = featureIndex(perspective, us, King, kingTo, perspKingSq)
+        let kingAddIdx = featureIndex(perspective, us, King, kingTo,   perspKingSq)
         let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
-        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo, perspKingSq)
+        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo,   perspKingSq)
         let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
 
         queue.queueAddSub(kingAddIdx, kingSubIdx)

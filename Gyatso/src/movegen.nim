@@ -35,33 +35,34 @@ proc generateKingMoves(b: Board, ml: var MoveList, targetMask: Bitboard) =
   for toSq in targets:
     ml.add(makeMove(kingSq, toSq))
 
+proc tryFrcCastle(b: Board, ml: var MoveList, king, kingDst, rook, rookDst: Square) {.inline.} =
+  let toKingDst = rayBetween(king, kingDst)
+  let toRook    = rayBetween(king, rook)
+  let clearOcc  = b.occupied and not king.bit and not rook.bit
+  let clearMask = toKingDst or toRook or kingDst.bit or rookDst.bit
+  let checkMask = toKingDst or kingDst.bit
+  if (clearOcc and clearMask).isEmpty() and
+     (b.threats and checkMask).isEmpty() and
+     not b.pinHV.hasSq(rook):
+    ml.add(makeCastle(king, rook))
+
 proc generateCastlingMoves(b: Board, ml: var MoveList) =
-  let occ     = b.occupied
-  let threats = b.threats
-  let us      = b.stm
+  let us   = b.stm
+  let king = b.kingSquare(us)
+
+  template tryCastle(rookSq: Square, kingside: bool) =
+    if rookSq != NoSquare:
+      let kingDst = king.withFile(if kingside: 6 else: 2)
+      let rookDst = king.withFile(if kingside: 5 else: 3)
+      tryFrcCastle(b, ml, king, kingDst, rookSq, rookDst)
 
   if us == White:
-    if b.castling.hasWK() and
-       b.mailbox[H1.int] == WhiteRook and
-       (occ and (F1.bit or G1.bit)).isEmpty() and
-       (threats and (E1.bit or F1.bit or G1.bit)).isEmpty():
-      ml.add(makeCastle(E1, G1))
-    if b.castling.hasWQ() and
-       b.mailbox[A1.int] == WhiteRook and
-       (occ and (B1.bit or C1.bit or D1.bit)).isEmpty() and
-       (threats and (E1.bit or D1.bit or C1.bit)).isEmpty():
-      ml.add(makeCastle(E1, C1))
+    tryCastle(b.castlingRooks.wk, true)
+    tryCastle(b.castlingRooks.wq, false)
   else:
-    if b.castling.hasBK() and
-       b.mailbox[H8.int] == BlackRook and
-       (occ and (F8.bit or G8.bit)).isEmpty() and
-       (threats and (E8.bit or F8.bit or G8.bit)).isEmpty():
-      ml.add(makeCastle(E8, G8))
-    if b.castling.hasBQ() and
-       b.mailbox[A8.int] == BlackRook and
-       (occ and (B8.bit or C8.bit or D8.bit)).isEmpty() and
-       (threats and (E8.bit or D8.bit or C8.bit)).isEmpty():
-      ml.add(makeCastle(E8, C8))
+    tryCastle(b.castlingRooks.bk, true)
+    tryCastle(b.castlingRooks.bq, false)
+
 
 proc generateKnightMoves(b: Board, ml: var MoveList, dstMask: Bitboard) =
   let ours = b.byColor[b.stm.ord]

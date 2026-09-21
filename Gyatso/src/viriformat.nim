@@ -26,12 +26,9 @@ proc reset*(vb: var ViriBuffer) {.inline.} =
 
 proc rookHasCastlingRights*(b: Board; sq: Square; color: Color): bool {.inline.} =
   if color == White:
-    if sq == H1: return b.castling.hasWK()
-    if sq == A1: return b.castling.hasWQ()
+    return b.castlingRooks.wk == sq or b.castlingRooks.wq == sq
   else:
-    if sq == H8: return b.castling.hasBK()
-    if sq == A8: return b.castling.hasBQ()
-  return false
+    return b.castlingRooks.bk == sq or b.castlingRooks.bq == sq
 
 proc writeBoard*(vb: var ViriBuffer; b: Board;
                  halfmoveClock: int = -1; fullmoveCounter: int = -1) =
@@ -95,10 +92,8 @@ proc writeMoveEval*(vb: var ViriBuffer; m: Move; evalWhiteRel: int) =
     vType = 1
   of Castling:
     vType = 2
-    if fromSq == E1:
-      toSq = if int(toSq) > int(fromSq): H1 else: A1
-    elif fromSq == E8:
-      toSq = if int(toSq) > int(fromSq): H8 else: A8
+    let rookSq = toSq
+    toSq = if fromSq.file < rookSq.file: fromSq.withFile(5) else: fromSq.withFile(3)
   of Promotion:
     vType = 3
     vPromo = case m.promoType()

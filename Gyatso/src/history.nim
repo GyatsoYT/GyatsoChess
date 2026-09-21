@@ -78,6 +78,7 @@ proc ageHistory*() =
 
 proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
   if m.isPromotion() or m.isEnPassant(): return false
+  if m.isCastling(): return true  # toSq is own rook, not a capture
   return b.mailbox[m.toSq.int] == NoPiece
 
 proc getBonus*(depth: int): int {.inline.} =
@@ -92,9 +93,9 @@ template updateHistoryStat*(stat: var int16, bonus: int) =
 proc updateHistory*(b: Board, m: Move, change: int) =
   let stm = b.stm.ord
   let fromSq = m.fromSq.int
-  let toSq = m.toSq.int
+  let toSq = m.histToSq.int
   let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toAttacked = if b.threats.hasSq(m.toSq): 1 else: 0
+  let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
       toAttacked], change)
 
