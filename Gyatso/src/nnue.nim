@@ -1,19 +1,25 @@
 import coretypes, bitboard, board, nnuetypes
-import std/[streams, endians]
+import std/[streams, endians, strutils]
 
 when defined(simd):
     import simd
 
-func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
+func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square,
+        perspectiveKingSq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
-    let ptIdx = pt.ord  # Pawn=0..King=5
+    let ptIdx = pt.ord # Pawn=0..King=5
     var sqIdx = if perspective == White: sq.int else: (sq.int xor 56)
     # Horizontal mirror: flip file when perspective king is on files e-h
     if (perspectiveKingSq.int mod 8) > 3:
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024OB.bin")
+
+func materialCountBucket*(b: Board): int {.inline.} =
+    const divisor = (32 + NUM_OUTPUT_BUCKETS - 1) div NUM_OUTPUT_BUCKETS
+    let pieceCount = b.occupied.popcount()
+    result = max(0, min((pieceCount - 2) div divisor, NUM_OUTPUT_BUCKETS - 1))
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
@@ -29,16 +35,18 @@ proc loadNetworkFromStream*(s: Stream): NNUENetwork =
         littleEndian16(addr val, addr raw)
         result.ftBias[i] = val
 
-    for i in 0..<(HL * 2):
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
+    for bucket in 0..<NUM_OUTPUT_BUCKETS:
+        for i in 0..<(HL * 2):
+            var raw = s.readInt16()
+            var val: int16
+            littleEndian16(addr val, addr raw)
+            result.l1Weight[bucket][i] = val
 
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    for bucket in 0..<NUM_OUTPUT_BUCKETS:
+        var rawBias = s.readInt32()
+        var val32: int32
+        littleEndian32(addr val32, addr rawBias)
+        result.l1Bias[bucket] = val32
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -54,7 +62,8 @@ proc loadNetworkFromEmbedded*(): NNUENetwork =
 proc initAccumulator*(net: ptr NNUENetwork, acc: var Accumulator) {.inline.} =
     acc.data = net.ftBias
 
-proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
+proc addFeature*(net: ptr NNUENetwork, index: int,
+        acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] += net.ftWeight[index][o]
@@ -67,7 +76,8 @@ proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inlin
             vecStore(addr acc.data[o], sum)
             o += CHUNK_SIZE
 
-proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
+proc removeFeature*(net: ptr NNUENetwork, index: int,
+        acc: var Accumulator) {.inline.} =
     when not defined(simd):
         for o in 0..<HL:
             acc.data[o] -= net.ftWeight[index][o]
@@ -84,7 +94,8 @@ proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
+                    net.ftWeight[subIdx][i]
     else:
         var i = 0
         while i < HL:
@@ -99,7 +110,8 @@ proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
                 prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
         for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
+            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] -
+                    net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
     else:
         var i = 0
         while i < HL:
@@ -139,7 +151,8 @@ proc queueAddSub*(q: var UpdateQueue, addIdx, subIdx: int) {.inline.} =
     q.subs[q.subCount] = subIdx
     inc q.subCount
 
-proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1, subIdx2: int) {.inline.} =
+proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1,
+        subIdx2: int) {.inline.} =
     q.adds[q.addCount] = addIdx
     inc q.addCount
     q.subs[q.subCount] = subIdx1
@@ -158,10 +171,12 @@ proc apply*(q: var UpdateQueue, net: ptr NNUENetwork,
     elif q.addCount == 2 and q.subCount == 2:
         net.addSubAddSub(q.adds[0], q.subs[0], q.adds[1], q.subs[1], oldAcc, newAcc)
     else:
-        doAssert false, "invalid add/sub configuration: " & $q.addCount & " adds, " & $q.subCount & " subs"
+        doAssert false, "invalid add/sub configuration: " & $q.addCount &
+                " adds, " & $q.subCount & " subs"
     q.reset()
 
-proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
+proc refreshAccumulator*(net: ptr NNUENetwork, board: Board,
+        acc: var Accumulator, perspective: Color) =
     ## Full recompute of accumulator from board state
     let perspKingSq = board.kingSquare(perspective)
     net.initAccumulator(acc)
@@ -182,24 +197,26 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.whiteNeedsRefresh[0] = false
     state.blackNeedsRefresh[0] = false
 
-proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+proc forwardBucket*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator,
+        bucket: int): int {.inline.} =
     when not defined(simd):
         var output: int32 = 0
 
         # STM half
         for i in 0..<HL:
             let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
+            let weight = net.l1Weight[bucket][i].int32
             let clipped = clamp(input, 0, QA.int32)
             output += (clipped * weight).int16 * clipped
 
         # NSTM half
         for i in 0..<HL:
             let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
+            let weight = net.l1Weight[bucket][HL + i].int32
             let clipped = clamp(input, 0, QA.int32)
             output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+        return system.int((output div QA + net.l1Bias[bucket]) *
+                EVAL_SCALE div (QA * QB))
 
     else:
         var
@@ -211,7 +228,7 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         var i = 0
         while i < HL:
             let inp = vecLoad(addr stmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[i])
+            let wt = vecLoad(addr net.l1Weight[bucket][i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
             let product = vecMadd16(vecMullo16(clipped, wt), clipped)
             sum = vecAdd32(sum, product)
@@ -221,17 +238,23 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         i = 0
         while i < HL:
             let inp = vecLoad(addr nstmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[HL + i])
+            let wt = vecLoad(addr net.l1Weight[bucket][HL + i])
             let clipped = vecMin16(vecMax16(inp, zero), qa)
             let product = vecMadd16(vecMullo16(clipped, wt), clipped)
             sum = vecAdd32(sum, product)
             i += CHUNK_SIZE
 
         let rawSum = vecReduceAdd32(sum)
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+        return system.int((rawSum div QA + net.l1Bias[bucket]) *
+                EVAL_SCALE div (QA * QB))
 
-proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
-    ## Lazy refresh: recompute accumulator if king crossed mirror boundary
+proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator,
+        board: Board): int {.inline.} =
+    let bucket = materialCountBucket(board)
+    result = forwardBucket(net, stmAcc, nstmAcc, bucket)
+
+proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board,
+        state: var NNUEState) {.inline.} =
     let ply = state.current
     if state.whiteNeedsRefresh[ply]:
         net.refreshAccumulator(board, state.white[ply], White)
@@ -240,19 +263,32 @@ proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUE
         net.refreshAccumulator(board, state.black[ply], Black)
         state.blackNeedsRefresh[ply] = false
 
-proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
+proc nnueEvaluate*(net: ptr NNUENetwork, board: Board,
+        state: var NNUEState): int {.inline.} =
     # Ensure accumulators are valid before evaluation
     ensureAccumulatorReady(net, board, state)
     let ply = state.current
     if board.stm == White:
-        result = forward(net, state.white[ply], state.black[ply])
+        result = forward(net, state.white[ply], state.black[ply], board)
     else:
-        result = forward(net, state.black[ply], state.white[ply])
+        result = forward(net, state.black[ply], state.white[ply], board)
 
     # Clamp to safe range
     const MaxEval = MateValue - MaxPly - 100
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
+
+proc nnueEvalBucketBreakdown*(net: ptr NNUENetwork, board: Board,
+        state: var NNUEState): array[NUM_OUTPUT_BUCKETS, int] =
+    ensureAccumulatorReady(net, board, state)
+    let ply = state.current
+    for bucket in 0..<NUM_OUTPUT_BUCKETS:
+        if board.stm == White:
+            result[bucket] = forwardBucket(net, state.white[ply], state.black[
+                    ply], bucket)
+        else:
+            result[bucket] = forwardBucket(net, state.black[ply], state.white[
+                    ply], bucket)
 
 proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
                          perspective: Color, state: var NNUEState) =
@@ -275,12 +311,14 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
     if m.isCastling:
         let kingFrom = fromSq
         let rookFrom = toSq
-        let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
-        let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
+        let kingTo = if fromSq.file < rookFrom.file: fromSq.withFile(
+                6) else: fromSq.withFile(2)
+        let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(
+                5) else: fromSq.withFile(3)
 
-        let kingAddIdx = featureIndex(perspective, us, King, kingTo,   perspKingSq)
+        let kingAddIdx = featureIndex(perspective, us, King, kingTo, perspKingSq)
         let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
-        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo,   perspKingSq)
+        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo, perspKingSq)
         let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
 
         queue.queueAddSub(kingAddIdx, kingSubIdx)
@@ -297,15 +335,16 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
         let promoPt = case m.promoType
             of PromoKnight: Knight
             of PromoBishop: Bishop
-            of PromoRook:   Rook
-            of PromoQueen:  Queen
+            of PromoRook: Rook
+            of PromoQueen: Queen
         let capturedPiece = board.mailbox[toSq.int]
         if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
+            let capturedPt = capturedPiece.pieceType
             let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
+            let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
             let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
+            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt,
+                    toSq, perspKingSq)
             queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
         else:
             let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
@@ -315,15 +354,18 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
     else:
         let capturedPiece = board.mailbox[toSq.int]
         if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
+            let capturedPt = capturedPiece.pieceType
             let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx1 = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
+            let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
+            let subIdx1 = featureIndex(perspective, movingColor, movingPt,
+                    fromSq, perspKingSq)
+            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt,
+                    toSq, perspKingSq)
             queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
         else:
             let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
+            let subIdx = featureIndex(perspective, movingColor, movingPt,
+                    fromSq, perspKingSq)
             queue.queueAddSub(addIdx, subIdx)
     if perspective == White:
         queue.apply(net, state.white[ply], state.white[ply + 1])
@@ -343,7 +385,7 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
 
         if isOurKingMoving:
             let fromFile = m.fromSq.file
-            let toFile   = m.toSq.file
+            let toFile = m.toSq.file
             if (fromFile > 3) != (toFile > 3):
                 if perspective == White:
                     state.whiteNeedsRefresh[ply + 1] = true
@@ -393,3 +435,66 @@ proc verifyNNUE*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
             "Black accumulator mismatch at index " & $i &
             ": incremental=" & $state.black[ply].data[i] &
             " expected=" & $blackRef.data[i]
+
+proc formatEvalBoard*(b: Board): string =
+    result = ""
+
+    proc pieceChar(p: Piece): char =
+        case p
+        of WhitePawn: 'P'
+        of WhiteKnight: 'N'
+        of WhiteBishop: 'B'
+        of WhiteRook: 'R'
+        of WhiteQueen: 'Q'
+        of WhiteKing: 'K'
+        of BlackPawn: 'p'
+        of BlackKnight: 'n'
+        of BlackBishop: 'b'
+        of BlackRook: 'r'
+        of BlackQueen: 'q'
+        of BlackKing: 'k'
+        of NoPiece: ' '
+
+    let separator = "+-------+-------+-------+-------+-------+-------+-------+-------+\n"
+    result.add("\n NNUE derived piece values:\n")
+    for rank in countdown(7, 0):
+        result.add(separator)
+        var pieceLine = "|"
+        for file in 0..7:
+            let sq = makeSquare(rank, file)
+            let p = b.mailbox[sq.int]
+            if p == NoPiece:
+                pieceLine.add("       |")
+            else:
+                pieceLine.add("   " & $pieceChar(p) & "   |")
+        result.add(pieceLine & "\n")
+        var valueLine = "|"
+        for file in 0..7:
+            let sq = makeSquare(rank, file)
+            let p = b.mailbox[sq.int]
+            if p == NoPiece or p.pieceType == King:
+                valueLine.add("       |")
+            else:
+                valueLine.add("       |")
+        result.add(valueLine & "\n")
+    result.add(separator)
+
+proc formatBucketBreakdown*(bucketEvals: array[NUM_OUTPUT_BUCKETS, int],
+        activeBucket: int): string =
+    result = ""
+    result.add("\n NNUE network contributions (" & (if activeBucket >=
+            0: "White" else: "Black") & " to move)\n")
+    result.add("+------------+------------+\n")
+    result.add("|   Bucket   |   Total    |\n")
+    result.add("+------------+------------+\n")
+    for bucket in 0..<NUM_OUTPUT_BUCKETS:
+        let eval = bucketEvals[bucket]
+        let sign = if eval >= 0: "+" else: "-"
+        let absVal = abs(eval)
+        let whole = absVal div 100
+        let frac = absVal mod 100
+        let marker = if bucket == activeBucket: " <-- this bucket is used" else: ""
+        result.add("|  " & align($bucket, 2) & "        | " & sign & " " &
+                align($whole, 2) & "." & align($frac, 2, '0') & "   |" &
+                marker & "\n")
+    result.add("+------------+------------+\n")

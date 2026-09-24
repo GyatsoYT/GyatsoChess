@@ -32,3 +32,9 @@ proc nnuePopNull*(state: var NNUEState) {.inline.} =
 
 proc verifyEval*(b: Board, state: var NNUEState) {.inline.} =
   verifyNNUE(addr gNetwork, b, state)
+
+proc evalBucketBreakdown*(b: Board, state: var NNUEState): array[NUM_OUTPUT_BUCKETS, int] =
+  nnueEvalBucketBreakdown(addr gNetwork, b, state)
+
+proc getOutputBucket*(b: Board): int {.inline.} =
+  materialCountBucket(b)

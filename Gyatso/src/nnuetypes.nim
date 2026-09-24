@@ -7,6 +7,7 @@ const
   QA*        = 255   
   QB*        = 64    
   EVAL_SCALE* = 400
+  NUM_OUTPUT_BUCKETS* = 8
 
 type
   Accumulator* = object
@@ -15,8 +16,8 @@ type
   NNUENetwork* = object
     ftWeight* {.align(ALIGNMENT).}: array[FT_IN, array[HL, int16]]
     ftBias*   {.align(ALIGNMENT).}: array[HL, int16]
-    l1Weight* {.align(ALIGNMENT).}: array[HL * 2, int16]
-    l1Bias*:  int32
+    l1Weight* {.align(ALIGNMENT).}: array[NUM_OUTPUT_BUCKETS, array[HL * 2, int16]]
+    l1Bias*:  array[NUM_OUTPUT_BUCKETS, int32]
 
   NNUEState* = object
     current*: int

@@ -9,6 +9,10 @@ import tt
 import history
 import bench
 import threads
+import evaluate
+import nnue
+import nnuetypes
+import bitboard
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -255,6 +259,7 @@ proc runUciLoop*() =
       reply "option name UCI_Chess960 type check default false"
       reply "option name Hash type spin default 16 min 1 max 65536"
       reply "option name Threads type spin default 1 min 1 max 512"
+      reply "option name EvalFile type string default GyatsoNet1024OB.bin"
       reply "uciok"
 
     of "isready":
@@ -271,6 +276,21 @@ proc runUciLoop*() =
 
     of "d":
       reply currentBoard.toFen()
+
+    of "eval":
+      var evalState: NNUEState
+      refreshNNUE(currentBoard, evalState)
+      let score = evaluate(currentBoard, evalState)
+      let bucket = getOutputBucket(currentBoard)
+      let bucketEvals = evalBucketBreakdown(currentBoard, evalState)
+      let archStr = "(" & $FT_IN & ", " & $HL & ", " & $NUM_OUTPUT_BUCKETS & "x1)"
+      reply "info string NNUE evaluation using GyatsoNet1024OB.bin " & archStr
+      reply formatEvalBoard(currentBoard)
+      reply formatBucketBreakdown(bucketEvals, bucket)
+      let sign = if score >= 0: "+" else: "-"
+      let absScore = abs(score)
+      let stmStr = if currentBoard.stm == White: "white" else: "black"
+      reply "NNUE evaluation       " & sign & $(absScore div 100) & "." & align($(absScore mod 100), 2, '0') & " (" & stmStr & " side)"
 
     else:
       if line.startsWith("setoption "):
