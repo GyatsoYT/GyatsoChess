@@ -19,13 +19,17 @@ proc perft*(b: var Board, depth: int): uint64 =
     b.unmakeMove(m)
 
 proc moveToAlgebraic*(m: Move): string =
-  result = toAlgebraic(m.fromSq) & toAlgebraic(m.toSq)
-  if m.isPromotion():
-    result &= (case m.promoType:
-      of PromoQueen:  "q"
-      of PromoRook:   "r"
-      of PromoBishop: "b"
-      of PromoKnight: "n")
+  if m.isCastling() and not gChess960:
+    let kingDst = if m.fromSq.file < m.toSq.file: m.fromSq.withFile(6) else: m.fromSq.withFile(2)
+    result = toAlgebraic(m.fromSq) & toAlgebraic(kingDst)
+  else:
+    result = toAlgebraic(m.fromSq) & toAlgebraic(m.toSq)
+    if m.isPromotion():
+      result &= (case m.promoType:
+        of PromoQueen:  "q"
+        of PromoRook:   "r"
+        of PromoBishop: "b"
+        of PromoKnight: "n")
 
 proc perftSplit*(b: var Board, depth: int) =
   ## Prints per-root-move node counts

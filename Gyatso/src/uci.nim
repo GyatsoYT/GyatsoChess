@@ -9,6 +9,7 @@ import tt
 import history
 import bench
 import threads
+import searchparams
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -22,6 +23,22 @@ proc handlePosition(line: string, b: var Board) =
   if rest.startsWith("startpos"):
     b = parseFen(StartPos)
     rest = rest[8..^1]
+  elif rest.startsWith("frc "):
+    rest = rest[4..^1]
+    let movesIdx = rest.find(" moves ")
+    let idxStr = if movesIdx >= 0: rest[0 ..< movesIdx] else: rest
+    try:
+      b = fromFrcIndex(uint32(parseInt(idxStr)))
+    except: b = parseFen(StartPos)
+    rest = if movesIdx >= 0: rest[movesIdx..^1] else: ""
+  elif rest.startsWith("dfrc "):
+    rest = rest[5..^1]
+    let movesIdx = rest.find(" moves ")
+    let idxStr = if movesIdx >= 0: rest[0 ..< movesIdx] else: rest
+    try:
+      b = fromDfrcIndex(uint32(parseInt(idxStr)))
+    except: b = parseFen(StartPos)
+    rest = if movesIdx >= 0: rest[movesIdx..^1] else: ""
   elif rest.startsWith("fen "):
     rest = rest[4..^1]
     let movesIdx = rest.find(" moves ")
@@ -41,12 +58,21 @@ proc handlePosition(line: string, b: var Board) =
     for tok in movePart.split(' '):
       if tok.len < 4: continue
       let fromSq = parseSquare(tok[0..1])
-      let toSq = parseSquare(tok[2..3])
+      var toSq   = parseSquare(tok[2..3])
       var ml: MoveList
       generateMoves(b, ml)
+
+      var castlingRookSq = NoSquare
+      if not gChess960:
+        let srcPiece = b.mailbox[fromSq.int]
+        if srcPiece.pieceType == King and abs(fromSq.file - toSq.file) == 2:
+          let kingside = toSq.file > fromSq.file
+          castlingRookSq = b.castlingRooks.rook(b.stm, kingside)
+
       for i in 0 ..< ml.len:
         let m = ml.moves[i]
-        if m.fromSq == fromSq and m.toSq == toSq:
+        let matchTo = if castlingRookSq != NoSquare and m.isCastling(): castlingRookSq else: toSq
+        if m.fromSq == fromSq and m.toSq == matchTo:
           if m.isPromotion() and tok.len == 5:
             let promoCh = tok[4]
             let pt = m.promoType
@@ -71,6 +97,9 @@ proc handleGo(line: string, b: Board) =
     binc = 0
     movestogo = 0
     infinite = false
+    nodes: uint64 = 0
+    sn: uint64 = 0
+    hn: uint64 = 0
 
   var i = 1
   while i < tokens.len:
@@ -98,13 +127,37 @@ proc handleGo(line: string, b: Board) =
       if i < tokens.len: movestogo = parseInt(tokens[i])
     of "infinite":
       infinite = true
+    of "nodes":
+      inc i
+      if i < tokens.len:
+        try: nodes = parseBiggestUInt(tokens[i])
+        except ValueError: discard
+    of "sn":
+      inc i
+      if i < tokens.len:
+        try: sn = parseBiggestUInt(tokens[i])
+        except ValueError: discard
+    of "hn":
+      inc i
+      if i < tokens.len:
+        try: hn = parseBiggestUInt(tokens[i])
+        except ValueError: discard
     else:
       discard
     inc i
 
+  if nodes > 0 and sn == 0:
+    sn = nodes
+  if sn > 0 and hn == 0:
+    hn = if sn > high(uint64) div 8: high(uint64) else: sn * 8
+  if sn > 0 and hn <= sn:
+    hn = if sn == high(uint64): high(uint64) else: sn + 1
+
   var softMs: int64
   var hardMs: int64
-  if infinite or (depth > 0 and movetime == 0 and wtime == 0 and btime == 0):
+  var hasTm = false
+  var tm: TimeManager
+  if infinite or ((depth > 0 or sn > 0 or hn > 0) and movetime == 0 and wtime == 0 and btime == 0):
     softMs = int64(high(int32))
     hardMs = int64(high(int32))
   elif movetime > 0:
@@ -114,16 +167,17 @@ proc handleGo(line: string, b: Board) =
     let myTime = if b.stm == White: wtime else: btime
     let myInc  = if b.stm == White: winc  else: binc
     if myTime > 0:
-      let tInfo = calcTimeInfo(myTime, myInc, movestogo)
-      softMs = tInfo.softLimit
-      hardMs = tInfo.hardLimit
+      tm = initTimeManager(myTime, myInc, movestogo, gMoveOverhead)
+      hasTm = true
+      softMs = tm.optTime
+      hardMs = tm.maxTime
     else:
       softMs = int64(high(int32))
       hardMs = int64(high(int32))
 
   let startTime = getMonoTime()
 
-  dispatchHelpers(b, startTime, softMs, hardMs, depth, 0)
+  dispatchHelpers(b, startTime, softMs, hardMs, depth, hn, sn)
 
   var t0 = gThreadPool.threads[0]
   t0.board          = b
@@ -131,8 +185,11 @@ proc handleGo(line: string, b: Board) =
   t0.info.startTime = startTime
   t0.info.softLimitMs  = softMs
   t0.info.hardLimitMs  = hardMs
+  t0.info.timeManager  = tm
+  t0.info.hasTimeManager = hasTm
   t0.info.depthLimit   = depth
-  t0.info.nodeLimit    = 0
+  t0.info.nodeLimit    = hn
+  t0.info.softNodeLimit = sn
   t0.info.nodes        = 0
   t0.info.selDepth     = 0
   t0.info.silent       = false
@@ -199,10 +256,12 @@ proc runUciLoop*() =
       break
 
     of "uci":
-      reply "id name Gyatso 1.5.0"
+      reply "id name Gyatso 1.6.0"
       reply "id author Gyatso Neesham"
+      reply "option name UCI_Chess960 type check default false"
       reply "option name Hash type spin default 16 min 1 max 65536"
       reply "option name Threads type spin default 1 min 1 max 512"
+      reply "option name Move Overhead type spin default 10 min 0 max 5000"
       reply "uciok"
 
     of "isready":
@@ -229,7 +288,8 @@ proc runUciLoop*() =
           if parts[idx] == "name"  and idx + 1 < parts.len: nameIdx  = idx + 1
           if parts[idx] == "value" and idx + 1 < parts.len: valueIdx = idx + 1
         if nameIdx >= 0 and valueIdx >= 0:
-          case parts[nameIdx].toLowerAscii():
+          let optName = parts[nameIdx ..< valueIdx].join(" ").toLowerAscii()
+          case optName:
           of "hash":
             try: initTT(parseInt(parts[valueIdx]))
             except ValueError: discard
@@ -238,6 +298,11 @@ proc runUciLoop*() =
               let n = parseInt(parts[valueIdx])
               if n >= 1 and n <= MaxSearchThreads:
                 initThreadPool(n)
+            except ValueError: discard
+          of "uci_chess960":
+            gChess960 = parts[valueIdx].toLowerAscii() == "true"
+          of "move overhead", "moveoverhead":
+            try: gMoveOverhead = parseInt(parts[valueIdx])
             except ValueError: discard
           else: discard
 

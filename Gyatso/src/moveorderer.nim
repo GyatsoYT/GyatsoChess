@@ -19,6 +19,7 @@ proc isKiller(m: Move, ply: int): int {.inline.} =
 
 func isCapture*(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant: return true
+  if m.isCastling: return false  # toSq is own rook, not a capture
   b.mailbox[m.toSq.int] != NoPiece
 
 const
@@ -47,7 +48,7 @@ proc pickBest(moves: var array[256, Move],
     let remaining = system.uint64(count - 1 - i)
     let adjusted  = system.uint32(scores[i]) xor 0x80000000'u32
     let packed    = (system.uint64(adjusted) shl 32) or remaining
-    if packed > bestPacked or i == cur:
+    if packed >= bestPacked:
       bestPacked = packed
       bestIdx    = i
   if bestIdx != cur:
@@ -98,14 +99,17 @@ func isTTMoveLegal(b: Board, m: Move): bool {.inline.} =
   let moving = b.mailbox[m.fromSq.int]
   if moving == NoPiece: return false
   if moving.color != b.stm: return false
+  if m.isCastling: return true   # king->rook encoding: toSq is own rook, always legal to probe
   let dest = b.mailbox[m.toSq.int]
   if dest != NoPiece and dest.color == b.stm: return false
   if m.isEnPassant and b.epSquare != m.toSq: return false
   true
 
 proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
-  let isPromo = m.isPromotion
-  let isCap   = isCapture(b, m)
+  let mt      = m.moveType
+  let isPromo = mt == Promotion
+  let isEP    = mt == EnPassant
+  let isCap   = isEP or (b.mailbox[m.toSq.int] != NoPiece)
 
   let attackerPt: PieceType =
     if isPromo:
@@ -118,9 +122,9 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
       b.mailbox[m.fromSq.int].pieceType
 
   let victimPt: PieceType =
-    if m.isEnPassant:  Pawn
-    elif isCap:        b.mailbox[m.toSq.int].pieceType
-    else:              NoPieceType
+    if isEP:    Pawn
+    elif isCap: b.mailbox[m.toSq.int].pieceType
+    else:       NoPieceType
 
   let mvvlva     = if victimPt != NoPieceType: mvvlvaScore(attackerPt, victimPt) else: 0
   let promoBonus =
@@ -138,9 +142,9 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
 
   let stm       = b.stm.ord
   let fromSq    = m.fromSq.int
-  let toSq      = m.toSq.int
+  let toSq      = m.histToSq.int
   let fromThrt  = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toThrt    = if b.threats.hasSq(m.toSq):   1 else: 0
+  let toThrt    = if b.threats.hasSq(m.histToSq):   1 else: 0
   let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
   let curPiece  = ord(b.mailbox[m.fromSq.int])
   let cont1 =

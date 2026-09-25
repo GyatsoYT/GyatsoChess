@@ -116,7 +116,8 @@ proc initThreadPool*(requestedCount: int) =
 proc dispatchHelpers*(rootBoard: Board,
                       startTime: MonoTime,
                       softLimitMs, hardLimitMs: int64,
-                      depthLimit: int, nodeLimit: uint64) =
+                      depthLimit: int, nodeLimit: uint64,
+                      softNodeLimit: uint64 = 0) =
  
   gThreadPool.stopFlag.store(false, moRelease)
   for i in 1 ..< gThreadPool.threadCount:
@@ -128,12 +129,14 @@ proc dispatchHelpers*(rootBoard: Board,
     td.info.hardLimitMs  = hardLimitMs
     td.info.depthLimit   = depthLimit
     td.info.nodeLimit    = nodeLimit
+    td.info.softNodeLimit = softNodeLimit
     td.info.nodes        = 0
     td.info.selDepth     = 0
     td.info.silent       = true
     td.info.stopFlag     = addr gThreadPool.stopFlag
     td.info.depthCompleted = 0
     td.info.score        = 0
+    td.info.hasTimeManager = false
     zeroMem(addr td.stack, sizeof(SearchStack))
 
   acquire(gThreadPool.poolLock)
