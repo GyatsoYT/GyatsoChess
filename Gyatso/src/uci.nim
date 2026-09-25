@@ -256,7 +256,7 @@ proc runUciLoop*() =
       break
 
     of "uci":
-      reply "id name Gyatso 1.5.0"
+      reply "id name Gyatso 1.6.0"
       reply "id author Gyatso Neesham"
       reply "option name UCI_Chess960 type check default false"
       reply "option name Hash type spin default 16 min 1 max 65536"

@@ -17,16 +17,22 @@ Gyatso is a high-performance chess engine compatible with the Universal Chess In
 
 ## Strength & Ratings
 
-> Ratings marked **Estimated** are interpolated from SPRT test data and may not reflect official lists yet.
+> Ratings marked **(Est.)** are interpolated from match and SPRT test data and will be updated once official lists publish.
 
-| Version | CCRL 40/15 | CCRL Blitz (2'+1") |
-| :--- | :---: | :---: |
-| **v1.0** | 2094 | — |
-| **v1.1** | 2537 | 2406 |
-| **v1.2** | 2651 | — |
-| **v1.3** | 3054 | 3052 |
-| **v1.4** | 3212 | 3251 |
-| **v1.5** | ~3360 *(Est.)* | ~3347 *(Est.)* |
+| Version | CCRL 40/15 | CCRL Blitz (2'+1") | CCRL FRC (960) | COPE Bullet | COPE Rapid | COPE DFRC |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **v1.0** | 2094 | — | — | — | — | — |
+| **v1.1** | 2537 | 2406 | — | — | — | — |
+| **v1.2** | 2651 | — | — | — | — | — |
+| **v1.3** | 3054 | 3052 | — | — | — | — |
+| **v1.4** | 3212 | 3251 | — | — | — | — |
+| **v1.5** | [3258](https://computerchess.org.uk/4040/cgi/engine_details.cgi?print=Details&each_game=0&eng=Gyatso%201.5.0%2064-bit#Gyatso_1_5_0_64-bit) | [3341](https://computerchess.org.uk/404/cgi/engine_details.cgi?print=Details&each_game=1&eng=Gyatso%201.5.0%2064-bit#Gyatso_1_5_0_64-bit) | — | [3,241](https://cope-chess.live/engines/40) | [3,315](https://cope-chess.live/engines/40) | — |
+| **v1.6** *(Est.)* | ~3553 | ~3623 | ~3725 | ~3585 | ~3659 | ~3680 |
+
+*Notes on Ratings:*
+- **v1.5.0 Official Ranks:** CCRL Blitz #153–154 (3341), CCRL 40/15 #186 (3258).
+- **v1.6 CCRL Estimates:** Anchored against [Elixir 3.0 64-bit](https://computerchess.org.uk/404/cgi/engine_details.cgi?print=Details&each_game=1&eng=Elixir%203.0%2064-bit#Elixir_3_0_64-bit) (CCRL Blitz 3567, 40/15 3497) following a head-to-head match (+56.1 ± 23.9 Elo at 58.0% over 400 games), alongside a +344.5 ± 21.8 Elo progression gain against Gyatso v1.5.0 (1000 games).
+- **v1.6 FRC / DFRC:** Estimated at ~3725 on CCRL FRC and ~3680 on COPE DFRC with native Chess960 & DFRC support.
 
 ---
 
@@ -37,25 +43,32 @@ Gyatso is a high-performance chess engine compatible with the Universal Chess In
 - **Iterative Deepening** with **Principal Variation Search (PVS)**
 - **Aspiration Windows** — adaptive window widening on fail-low/fail-high
 - **Quiescence Search** — captures-only search to resolve tactical noise
-- **Transposition Table** — 3-entry clustered design with Zobrist hashing, generation aging, and TT prefetching
+- **Transposition Table** — 3-entry clustered design with Zobrist hashing, generation aging, TT prefetching, and **TT-Hit History Bonus**
 
 #### Pruning & Reductions
 - **Null Move Pruning (NMP)** — adaptive reduction `R = 2 + depth/4`, with verification at high depths
 - **Reverse Futility Pruning (RFP)** — linear + quadratic margin; improvement-aware
-- **Futility Pruning** — quiet move pruning near the horizon
-- **Late Move Reductions (LMR)** — logarithmic table with history-based adjustments, improving flag, cut-node bonus, and SMP jitter
+- **Futility Pruning (FP)** — quiet move pruning near the horizon
+- **Late Move Reductions (LMR)** — logarithmic table with history-based adjustments, improving flag, cut-node bonus, SMP jitter, and **tactical move reductions**
 - **Late Move Pruning (LMP)** — depth-scaled quiet move count threshold
 - **SEE Quiet Pruning** — skip quiet moves with a negative static exchange evaluation
+- **Noisy SEE Pruning** — skip tactical captures and promotions with negative SEE thresholds at search depth
+- **Multicut** — forward pruning when singular search refutation moves fail high
 - **Internal Iterative Reduction (IIR)** — reduce depth when no TT move is available
+- **Mate Distance Pruning (MDP)** — prunes search branches when the current distance to mate cannot improve search bounds
 
 #### Extensions
 - **Check Extensions** — extend search by 1 ply when a move gives check
+- **Singular Extensions** — extends search depth when the TT move is uniquely best 
+- **Double Extensions** — extends search by 2 plies when the singular score margin is decisively large
+- **Negative Extensions** — reduces search depth when singular verification fails high (move is not singular)
 
-#### Draw Detection
+#### Draw Detection & Contempt
 - **Threefold Repetition** detection
 - **Fifty-Move Rule** detection
+- **Draw Score Randomisation** — node-based slight perturbation to prevent cyclic repetition traps and break search symmetry
 
-### Move Ordering
+### Move Ordering & History
 
 Moves are scored and tried in this order for maximum cutoffs:
 
@@ -70,34 +83,44 @@ Moves are scored and tried in this order for maximum cutoffs:
 
 History tables use **gravity-based aging** and are scaled per-move with bonus/malus on cutoff/fail.
 
+#### Correction History
+- **Pawn Correction History** — indexed by `[stm][pawnHash]`
+- **Non-Pawn Correction History** — indexed by White/Black non-pawn material and piece-placement hashes
+- Dynamically adjusts raw static evaluation before search and pruning decisions
+
+### Variants & Rules
+
+- **Chess960 (FRC)** — Fischer Random Chess support
+- **Double Fischer Random Chess (DFRC)** — support for independent white and black back-rank configurations (960 × 960 positions)
+
 ### Evaluation — NNUE
 
 > **HCE (Hand-Crafted Evaluation) has been deprecated** as of v1.5.0.
 > HCE was the evaluation backbone up through **v1.4.0** and can still be found in those older releases.
 > Starting with **v1.5.0**, Gyatso uses **NNUE exclusively**.
-> HCE may return in a future version, but is not a current priority.
 
 Gyatso uses a custom-trained **NNUE** (Efficiently Updatable Neural Network) for evaluation:
 
-- **Architecture:** `768 → 512HM` (Horizontally Mirrored)
+- **Architecture:** `768 → 1024HM` (Horizontally Mirrored)
   - Input: 768 features (piece × color × square)
-  - Hidden Layer: 512 neurons, one accumulator per side (white / black)
-  - Output: single scalar centipawn score
+  - Hidden Layer: 1024 neurons, one accumulator per side (white / black)
+  - Output: single scalar centipawn score, refined by Pawn and Non-Pawn Correction History
 - **Activation:** SCReLU (Squared Clipped ReLU — `clamp(x, 0, QA)² × weight`)
-- **Incremental Updates:** accumulator is updated incrementally on each move (add/sub/addSub patterns)
+- **Incremental Updates:** accumulator is updated incrementally on each move with full support for standard, FRC, and DFRC castling
 - **Lazy Refresh:** full accumulator recompute only when the king crosses the horizontal mirror boundary (file 3↔4 threshold)
 - **SIMD Acceleration:** AVX2, AVX-512, and NEON code paths for vectorized accumulator math
-- **Embedded Network:** the `.bin` file (`GyatsoNet512HM.bin`) is compiled directly into the binary — no external files needed at runtime
-- **Training:** network trained with [Bullet](https://github.com/jw1912/bullet) on self-generated data
+- **Embedded Network:** the `.bin` file (`GyatsoNet1024.bin`) is compiled directly into the binary — no external files needed at runtime
+- **Training:** network trained with [Bullet](https://github.com/jw1912/bullet)
 
-### Performance
+### Performance & Time Management
 
+- **Dynamic Time Management** — dedicated time manager (`timeman.nim`) calculating optimal soft and hard time limits based on remaining clock, increment, moves-to-go, and configurable `Move Overhead`
+- **Node & Stability Scaling** — dynamic time allocation scaling based on root move node percentage (`bmFrac`) and exponential best-move stability scaling across iterations
 - **Magic Bitboards** — fast sliding piece attack generation (bishops, rooks, queens)
 - **Lazy SMP (Multi-threading)** — parallel search across all available CPU cores with per-thread history, randomized LMR jitter to avoid search collapse, and vote-based best-thread selection
 - **Profile-Guided Optimization (PGO)** — 5-stage build pipeline (instrument → perft workload → bench → timed search → merge → optimized build) for maximum CPU-specific performance
 - **SIMD** — vectorized NNUE operations (AVX2/AVX-512/NEON selectable at compile time)
 - **TT Prefetch** — cache-line prefetch of TT entries before recursive calls
-- **Bestmove Stability** — time management reduces soft limit when the best move has been stable across iterations
 
 ### Technology
 
@@ -106,6 +129,9 @@ Gyatso uses a custom-trained **NNUE** (Efficiently Updatable Neural Network) for
 - **UCI Options:**
   - `Hash` — transposition table size in MB (default 16, max 65536)
   - `Threads` — number of search threads (default 1, max 512)
+  - `Move Overhead` — safety margin for GUI/network latency in ms (default 10, min 0, max 5000)
+  - `UCI_Chess960` — toggle Fischer Random Chess / DFRC support (default false)
+- **Search Controls:** Supports `go depth`, `go movetime`, `go wtime/btime`, and `go nodes` (with soft & hard node limits)
 
 ---
 
@@ -209,12 +235,9 @@ The following features are planned or under consideration for future versions:
 
 - [ ] **Syzygy Tablebases** — perfect play in known endgame positions
 - [ ] **Multi-PV** — display multiple principal variations during analysis
-- [ ] **Chess960 / FRC** — Fischer Random Chess support
-- [ ] **Singular Extensions** — extend the PV move when it is uniquely best
-- [ ] **Mate Distance Pruning** — prune branches that cannot improve on a known mate
 - [ ] **ProbCut** — probabilistic forward pruning for high-depth nodes
-- [ ] **NNUE training improvements** — larger networks, more data, refined architecture
-- [ ] **HCE restoration** — optional fallback for very constrained environments (no plans for v1.5.x)
+- [ ] **History Pruning & Capture History** — advanced move ordering and selective pruning
+- [ ] **HCE restoration** — optional fallback for very constrained environments
 
 ---
 
