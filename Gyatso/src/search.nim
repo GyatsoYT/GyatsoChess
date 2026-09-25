@@ -12,6 +12,7 @@ import moveorderer
 import history
 import searchparams
 import see
+import timeman
 
 var nnueState* {.threadvar.}: NNUEState
 
@@ -46,6 +47,11 @@ type SearchInfo* = object
   completedMove*: Move
   completedPVLen*: int
   completedPV*: array[MaxPly + 1, Move]
+  rootMoves*: array[MaxMoves, Move]
+  rootMovesCount*: int
+  rootMoveNodes*: array[MaxMoves, uint64]
+  timeManager*: TimeManager
+  hasTimeManager*: bool
 
 proc shouldStop(info: var SearchInfo): bool {.inline.} =
   if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
@@ -54,7 +60,12 @@ proc shouldStop(info: var SearchInfo): bool {.inline.} =
     if info.nodeLimit > 0 and info.nodes >= info.nodeLimit:
       if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
       return true
-    if (getMonoTime() - info.startTime).inMilliseconds >= info.hardLimitMs:
+    let elapsed = (getMonoTime() - info.startTime).inMilliseconds
+    let hardExceeded = if info.hasTimeManager:
+      info.timeManager.stopHard(elapsed)
+    else:
+      elapsed >= info.hardLimitMs
+    if hardExceeded:
       if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
       return true
   return false
@@ -401,6 +412,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let lmrHistScore = system.int(historyTable[lmrStm][m.fromSq.int][
         m.histToSq.int][fromAttacked][toAttacked])
 
+    let prevNodes = if ply == 0: info.nodes else: 0'u64
+
     nnuePush(b, m, nnueState)
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
@@ -482,6 +495,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     b.unmakeMove(m)
     nnuePop(nnueState)
+
+    if ply == 0:
+      let deltaNodes = info.nodes - prevNodes
+      for rIdx in 0 ..< info.rootMovesCount:
+        if info.rootMoves[rIdx] == m:
+          info.rootMoveNodes[rIdx] += deltaNodes
+          break
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
@@ -639,8 +659,14 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
 
   # aspirationScore seeds the windows for depth >= AspMinDepth
   var aspirationScore = bestScore
-  var bestmoveStability = 0
-  var prevBestMove = NullMove
+
+  var rootMl: MoveList
+  generateMoves(b, rootMl)
+  info.rootMovesCount = rootMl.len
+  for i in 0 ..< rootMl.len:
+    info.rootMoves[i] = rootMl.moves[i]
+  for i in 0 ..< MaxMoves:
+    info.rootMoveNodes[i] = 0
 
   for depth in 1 .. maxDepth:
     info.selDepth = depth
@@ -733,19 +759,26 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
       let displayNodes = if gNodeAggregator != nil: gNodeAggregator() else: info.nodes
       printInfo(depth, info.selDepth, bestScore, displayNodes, elapsed, info)
 
-      if bestMove == prevBestMove:
-        inc bestmoveStability
+      if info.hasTimeManager:
+        var bmIdx = -1
+        for i in 0 ..< info.rootMovesCount:
+          if info.rootMoves[i] == bestMove:
+            bmIdx = i
+            break
+        let bmNodes = if bmIdx >= 0: info.rootMoveNodes[bmIdx] else: 0'u64
+        info.timeManager.update(depth, info.nodes, bestMove, bmNodes)
+
+        if info.timeManager.stopSoft(elapsed):
+          if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+          break
+
+        if info.timeManager.stopHard(elapsed):
+          if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+          break
       else:
-        bestmoveStability = 0
-      prevBestMove = bestMove
-
-      let stabIdx = min(bestmoveStability, StabilityScale.high)
-      let stabilityFactor = StabilityScale[stabIdx]
-      let adjustedSoftLimit = info.softLimitMs * int64(stabilityFactor) div 100
-
-      if elapsed >= adjustedSoftLimit:
-        if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
-        break
+        if elapsed >= info.softLimitMs:
+          if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)
+          break
 
       if info.softNodeLimit > 0 and info.nodes >= info.softNodeLimit:
         if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)

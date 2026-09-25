@@ -9,6 +9,7 @@ import tt
 import history
 import bench
 import threads
+import searchparams
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -154,6 +155,8 @@ proc handleGo(line: string, b: Board) =
 
   var softMs: int64
   var hardMs: int64
+  var hasTm = false
+  var tm: TimeManager
   if infinite or ((depth > 0 or sn > 0 or hn > 0) and movetime == 0 and wtime == 0 and btime == 0):
     softMs = int64(high(int32))
     hardMs = int64(high(int32))
@@ -164,9 +167,10 @@ proc handleGo(line: string, b: Board) =
     let myTime = if b.stm == White: wtime else: btime
     let myInc  = if b.stm == White: winc  else: binc
     if myTime > 0:
-      let tInfo = calcTimeInfo(myTime, myInc, movestogo)
-      softMs = tInfo.softLimit
-      hardMs = tInfo.hardLimit
+      tm = initTimeManager(myTime, myInc, movestogo, gMoveOverhead)
+      hasTm = true
+      softMs = tm.optTime
+      hardMs = tm.maxTime
     else:
       softMs = int64(high(int32))
       hardMs = int64(high(int32))
@@ -181,6 +185,8 @@ proc handleGo(line: string, b: Board) =
   t0.info.startTime = startTime
   t0.info.softLimitMs  = softMs
   t0.info.hardLimitMs  = hardMs
+  t0.info.timeManager  = tm
+  t0.info.hasTimeManager = hasTm
   t0.info.depthLimit   = depth
   t0.info.nodeLimit    = hn
   t0.info.softNodeLimit = sn
@@ -255,6 +261,7 @@ proc runUciLoop*() =
       reply "option name UCI_Chess960 type check default false"
       reply "option name Hash type spin default 16 min 1 max 65536"
       reply "option name Threads type spin default 1 min 1 max 512"
+      reply "option name Move Overhead type spin default 10 min 0 max 5000"
       reply "uciok"
 
     of "isready":
@@ -281,7 +288,8 @@ proc runUciLoop*() =
           if parts[idx] == "name"  and idx + 1 < parts.len: nameIdx  = idx + 1
           if parts[idx] == "value" and idx + 1 < parts.len: valueIdx = idx + 1
         if nameIdx >= 0 and valueIdx >= 0:
-          case parts[nameIdx].toLowerAscii():
+          let optName = parts[nameIdx ..< valueIdx].join(" ").toLowerAscii()
+          case optName:
           of "hash":
             try: initTT(parseInt(parts[valueIdx]))
             except ValueError: discard
@@ -293,6 +301,9 @@ proc runUciLoop*() =
             except ValueError: discard
           of "uci_chess960":
             gChess960 = parts[valueIdx].toLowerAscii() == "true"
+          of "move overhead", "moveoverhead":
+            try: gMoveOverhead = parseInt(parts[valueIdx])
+            except ValueError: discard
           else: discard
 
       elif line.startsWith("position"):

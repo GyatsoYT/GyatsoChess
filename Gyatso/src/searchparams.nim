@@ -40,16 +40,24 @@ const
   AspWideDen* = 2
   AspMaxRetries* = 6
   AspFailHighMaxReduction* = 2
-  TmTimeDiv* = 20
-  TmIncNum* = 3
-  TmIncDen* = 4
-  TmHardNum* = 76
-  TmHardDen* = 100
-  TmSoftNum* = 52
-  TmSoftDen* = 100
-  StabilityScale*: array[0..4, int] = [100, 92, 85, 75, 65]
+  # Time Management
+  TmDefaultMovesToGo* = 20
+  TmIncrementScale*   = 0.90
+  TmSoftTimeScale*    = 0.68
+  TmHardTimeScale*    = 0.58
+  MoveOverheadMs*     = 10
+  TmNodeBase*         = 2.55
+  TmNodeScale*        = 1.55
+  TmNodeScaleMin*     = 0.20
+  TmBmStabMin*        = 0.78
+  TmBmStabMax*        = 2.36
+  TmBmStabScale*      = 8.59
+  TmBmStabOffset*     = 0.9
+  TmBmStabPower*      = -2.57
+  TmScaleMin*         = 0.20
 
 var
+  gMoveOverhead*: int = MoveOverheadMs
   LMR*: array[MaxPly, array[64, int]]
 
 const
