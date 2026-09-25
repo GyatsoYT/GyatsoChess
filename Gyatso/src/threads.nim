@@ -136,6 +136,7 @@ proc dispatchHelpers*(rootBoard: Board,
     td.info.stopFlag     = addr gThreadPool.stopFlag
     td.info.depthCompleted = 0
     td.info.score        = 0
+    td.info.hasTimeManager = false
     zeroMem(addr td.stack, sizeof(SearchStack))
 
   acquire(gThreadPool.poolLock)
