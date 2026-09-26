@@ -191,7 +191,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var ttBound = 0'u8
   var ttEval = NoEval
   let hashVal = cast[system.uint64](b.hash)
-  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval)
+  var ttPv = false
+  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval, ttPv)
+  let wasPV = pvNode or (hasTT and ttPv)
 
   if hasTT and ttDepth >= depth and ply > 0 and not isSingularSearch:
     if ttBound == BoundExact:
@@ -249,7 +251,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      not isSingularSearch and
      abs(beta) < MateThreshold:
     let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth -
-                    clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp)
+                    clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp) +
+                    (if wasPV: TtPvRfpMargin else: 0)
     if staticEval - rfpMargin >= beta:
       return staticEval - rfpMargin
 
@@ -459,6 +462,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
+        # TT-PV reduction
+        if wasPV:
+          reduction -= TtPvLmrReduction
+
         # Cut-node reduction
         if cutnode and isQuiet:
           inc reduction
@@ -547,7 +554,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             let evalToStore = if stack[ply].rawEval ==
                 Unknown: NoEval else: int16(stack[ply].rawEval)
             storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta,
-                ply, evalToStore)
+                ply, evalToStore, wasPV)
 
             # Update correction history on beta cutoff
             if not inCheck and isQuietMove(b, m) and abs(score) <
@@ -593,7 +600,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             updateHistory(b, triedQuiets[i], malus)
     let evalToStore2 = if stack[ply].rawEval == Unknown: NoEval else: int16(
         stack[ply].rawEval)
-    storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
+    storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2, wasPV)
 
     # Update correction history on fail-low or exact bound
     if not inCheck and

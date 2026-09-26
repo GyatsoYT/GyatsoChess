@@ -11,6 +11,9 @@ const
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15
   RfpImprovementClamp* = 80
+  # TT-PV adjustments
+  TtPvRfpMargin* = 25
+  TtPvLmrReduction* = 1
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75
