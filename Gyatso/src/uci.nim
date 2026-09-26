@@ -288,7 +288,7 @@ proc runUciLoop*() =
           if parts[idx] == "name"  and idx + 1 < parts.len: nameIdx  = idx + 1
           if parts[idx] == "value" and idx + 1 < parts.len: valueIdx = idx + 1
         if nameIdx >= 0 and valueIdx >= 0:
-          let optName = parts[nameIdx ..< valueIdx].join(" ").toLowerAscii()
+          let optName = parts[nameIdx ..< (valueIdx - 1)].join(" ").toLowerAscii()
           case optName:
           of "hash":
             try: initTT(parseInt(parts[valueIdx]))
