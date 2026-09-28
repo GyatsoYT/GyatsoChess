@@ -19,6 +19,7 @@ const
   FpMarginScale* = 75
   # Internal Iterative Reduction
   IirMinDepth* = 4
+  IirShallowMargin* = 3
   # Singular Extension
   SeMinDepth* = 7
   SeDepthOffset* = 3

@@ -211,9 +211,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   # Internal Iterative Reduction (IIR)
   var depth = depth
-  if depth >= IirMinDepth and ttMove == NullMove and not inCheck and
-      not isSingularSearch:
-    dec depth
+  if depth >= IirMinDepth and not inCheck and not isSingularSearch:
+    if ttMove == NullMove:
+      dec depth
+    elif hasTT and ttDepth + IirShallowMargin < depth:
+      dec depth
 
   if depth <= 0:
     return qSearch(b, alpha, beta, ply, info, stack)
