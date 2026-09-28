@@ -11,6 +11,9 @@ const
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15
   RfpImprovementClamp* = 80
+  RfpCorrplexityScale* = 1
+  RfpCorrplexityDiv* = 2
+  RfpCorrplexityClamp* = 40
   # TT-PV adjustments
   TtPvRfpMargin* = 25
   TtPvLmrReduction* = 1

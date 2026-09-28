@@ -250,9 +250,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      depth <= RfpDepth and
      not isSingularSearch and
      abs(beta) < MateThreshold:
+    let corrDiff = if stack[ply].rawEval != Unknown:
+                     abs(stack[ply].rawEval - staticEval)
+                   else:
+                     0
+    let corrplexity = clamp((corrDiff * RfpCorrplexityScale) div RfpCorrplexityDiv,
+                            0, RfpCorrplexityClamp)
     let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth -
                     clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp) +
-                    (if wasPV: TtPvRfpMargin else: 0)
+                    (if wasPV: TtPvRfpMargin else: 0) +
+                    corrplexity
     if staticEval - rfpMargin >= beta:
       return staticEval - rfpMargin
 
