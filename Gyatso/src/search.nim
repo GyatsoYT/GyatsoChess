@@ -402,6 +402,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       elif ttScore >= beta:
         singularExtension = -SeNegativeExtTtBeta
 
+      # Recapture extension
+      if singularExtension > 0 and prevToSq >= 0 and
+          m.histToSq.int == prevToSq:
+        singularExtension = min(singularExtension + SeRecaptureExt, SeRecaptureCap)
+
     stack[ply].move = m
     stack[ply].piece = ord(b.mailbox[m.fromSq.int])
     stack[ply + 1].staticEval = Unknown
