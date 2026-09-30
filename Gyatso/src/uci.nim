@@ -10,6 +10,7 @@ import history
 import bench
 import threads
 import searchparams
+import genfens
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -333,3 +334,7 @@ proc runUciLoop*() =
           runBench(d)
         else:
           reply "Depth must be >= 1"
+
+      elif line.startsWith("genfens"):
+        stopSearch()
+        runGenfens(line)
