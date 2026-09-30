@@ -32,6 +32,8 @@ const
   SeMultiCutLerp* = 40
   # Negative Extension
   SeNegativeExtTtBeta* = 2
+  SeRecaptureExt* = 1
+  SeRecaptureCap* = 2
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41
