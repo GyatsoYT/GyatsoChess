@@ -325,11 +325,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     if m == excludedMove:
       continue
 
+    let isQuiet = isQuietMove(b, m)
+    let histToSqInt = m.histToSq.int
+    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
+    let toAttacked   = if b.threats.hasSq(m.histToSq): 1 else: 0
+
     # Futility Pruning
     if movesSearched > 0 and
        depth <= FpDepth and
        not inCheck and
-       isQuietMove(b, m) and
+       isQuiet and
        m != ttMove and
        m != killerMoves[ply][0] and
        m != killerMoves[ply][1] and
@@ -344,7 +349,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        depth <= 7 and
        not inCheck and
        not pvNode and
-       isQuietMove(b, m) and
+       isQuiet and
        curAlpha < MateThreshold and
        movesSearched >= LmpTable[depth]:
       picker.skipQuiets()
@@ -353,7 +358,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     # Quiet SEE Pruning
     if movesSearched > 0 and
        not inCheck and
-       isQuietMove(b, m) and
+       isQuiet and
        abs(curAlpha) < MateThreshold and
        not see(b, m, StaticPruning[depth]):
       continue
@@ -361,7 +366,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     # Noisy SEE Pruning
     if movesSearched > 0 and
        not inCheck and
-       not isQuietMove(b, m) and
+       not isQuiet and
        not m.isPromotion() and
        abs(curAlpha) < MateThreshold and
        not see(b, m, SEEPruning[depth]):
@@ -404,7 +409,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
       # Recapture extension
       if singularExtension > 0 and prevToSq >= 0 and
-          m.histToSq.int == prevToSq:
+          histToSqInt == prevToSq:
         singularExtension = min(singularExtension + SeRecaptureExt, SeRecaptureCap)
 
     stack[ply].move = m
@@ -412,13 +417,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
 
-    # Pre-compute history values before makeMove
-    let isQuiet = isQuietMove(b, m) and not m.isPromotion()
     let lmrStm = b.stm.ord
-    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
-    let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
     let lmrHistScore = system.int(historyTable[lmrStm][m.fromSq.int][
-        m.histToSq.int][fromAttacked][toAttacked])
+        histToSqInt][fromAttacked][toAttacked])
 
     let prevNodes = if ply == 0: info.nodes else: 0'u64
 
@@ -457,7 +458,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         # History-based LMR adjustment
         if isQuiet:
           let curPiece = stack[ply].piece
-          let curToSq = m.histToSq.int
+          let curToSq = histToSqInt
           var histAdj = lmrHistScore
           # 1-ply continuation history
           if prevPiece >= 0:
@@ -532,14 +533,14 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         info.pvLen[ply] = childLen + 1
         if curAlpha >= beta:
           if not isSingularSearch:
-            if isQuietMove(b, m):
+            if isQuiet:
               storeKiller(ply, m)
               let bonus = getBonus(depth)
               let malus = -bonus
               updateHistory(b, m, bonus)
               if prevPiece >= 0:
                 let curPiece = stack[ply].piece
-                let curToSq = m.histToSq.int
+                let curToSq = histToSqInt
                 updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
                 if prev2Piece >= 0:
                   updateContHist2(prev2Piece, prev2ToSq, curPiece, curToSq, bonus)
@@ -562,13 +563,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 ply, evalToStore, wasPV)
 
             # Update correction history on beta cutoff
-            if not inCheck and isQuietMove(b, m) and abs(score) <
+            if not inCheck and isQuiet and abs(score) <
                 MateThreshold and score > staticEval:
               updateCorrection(b, depth, score - staticEval)
           return bestScore
 
     # Record tried quiet moves that did not cause a cutoff
-    if isQuietMove(b, m):
+    if isQuiet:
       if triedQuietsLen < triedQuiets.len:
         triedQuiets[triedQuietsLen] = m
         inc triedQuietsLen

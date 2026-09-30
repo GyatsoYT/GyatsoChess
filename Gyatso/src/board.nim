@@ -200,9 +200,14 @@ proc updateAttackState*(b: var Board) =
   b.threats = b.threats or getKingAttacks(enemyKingSq)
 
   # 3. Knight threats
-  var enemyKnights = b.byPiece[offset + Knight.ord]
-  for sq in enemyKnights:
-    b.threats = b.threats or getKnightAttacks(sq)
+  let setwiseKnightThreats = allKnightAttacks(b.byPiece[offset + Knight.ord])
+  when not defined(release):
+    var dbgKnightThreats = Bitboard(0)
+    var dbgKnights = b.byPiece[offset + Knight.ord]
+    for sq in dbgKnights:
+      dbgKnightThreats = dbgKnightThreats or getKnightAttacks(sq)
+    assert setwiseKnightThreats == dbgKnightThreats, "allKnightAttacks mismatch!"
+  b.threats = b.threats or setwiseKnightThreats
 
   # 4. Rook / Queen threats (HV)
   var enemyRooksAndQueens = enemyRooks or enemyQueens

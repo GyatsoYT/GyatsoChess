@@ -61,11 +61,13 @@ proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inlin
     else:
         var o = 0
         while o < HL:
-            let weight = vecLoad(addr net.ftWeight[index][o])
-            let data = vecLoad(addr acc.data[o])
-            let sum = vecAdd16(weight, data)
-            vecStore(addr acc.data[o], sum)
-            o += CHUNK_SIZE
+            let w0 = vecLoad(addr net.ftWeight[index][o])
+            let d0 = vecLoad(addr acc.data[o])
+            let w1 = vecLoad(addr net.ftWeight[index][o + CHUNK_SIZE])
+            let d1 = vecLoad(addr acc.data[o + CHUNK_SIZE])
+            vecStore(addr acc.data[o], vecAdd16(d0, w0))
+            vecStore(addr acc.data[o + CHUNK_SIZE], vecAdd16(d1, w1))
+            o += CHUNK_SIZE * 2
 
 proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
     when not defined(simd):
@@ -74,11 +76,13 @@ proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.in
     else:
         var o = 0
         while o < HL:
-            let weight = vecLoad(addr net.ftWeight[index][o])
-            let data = vecLoad(addr acc.data[o])
-            let sum = vecSub16(data, weight)
-            vecStore(addr acc.data[o], sum)
-            o += CHUNK_SIZE
+            let w0 = vecLoad(addr net.ftWeight[index][o])
+            let d0 = vecLoad(addr acc.data[o])
+            let w1 = vecLoad(addr net.ftWeight[index][o + CHUNK_SIZE])
+            let d1 = vecLoad(addr acc.data[o + CHUNK_SIZE])
+            vecStore(addr acc.data[o], vecSub16(d0, w0))
+            vecStore(addr acc.data[o + CHUNK_SIZE], vecSub16(d1, w1))
+            o += CHUNK_SIZE * 2
 
 proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -88,12 +92,15 @@ proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
     else:
         var i = 0
         while i < HL:
-            let a = vecLoad(addr net.ftWeight[addIdx][i])
-            let b = vecLoad(addr net.ftWeight[subIdx][i])
-            let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecAdd16(p, a), b)
-            vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
+            let a0 = vecLoad(addr net.ftWeight[addIdx][i])
+            let b0 = vecLoad(addr net.ftWeight[subIdx][i])
+            let p0 = vecLoad(addr prev.data[i])
+            let a1 = vecLoad(addr net.ftWeight[addIdx][i + CHUNK_SIZE])
+            let b1 = vecLoad(addr net.ftWeight[subIdx][i + CHUNK_SIZE])
+            let p1 = vecLoad(addr prev.data[i + CHUNK_SIZE])
+            vecStore(addr curr.data[i], vecSub16(vecAdd16(p0, a0), b0))
+            vecStore(addr curr.data[i + CHUNK_SIZE], vecSub16(vecAdd16(p1, a1), b1))
+            i += CHUNK_SIZE * 2
 
 proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
                 prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -103,13 +110,17 @@ proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
     else:
         var i = 0
         while i < HL:
-            let a = vecLoad(addr net.ftWeight[addIdx][i])
-            let b = vecLoad(addr net.ftWeight[subIdx1][i])
-            let c = vecLoad(addr net.ftWeight[subIdx2][i])
-            let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecSub16(vecAdd16(p, a), b), c)
-            vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
+            let a0 = vecLoad(addr net.ftWeight[addIdx][i])
+            let b0 = vecLoad(addr net.ftWeight[subIdx1][i])
+            let c0 = vecLoad(addr net.ftWeight[subIdx2][i])
+            let p0 = vecLoad(addr prev.data[i])
+            let a1 = vecLoad(addr net.ftWeight[addIdx][i + CHUNK_SIZE])
+            let b1 = vecLoad(addr net.ftWeight[subIdx1][i + CHUNK_SIZE])
+            let c1 = vecLoad(addr net.ftWeight[subIdx2][i + CHUNK_SIZE])
+            let p1 = vecLoad(addr prev.data[i + CHUNK_SIZE])
+            vecStore(addr curr.data[i], vecSub16(vecSub16(vecAdd16(p0, a0), b0), c0))
+            vecStore(addr curr.data[i + CHUNK_SIZE], vecSub16(vecSub16(vecAdd16(p1, a1), b1), c1))
+            i += CHUNK_SIZE * 2
 
 proc addSubAddSub*(net: ptr NNUENetwork, addIdx1, subIdx1, addIdx2, subIdx2: int,
                    prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -120,14 +131,19 @@ proc addSubAddSub*(net: ptr NNUENetwork, addIdx1, subIdx1, addIdx2, subIdx2: int
     else:
         var i = 0
         while i < HL:
-            let a1 = vecLoad(addr net.ftWeight[addIdx1][i])
-            let s1 = vecLoad(addr net.ftWeight[subIdx1][i])
-            let a2 = vecLoad(addr net.ftWeight[addIdx2][i])
-            let s2 = vecLoad(addr net.ftWeight[subIdx2][i])
-            let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecAdd16(a2, vecSub16(vecAdd16(p, a1), s1)), s2)
-            vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
+            let d0_a = vecSub16(vecLoad(addr net.ftWeight[addIdx1][i]),
+                                vecLoad(addr net.ftWeight[subIdx1][i]))
+            let d0_b = vecSub16(vecLoad(addr net.ftWeight[addIdx2][i]),
+                                vecLoad(addr net.ftWeight[subIdx2][i]))
+            let d1_a = vecSub16(vecLoad(addr net.ftWeight[addIdx1][i + CHUNK_SIZE]),
+                                vecLoad(addr net.ftWeight[subIdx1][i + CHUNK_SIZE]))
+            let d1_b = vecSub16(vecLoad(addr net.ftWeight[addIdx2][i + CHUNK_SIZE]),
+                                vecLoad(addr net.ftWeight[subIdx2][i + CHUNK_SIZE]))
+            vecStore(addr curr.data[i],
+                     vecAdd16(vecLoad(addr prev.data[i]), vecAdd16(d0_a, d0_b)))
+            vecStore(addr curr.data[i + CHUNK_SIZE],
+                     vecAdd16(vecLoad(addr prev.data[i + CHUNK_SIZE]), vecAdd16(d1_a, d1_b)))
+            i += CHUNK_SIZE * 2
 
 proc reset*(q: var UpdateQueue) {.inline.} =
     q.addCount = 0
@@ -202,32 +218,37 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
     else:
-        var
-            sum = vecZero32()
-            qa = vecSetOne16(QA.int16)
-            zero = vecZero16()
+        let qa   = vecSetOne16(QA.int16)
+        let zero = vecZero16()
+        var sumS0 = vecZero32()
+        var sumS1 = vecZero32()
+        var sumN0 = vecZero32()
+        var sumN1 = vecZero32()
 
-        # STM half: weight indices 0..<HL
         var i = 0
         while i < HL:
-            let inp = vecLoad(addr stmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[i])
-            let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
-            i += CHUNK_SIZE
+            # STM pair
+            let inpS0 = vecLoad(addr stmAcc.data[i])
+            let inpS1 = vecLoad(addr stmAcc.data[i + CHUNK_SIZE])
+            let clipS0 = vecMin16(vecMax16(inpS0, zero), qa)
+            let clipS1 = vecMin16(vecMax16(inpS1, zero), qa)
+            sumS0 = vecAdd32(sumS0, vecMadd16(vecMullo16(clipS0, vecLoad(addr net.l1Weight[i])),
+                                              clipS0))
+            sumS1 = vecAdd32(sumS1, vecMadd16(vecMullo16(clipS1, vecLoad(addr net.l1Weight[i + CHUNK_SIZE])),
+                                              clipS1))
+            # NSTM pair
+            let inpN0 = vecLoad(addr nstmAcc.data[i])
+            let inpN1 = vecLoad(addr nstmAcc.data[i + CHUNK_SIZE])
+            let clipN0 = vecMin16(vecMax16(inpN0, zero), qa)
+            let clipN1 = vecMin16(vecMax16(inpN1, zero), qa)
+            sumN0 = vecAdd32(sumN0, vecMadd16(vecMullo16(clipN0, vecLoad(addr net.l1Weight[HL + i])),
+                                              clipN0))
+            sumN1 = vecAdd32(sumN1, vecMadd16(vecMullo16(clipN1, vecLoad(addr net.l1Weight[HL + i + CHUNK_SIZE])),
+                                              clipN1))
+            i += CHUNK_SIZE * 2
 
-        # NSTM half: weight indices HL..<HL*2
-        i = 0
-        while i < HL:
-            let inp = vecLoad(addr nstmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[HL + i])
-            let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
-            i += CHUNK_SIZE
-
-        let rawSum = vecReduceAdd32(sum)
+        let rawSum = vecReduceAdd32(
+            vecAdd32(vecAdd32(sumS0, sumS1), vecAdd32(sumN0, sumN1)))
         return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
