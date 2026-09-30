@@ -393,7 +393,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         return 0
 
       if singularScore < sBeta:
-        if not pvNode and singularScore < sBeta - SeDoubleMargin:
+        if cutnode:
+          singularExtension = SeCutNodeExt
+        elif not pvNode and singularScore < sBeta - SeDoubleMargin:
           singularExtension = SeDoubleExt
         else:
           singularExtension = SePositiveExt

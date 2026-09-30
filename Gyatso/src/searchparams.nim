@@ -34,6 +34,7 @@ const
   SeNegativeExtTtBeta* = 2
   SeRecaptureExt* = 1
   SeRecaptureCap* = 2
+  SeCutNodeExt* = 0
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41
