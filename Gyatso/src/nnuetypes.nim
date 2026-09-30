@@ -6,7 +6,7 @@ const
   HL*        = 1024  
   QA*        = 255   
   QB*        = 64    
-  EVAL_SCALE* = 400
+  EVAL_SCALE* = 331
 
 type
   Accumulator* = object
