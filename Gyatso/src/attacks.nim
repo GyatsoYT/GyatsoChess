@@ -104,6 +104,16 @@ const rankMasks*: array[64, Bitboard] = block:
 func getKnightAttacks*(sq: Square): Bitboard {.inline.} =
   knightAttacks[sq.int]
 
+func allKnightAttacks*(knights: Bitboard): Bitboard {.inline.} =
+  let noA  = knights and not FileA
+  let noH  = knights and not FileH
+  let noAB = knights and not (FileA or fileMask(1))
+  let noGH = knights and not (fileMask(6) or FileH)
+  (noH  shl 17) or (noH  shr 15) or
+  (noA  shl 15) or (noA  shr 17) or
+  (noGH shl 10) or (noGH shr  6) or
+  (noAB shl  6) or (noAB shr 10)
+
 func getKingAttacks*(sq: Square): Bitboard {.inline.} =
   kingAttacks[sq.int]
 
