@@ -317,6 +317,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var triedQuietsLen = 0
   var movesSearched = 0
 
+  # Check if side-to-move has any pieces under enemy attack
+  let noStmThreats = (b.threats and b.byColor[b.stm.ord]).isEmpty
+
   while true:
     let m = picker.next()
     if m == NullMove: break
@@ -475,6 +478,12 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         # Cut-node reduction
         if cutnode and isQuiet:
           inc reduction
+
+        # Winning-position LMR reduction
+        if staticEval != Unknown and
+           staticEval - beta >= WinningLmrMargin and
+           noStmThreats:
+          reduction -= WinningLmrReduction
 
         # Clamp reduction to valid range
         if gSmpThreadCount > 1:

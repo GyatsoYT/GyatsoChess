@@ -14,6 +14,8 @@ const
   # TT-PV adjustments
   TtPvRfpMargin* = 25
   TtPvLmrReduction* = 1
+  WinningLmrMargin* = 100
+  WinningLmrReduction* = 1
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75
