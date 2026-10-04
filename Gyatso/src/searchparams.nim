@@ -34,6 +34,10 @@ const
   SeNegativeExtTtBeta* = 2
   SeRecaptureExt* = 1
   SeRecaptureCap* = 2
+  # Low-Depth Singular Extension (LDSE)
+  LdseMarginBase* = 80
+  LdseMarginCorrScale* = 4
+  LdseExt* = 1
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41

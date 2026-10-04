@@ -412,6 +412,26 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           histToSqInt == prevToSq:
         singularExtension = min(singularExtension + SeRecaptureExt, SeRecaptureCap)
 
+    # Low-Depth Singular Extension
+    elif movesSearched == 0 and
+         not inCheck and
+         not isSingularSearch and
+         singularExtension == 0 and
+         ply > 0 and
+         (ttMove == NullMove or depth < SeMinDepth) and
+         staticEval != Unknown and
+         abs(alpha) < MateThreshold:
+      let corr = getCorrection(b)
+      # Best score estimate
+      let ldseBase =
+        if hasTT and ttBound != BoundAlpha and abs(ttScore) < MateThreshold:
+          ttScore
+        else:
+          staticEval
+      let ldseMargin = LdseMarginBase + abs(corr) div LdseMarginCorrScale
+      if ldseBase > alpha + ldseMargin:
+        singularExtension = LdseExt
+
     stack[ply].move = m
     stack[ply].piece = ord(b.mailbox[m.fromSq.int])
     stack[ply + 1].staticEval = Unknown
