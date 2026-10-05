@@ -266,8 +266,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      hasNonPawnKingPiece(b) and
      not skipNullMove and
      not isSingularSearch:
-
-    let R = NmpBaseR + depth div NmpDepthDiv # 2 + depth/4
+    let evalMargin = (staticEval - beta) div NMPEvalMargin
+    let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
     stack[ply].move = NullMove
     stack[ply + 1].staticEval = Unknown
