@@ -25,7 +25,7 @@ var
 func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
 
 proc prefetchTT*(key: uint64) {.inline.} =
-  if ttTable != nil and ttMask != 0:
+  if ttTable != nil:
     prefetch(addr ttTable[key and ttMask], 0, 3)
 
 proc newTTGeneration*() {.inline.} =
@@ -78,7 +78,7 @@ proc initTT*(sizeMB: int) =
 
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
               depth: var int, bound: var uint8, eval: var int16,
-              ttPv: var bool): bool =
+              ttPv: var bool): bool {.inline.} =
   if ttTable == nil or ttMask == 0: return false
 
   let cluster = addr ttTable[key and ttMask]

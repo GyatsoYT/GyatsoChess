@@ -42,14 +42,11 @@ func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
 proc pickBest(moves: var array[256, Move],
               scores: var array[256, int32],
               cur, count: int): Move {.inline.} =
-  var bestPacked = system.uint64(0)
   var bestIdx    = cur
-  for i in cur ..< count:
-    let remaining = system.uint64(count - 1 - i)
-    let adjusted  = system.uint32(scores[i]) xor 0x80000000'u32
-    let packed    = (system.uint64(adjusted) shl 32) or remaining
-    if packed >= bestPacked:
-      bestPacked = packed
+  var bestScore = scores[cur]
+  for i in (cur + 1) ..< count:
+    if scores[i] > bestScore:
+      bestScore = scores[i]
       bestIdx    = i
   if bestIdx != cur:
     let tmpMove     = moves[cur]
@@ -159,35 +156,35 @@ proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
 
   int32(histScore + contScore)
 
-proc initMovePicker*(b: ptr Board,
+proc initMovePicker*(picker: var MovePicker, b: ptr Board,
                      ttMove: Move,
                      ply, prevPiece, prevToSq,
                      prev2Piece, prev2ToSq: int,
-                     inCheck, isQSearch: bool): MovePicker {.inline.} =
-  result.board          = b
-  result.ttMove         = ttMove
-  result.ply            = ply
-  result.prevPiece      = prevPiece
-  result.prevToSq       = prevToSq
-  result.prev2Piece     = prev2Piece
-  result.prev2ToSq      = prev2ToSq
-  result.stage          = StageTTMove
-  result.noisyCount     = 0
-  result.noisyCur       = 0
-  result.badCount       = 0
-  result.badCur         = 0
-  result.quietCount     = 0
-  result.quietCur       = 0
-  result.skipQuietsMark = false
-  result.isQSearch      = isQSearch
-  result.inCheck        = inCheck
+                     inCheck, isQSearch: bool) {.inline.} =
+  picker.board          = b
+  picker.ttMove         = ttMove
+  picker.ply            = ply
+  picker.prevPiece      = prevPiece
+  picker.prevToSq       = prevToSq
+  picker.prev2Piece     = prev2Piece
+  picker.prev2ToSq      = prev2ToSq
+  picker.stage          = StageTTMove
+  picker.noisyCount     = 0
+  picker.noisyCur       = 0
+  picker.badCount       = 0
+  picker.badCur         = 0
+  picker.quietCount     = 0
+  picker.quietCur       = 0
+  picker.skipQuietsMark = false
+  picker.isQSearch      = isQSearch
+  picker.inCheck        = inCheck
 
 proc skipQuiets*(picker: var MovePicker) {.inline.} =
   picker.skipQuietsMark = true
   if picker.stage == StageQuiets:
     picker.stage = StageBadNoisies
 
-proc next*(picker: var MovePicker): Move =
+proc next*(picker: var MovePicker): Move {.inline.} =
   let b = picker.board
 
   while true:
