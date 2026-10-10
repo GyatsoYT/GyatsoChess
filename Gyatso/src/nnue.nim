@@ -13,32 +13,81 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024.bin")
+const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
+
+const
+    NET_DATA_BYTES = FT_IN * HL * sizeof(int16) + HL * sizeof(int16) +
+        L1_INPUTS * L2_SIZE * sizeof(int8) + L2_SIZE * sizeof(int32) +
+        L2_SIZE * L3_SIZE * sizeof(int32) + L3_SIZE * sizeof(int32) +
+        L3_SIZE * sizeof(int32) + sizeof(int32)
+    NET_PADDING_BYTES = (64 - (NET_DATA_BYTES mod 64)) mod 64
+
+proc readLittleInt16(s: Stream): int16 {.inline.} =
+    var raw = s.readInt16()
+    littleEndian16(addr result, addr raw)
+
+proc readLittleInt32(s: Stream): int32 {.inline.} =
+    var raw = s.readInt32()
+    littleEndian32(addr result, addr raw)
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     for hlIdx in 0..<HL:
         for ftIdx in 0..<FT_IN:
-            var raw = s.readInt16()
-            var val: int16
-            littleEndian16(addr val, addr raw)
-            result.ftWeight[ftIdx][hlIdx] = val
+            result.ftWeight[ftIdx][hlIdx] = readLittleInt16(s)
 
     for i in 0..<HL:
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.ftBias[i] = val
+        result.ftBias[i] = readLittleInt16(s)
 
-    for i in 0..<(HL * 2):
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
+    for output in 0..<L2_SIZE:
+        for input in 0..<L1_INPUTS:
+            let tile = input div 4
+            let lane = input mod 4
+            result.l1Weight[tile][output][lane] = s.readInt8()
 
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    for tile in 0..<L1_TILES:
+        for output in 0..<L2_SIZE:
+            result.l1DotWeight[tile][output] = result.l1Weight[tile][output]
+            when (defined(avx2) and not defined(avxvnni)) or
+                    (defined(avx512) and not defined(avx512vnni)):
+                for pair in 0..<2:
+                    let lane = pair * 2
+                    let w0 = result.l1Weight[tile][output][lane].int32
+                    let w1 = result.l1Weight[tile][output][lane + 1].int32
+                    if abs(w0) + abs(w1) > 128:
+                        let encoded = (tile * L2_SIZE + output) * 2 + pair
+                        result.l1UnsafePairs[result.l1UnsafeCount] = uint16(encoded)
+                        inc result.l1UnsafeCount
+                        result.l1DotWeight[tile][output][lane] = 0
+                        result.l1DotWeight[tile][output][lane + 1] = 0
+
+    for i in 0..<L2_SIZE:
+        result.l1Bias[i] = readLittleInt32(s)
+
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            result.l2Weight[output][input] = readLittleInt32(s)
+            result.l2WeightFloat[output][input] =
+                float32(result.l2Weight[output][input]) / float32(Q2)
+    for output in 0..<L3_SIZE:
+        result.l2Bias[output] = readLittleInt32(s)
+        result.l2BiasFloat[output] = float32(result.l2Bias[output]) / float32(Q2)
+
+    for i in 0..<L3_SIZE:
+        result.l3Weight[i] = readLittleInt32(s)
+        result.l3WeightFloat[i] = float32(result.l3Weight[i]) *
+            (float32(EVAL_SCALE) / 16_777_216.0'f32)
+    result.l3Bias = readLittleInt32(s)
+    result.l3BiasFloat = float32(result.l3Bias) / 16_777_216.0'f32
+
+    let padding = s.readAll()
+    if padding.len != NET_PADDING_BYTES:
+        raise newException(IOError, "Invalid multilayer NNUE size: expected " &
+            $(NET_DATA_BYTES + NET_PADDING_BYTES) & " bytes, got " &
+            $(NET_DATA_BYTES + padding.len))
+    const padMarker = "bullet"
+    for i, byte in padding:
+        if byte != padMarker[i mod padMarker.len]:
+            raise newException(IOError, "Invalid multilayer NNUE padding")
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -198,58 +247,138 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.whiteNeedsRefresh[0] = false
     state.blackNeedsRefresh[0] = false
 
+func packPairwiseTile(values: ptr uint8, tile: int): uint32 {.inline.} =
+    cast[ptr UncheckedArray[uint32]](values)[tile]
+
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
-    when not defined(simd):
-        var output: int32 = 0
+    var pairwise {.align(ALIGNMENT), noinit.}: array[L1_INPUTS, uint8]
 
-        # STM half
-        for i in 0..<HL:
-            let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-
-        # NSTM half
-        for i in 0..<HL:
-            let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
-
-    else:
-        let qa   = vecSetOne16(QA.int16)
-        let zero = vecZero16()
-        var sumS0 = vecZero32()
-        var sumS1 = vecZero32()
-        var sumN0 = vecZero32()
-        var sumN1 = vecZero32()
-
+    when defined(simd):
         var i = 0
-        while i < HL:
-            # STM pair
-            let inpS0 = vecLoad(addr stmAcc.data[i])
-            let inpS1 = vecLoad(addr stmAcc.data[i + CHUNK_SIZE])
-            let clipS0 = vecMin16(vecMax16(inpS0, zero), qa)
-            let clipS1 = vecMin16(vecMax16(inpS1, zero), qa)
-            sumS0 = vecAdd32(sumS0, vecMadd16(vecMullo16(clipS0, vecLoad(addr net.l1Weight[i])),
-                                              clipS0))
-            sumS1 = vecAdd32(sumS1, vecMadd16(vecMullo16(clipS1, vecLoad(addr net.l1Weight[i + CHUNK_SIZE])),
-                                              clipS1))
-            # NSTM pair
-            let inpN0 = vecLoad(addr nstmAcc.data[i])
-            let inpN1 = vecLoad(addr nstmAcc.data[i + CHUNK_SIZE])
-            let clipN0 = vecMin16(vecMax16(inpN0, zero), qa)
-            let clipN1 = vecMin16(vecMax16(inpN1, zero), qa)
-            sumN0 = vecAdd32(sumN0, vecMadd16(vecMullo16(clipN0, vecLoad(addr net.l1Weight[HL + i])),
-                                              clipN0))
-            sumN1 = vecAdd32(sumN1, vecMadd16(vecMullo16(clipN1, vecLoad(addr net.l1Weight[HL + i + CHUNK_SIZE])),
-                                              clipN1))
-            i += CHUNK_SIZE * 2
+        while i < HL div 2:
+            vecPairwisePack(addr pairwise[i], addr stmAcc.data[i],
+                            addr stmAcc.data[i + HL div 2])
+            vecPairwisePack(addr pairwise[i + HL div 2], addr nstmAcc.data[i],
+                            addr nstmAcc.data[i + HL div 2])
+            i += PAIRWISE_LANES
+    else:
+        for i in 0..<(HL div 2):
+            let sa = clamp(stmAcc.data[i].int32, 0, QA.int32)
+            let sb = clamp(stmAcc.data[i + HL div 2].int32, 0, QA.int32)
+            let na = clamp(nstmAcc.data[i].int32, 0, QA.int32)
+            let nb = clamp(nstmAcc.data[i + HL div 2].int32, 0, QA.int32)
+            pairwise[i] = uint8((sa * sb) shr 8)
+            pairwise[i + HL div 2] = uint8((na * nb) shr 8)
 
-        let rawSum = vecReduceAdd32(
-            vecAdd32(vecAdd32(sumS0, sumS1), vecAdd32(sumN0, sumN1)))
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+    var l1Sums {.noinit.}: array[L2_SIZE, int32]
+    when defined(avx512):
+        var sums0 = vecZeroI32()
+        var sums1 = vecZeroI32()
+        var sums2 = vecZeroI32()
+        var sums3 = vecZeroI32()
+        var tile = 0
+        while tile < L1_TILES:
+            let p0 = packPairwiseTile(addr pairwise[0], tile)
+            let p1 = packPairwiseTile(addr pairwise[0], tile + 1)
+            let p2 = packPairwiseTile(addr pairwise[0], tile + 2)
+            let p3 = packPairwiseTile(addr pairwise[0], tile + 3)
+            sums0 = vecDotTile(sums0, p0, addr net.l1DotWeight[tile][0][0])
+            sums1 = vecDotTile(sums1, p1, addr net.l1DotWeight[tile + 1][0][0])
+            sums2 = vecDotTile(sums2, p2, addr net.l1DotWeight[tile + 2][0][0])
+            sums3 = vecDotTile(sums3, p3, addr net.l1DotWeight[tile + 3][0][0])
+            tile += 4
+        let total = vecAdd32(vecAdd32(sums0, sums1), vecAdd32(sums2, sums3))
+        vecStoreI32(addr l1Sums[0], total)
+    elif defined(avx2):
+        var s00 = vecZeroI32()
+        var s01 = vecZeroI32()
+        var s10 = vecZeroI32()
+        var s11 = vecZeroI32()
+        var s20 = vecZeroI32()
+        var s21 = vecZeroI32()
+        var s30 = vecZeroI32()
+        var s31 = vecZeroI32()
+        var tile = 0
+        while tile < L1_TILES:
+            let p0 = packPairwiseTile(addr pairwise[0], tile)
+            let p1 = packPairwiseTile(addr pairwise[0], tile + 1)
+            let p2 = packPairwiseTile(addr pairwise[0], tile + 2)
+            let p3 = packPairwiseTile(addr pairwise[0], tile + 3)
+            let partial0 = vecDotTilePair(s00, s01, p0,
+                addr net.l1DotWeight[tile][0][0], addr net.l1DotWeight[tile][8][0])
+            let partial1 = vecDotTilePair(s10, s11, p1,
+                addr net.l1DotWeight[tile + 1][0][0], addr net.l1DotWeight[tile + 1][8][0])
+            let partial2 = vecDotTilePair(s20, s21, p2,
+                addr net.l1DotWeight[tile + 2][0][0], addr net.l1DotWeight[tile + 2][8][0])
+            let partial3 = vecDotTilePair(s30, s31, p3,
+                addr net.l1DotWeight[tile + 3][0][0], addr net.l1DotWeight[tile + 3][8][0])
+            s00 = partial0.a
+            s01 = partial0.b
+            s10 = partial1.a
+            s11 = partial1.b
+            s20 = partial2.a
+            s21 = partial2.b
+            s30 = partial3.a
+            s31 = partial3.b
+            tile += 4
+        let total0 = vecAdd32(vecAdd32(s00, s10), vecAdd32(s20, s30))
+        let total1 = vecAdd32(vecAdd32(s01, s11), vecAdd32(s21, s31))
+        vecStoreI32(addr l1Sums[0], total0)
+        vecStoreI32(addr l1Sums[8], total1)
+    elif defined(neon) or defined(arm64) or defined(aarch64):
+        var sums: array[L2_SIZE div 4, VEPI32]
+        for lane in 0..<sums.len: sums[lane] = vecZeroI32()
+        for tile in 0..<L1_TILES:
+            let packed = packPairwiseTile(addr pairwise[0], tile)
+            if packed != 0:
+                for group in 0..<sums.len:
+                    sums[group] = vecDotTile(sums[group], packed,
+                        addr net.l1Weight[tile][group * 4][0])
+        for group in 0..<sums.len:
+            vecStoreI32(addr l1Sums[group * 4], sums[group])
+    else:
+        for output in 0..<L2_SIZE: l1Sums[output] = 0
+        for tile in 0..<L1_TILES:
+            let offset = tile * 4
+            let packed = packPairwiseTile(addr pairwise[0], tile)
+            if packed != 0:
+                for output in 0..<L2_SIZE:
+                    for lane in 0..<4:
+                        l1Sums[output] += int32(pairwise[offset + lane]) *
+                            int32(net.l1Weight[tile][output][lane])
+
+    when (defined(avx2) and not defined(avxvnni)) or
+            (defined(avx512) and not defined(avx512vnni)):
+        for active in 0..<net.l1UnsafeCount:
+            let encoded = system.int(net.l1UnsafePairs[active])
+            let pair = encoded and 1
+            let output = (encoded div 2) mod L2_SIZE
+            let tile = encoded div (L2_SIZE * 2)
+            let offset = tile * 4
+            let lane = pair * 2
+            l1Sums[output] += int32(pairwise[offset + lane]) *
+                int32(net.l1Weight[tile][output][lane])
+            l1Sums[output] += int32(pairwise[offset + lane + 1]) *
+                int32(net.l1Weight[tile][output][lane + 1])
+
+    var hidden {.noinit.}: array[L2_SIZE, float32]
+    const L1_SCALE = float32(QA * QB)
+    for output in 0..<L2_SIZE:
+        let preActivation = clamp(l1Sums[output] + net.l1Bias[output], 0, QA.int32 * QB.int32)
+        let clipped = float32(preActivation) / L1_SCALE
+        hidden[output] = clipped * clipped
+
+    var l2Output {.noinit.}: array[L3_SIZE, float32]
+    for output in 0..<L3_SIZE:
+        var sum = net.l2BiasFloat[output]
+        for input in 0..<L2_SIZE:
+            sum += hidden[input] * net.l2WeightFloat[output][input]
+        l2Output[output] = clamp(sum, 0.0'f32, 1.0'f32)
+
+    var output = net.l3BiasFloat
+    for input in 0..<L3_SIZE:
+        output += l2Output[input] * net.l3WeightFloat[input]
+    return system.int(output * float32(EVAL_SCALE))
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
     ## Lazy refresh: recompute accumulator if king crossed mirror boundary
