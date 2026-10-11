@@ -222,7 +222,7 @@ proc generateMoves*(b: Board, ml: var MoveList) =
   if b.checkers.isEmpty():
     generateCastlingMoves(b, ml)
 
-proc generateCaptures*(b: Board, ml: var MoveList) =
+proc generateCaptures*(b: Board, ml: var MoveList) {.inline.} =
   ml.clear()
   let us     = b.stm
   let them   = us.opposite()

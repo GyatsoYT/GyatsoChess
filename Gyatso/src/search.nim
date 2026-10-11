@@ -90,8 +90,9 @@ func hasNonPawnKingPiece(b: Board): bool {.inline.} =
 proc qSearch*(b: var Board, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack): int =
+  let nnue = addr nnueState
   if ply >= MaxPly:
-    return evaluate(b, nnueState)
+    return evaluate(b, nnue[])
 
   inc info.nodes
 
@@ -106,7 +107,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     return system.int((info.nodes mod 5)) - 2
 
   let inCheckQ = not b.checkers.isEmpty
-  let rawQEval = evaluate(b, nnueState)
+  let rawQEval = evaluate(b, nnue[])
   let standPat = if inCheckQ: rawQEval
                  else: clamp(rawQEval + getCorrection(b), -MateThreshold + 1,
                      MateThreshold - 1)
@@ -120,7 +121,8 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
+  var picker: MovePicker
+  initMovePicker(picker,
     addr b, NullMove, ply, prevPiece, prevToSq,
     -1, -1,
     inCheck = inCheckQ, isQSearch = true)
@@ -133,12 +135,12 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
       continue
 
     stack[ply].move = m
-    nnuePush(b, m, nnueState)
+    nnuePush(b, m, nnue[])
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
     let score = -qSearch(b, -beta, -curAlpha, ply + 1, info, stack)
     b.unmakeMove(m)
-    nnuePop(nnueState)
+    nnuePop(nnue[])
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
@@ -158,8 +160,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               cutnode: bool = false,
               skipNullMove: bool = false,
               excludedMove: Move = NullMove): int {.gcsafe.} =
+  let nnue = addr nnueState
   if ply >= MaxPly:
-    return evaluate(b, nnueState)
+    return evaluate(b, nnue[])
 
   inc info.nodes
 
@@ -223,7 +226,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].rawEval = Unknown
   elif stack[ply].staticEval == Unknown:
     let raw = if ttEval != NoEval: system.int(ttEval)
-              else: evaluate(b, nnueState)
+              else: evaluate(b, nnue[])
     stack[ply].rawEval = raw
     let corr = getCorrection(b)
     stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1,
@@ -272,7 +275,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].move = NullMove
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
-    nnuePushNull(nnueState)
+    nnuePushNull(nnue[])
     b.makeNullMove()
 
     let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,
@@ -280,7 +283,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                              skipNullMove = true)
 
     b.unmakeNullMove()
-    nnuePopNull(nnueState)
+    nnuePopNull(nnue[])
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
@@ -304,7 +307,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   let prev2ToSq = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
       2].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
+  var picker: MovePicker
+  initMovePicker(picker,
     addr b, ttMove, ply, prevPiece, prevToSq,
     prev2Piece, prev2ToSq,
     inCheck = inCheck, isQSearch = false)
@@ -423,7 +427,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     let prevNodes = if ply == 0: info.nodes else: 0'u64
 
-    nnuePush(b, m, nnueState)
+    nnuePush(b, m, nnue[])
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
 
@@ -507,7 +511,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             stack, cutnode = false)
 
     b.unmakeMove(m)
-    nnuePop(nnueState)
+    nnuePop(nnue[])
 
     if ply == 0:
       let deltaNodes = info.nodes - prevNodes
