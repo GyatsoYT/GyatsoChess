@@ -1,32 +1,50 @@
 EXE      ?= Gyatso
-EVALFILE ?= Gyatso/Net/GyatsoNet512HM.bin
+EVALFILE ?= Gyatso/Net/GyatsoNet1024x16x32.bin
 SRC       = Gyatso/src/main.nim
 NIM      ?= nim
-NETFILE   = Gyatso/Net/GyatsoNet512HM.bin
+NIM_CC   ?= clang
+NETFILE   = Gyatso/Net/GyatsoNet1024x16x32.bin
 
 ifeq ($(OS),Windows_NT)
-    ifeq ($(MSYSTEM),)
-        DETECTED_OS := Windows
-        EXE_SUFFIX  := .exe
-        NO_PLT      :=
-        LD_LLD      := -fuse-ld=lld
-        NULL_DEV    := NUL
-    else
-        DETECTED_OS := Linux
-        EXE_SUFFIX  :=
-        NO_PLT      := -fno-plt
-        LD_LLD      := -fuse-ld=lld
-        NULL_DEV    := /dev/null
-    endif
+    DETECTED_OS := Windows
+    EXE_SUFFIX  := .exe
+    NO_PLT      :=
+    LD_LLD      := -fuse-ld=lld
 else
-    DETECTED_OS := Linux
+    DETECTED_OS := $(shell uname -s 2>/dev/null || echo Unix)
     EXE_SUFFIX  :=
     NO_PLT      := -fno-plt
     LD_LLD      := -fuse-ld=lld
-    NULL_DEV    := /dev/null
 endif
 
-ARCH_DEFS = -d:avx2 -d:bmi2 -d:simd
+HOST_CPU_MACROS := $(shell echo | $(NIM_CC) -march=native -dM -E -x c - 2>&1)
+ARCH_DEFS :=
+ISA_CFLAGS :=
+
+ifneq ($(strip $(and $(findstring __AVX512F__,$(HOST_CPU_MACROS)),$(findstring __AVX512BW__,$(HOST_CPU_MACROS)))),)
+    ARCH_DEFS += -d:avx512 -d:simd
+    ISA_CFLAGS += -mavx512f -mavx512bw
+ifneq ($(findstring __AVX512VNNI__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:avx512vnni
+    ISA_CFLAGS += -mavx512vnni
+endif
+else ifneq ($(findstring __AVXVNNI__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:avx2 -d:avxvnni -d:simd
+    ISA_CFLAGS += -mavx2 -mavxvnni
+else ifneq ($(findstring __AVX2__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:avx2 -d:simd
+    ISA_CFLAGS += -mavx2
+else ifneq ($(findstring __ARM_NEON,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:neon -d:simd
+ifneq ($(findstring __aarch64__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:arm64
+endif
+endif
+
+ifneq ($(findstring __BMI2__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:bmi2
+    ISA_CFLAGS += -mbmi2
+endif
 
 NIM_FLAGS = \
 	--cc:clang \
@@ -40,7 +58,7 @@ NIM_FLAGS = \
 
 CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
          -fomit-frame-pointer -flto -march=native \
-         -mavx2 -mbmi2 $(NO_PLT)
+         $(ISA_CFLAGS) $(NO_PLT)
 
 LDFLAGS = -O3 -flto $(LD_LLD)
 
@@ -49,10 +67,9 @@ LDFLAGS = -O3 -flto $(LD_LLD)
 all: build
 
 check-deps:
-ifeq ($(DETECTED_OS),Linux)
-	@which lld > $(NULL_DEV) 2>&1 || (echo "ERROR: lld not found. Install LLVM (includes lld) from https://releases.llvm.org/" && exit 1)
-endif
-	@$(NIM) --version > $(NULL_DEV) 2>&1 || (echo "ERROR: nim not found." && exit 1)
+	@$(NIM) --version || (echo "ERROR: nim not found." && exit 1)
+	@$(NIM_CC) --version || (echo "ERROR: $(NIM_CC) not found." && exit 1)
+	@echo "[Makefile] Native CPU feature selection: $(ARCH_DEFS) $(ISA_CFLAGS)"
 
 build: check-deps
 ifdef EVALFILE

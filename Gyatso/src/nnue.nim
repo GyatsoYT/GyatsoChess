@@ -1,8 +1,6 @@
 import coretypes, bitboard, board, nnuetypes
-import std/[streams, endians]
-
-when defined(simd):
-    import simd
+import std/streams
+import simd
 
 func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
@@ -13,32 +11,75 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024.bin")
+const
+    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
+    NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
+                     L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
+                     L3_SIZE * 4 + L3_SIZE * 4 + 4
+    NNUE_PADDING_BYTES* = (64 - NNUE_RAW_BYTES mod 64) mod 64
+    NNUE_FILE_BYTES* = NNUE_RAW_BYTES + NNUE_PADDING_BYTES
+
+proc readU8(data: string, offset: var int): uint8 {.inline.} =
+    result = uint8(ord(data[offset]))
+    inc offset
+
+proc readI8(data: string, offset: var int): int8 {.inline.} =
+    result = cast[int8](data.readU8(offset))
+
+proc readI16(data: string, offset: var int): int16 {.inline.} =
+    let lo = uint16(data.readU8(offset))
+    let hi = uint16(data.readU8(offset))
+    result = cast[int16](lo or (hi shl 8))
+
+proc readI32(data: string, offset: var int): int32 {.inline.} =
+    let b0 = uint32(data.readU8(offset))
+    let b1 = uint32(data.readU8(offset))
+    let b2 = uint32(data.readU8(offset))
+    let b3 = uint32(data.readU8(offset))
+    result = cast[int32](b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24))
+
+proc loadNetworkFromBytes(data: string): NNUENetwork =
+    if data.len != NNUE_FILE_BYTES:
+        raise newException(IOError,
+            "Invalid multilayer NNUE length: got " & $data.len &
+            " bytes; expected " & $NNUE_FILE_BYTES & " (raw tensors plus Bullet padding)")
+
+    const PaddingMarker = "bullet"
+    for i in 0..<NNUE_PADDING_BYTES:
+        if data[NNUE_RAW_BYTES + i] != PaddingMarker[i mod PaddingMarker.len]:
+            raise newException(IOError, "Invalid multilayer NNUE padding marker")
+
+    var offset = 0
+
+    for hidden in 0..<HL:
+        for feature in 0..<FT_IN:
+            result.ftWeight[feature][hidden] = data.readI16(offset)
+
+    for hidden in 0..<HL:
+        result.ftBias[hidden] = data.readI16(offset)
+
+    for output in 0..<L2_SIZE:
+        for input in 0..<HL:
+            result.l1Weight[input div 4][output][input mod 4] = data.readI8(offset)
+
+    for output in 0..<L2_SIZE:
+        result.l1Bias[output] = data.readI32(offset)
+
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            result.l2Weight[input][output] = data.readI32(offset)
+
+    for output in 0..<L3_SIZE:
+        result.l2Bias[output] = data.readI32(offset)
+
+    for input in 0..<L3_SIZE:
+        result.l3Weight[input] = data.readI32(offset)
+    result.l3Bias = data.readI32(offset)
+
+    doAssert offset == NNUE_RAW_BYTES
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
-    for hlIdx in 0..<HL:
-        for ftIdx in 0..<FT_IN:
-            var raw = s.readInt16()
-            var val: int16
-            littleEndian16(addr val, addr raw)
-            result.ftWeight[ftIdx][hlIdx] = val
-
-    for i in 0..<HL:
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.ftBias[i] = val
-
-    for i in 0..<(HL * 2):
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
-
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    return loadNetworkFromBytes(s.readAll())
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -199,57 +240,27 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.blackNeedsRefresh[0] = false
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
-    when not defined(simd):
-        var output: int32 = 0
+    var pairwise: array[HL, uint8]
+    simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
 
-        # STM half
-        for i in 0..<HL:
-            let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
+    var l1Sums: array[L2_SIZE, int32]
+    simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0], addr l1Sums[0])
 
-        # NSTM half
-        for i in 0..<HL:
-            let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+    var l1Out: array[L2_SIZE, int32]
+    for i in 0..<L2_SIZE:
+        let scaled = (l1Sums[i] + net.l1Bias[i]) shr 8
+        let clipped = clamp(scaled, 0, QB.int32)
+        l1Out[i] = clipped * clipped
 
-    else:
-        let qa   = vecSetOne16(QA.int16)
-        let zero = vecZero16()
-        var sumS0 = vecZero32()
-        var sumS1 = vecZero32()
-        var sumN0 = vecZero32()
-        var sumN1 = vecZero32()
+    var l2Out: array[L3_SIZE, int32]
+    simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
 
-        var i = 0
-        while i < HL:
-            # STM pair
-            let inpS0 = vecLoad(addr stmAcc.data[i])
-            let inpS1 = vecLoad(addr stmAcc.data[i + CHUNK_SIZE])
-            let clipS0 = vecMin16(vecMax16(inpS0, zero), qa)
-            let clipS1 = vecMin16(vecMax16(inpS1, zero), qa)
-            sumS0 = vecAdd32(sumS0, vecMadd16(vecMullo16(clipS0, vecLoad(addr net.l1Weight[i])),
-                                              clipS0))
-            sumS1 = vecAdd32(sumS1, vecMadd16(vecMullo16(clipS1, vecLoad(addr net.l1Weight[i + CHUNK_SIZE])),
-                                              clipS1))
-            # NSTM pair
-            let inpN0 = vecLoad(addr nstmAcc.data[i])
-            let inpN1 = vecLoad(addr nstmAcc.data[i + CHUNK_SIZE])
-            let clipN0 = vecMin16(vecMax16(inpN0, zero), qa)
-            let clipN1 = vecMin16(vecMax16(inpN1, zero), qa)
-            sumN0 = vecAdd32(sumN0, vecMadd16(vecMullo16(clipN0, vecLoad(addr net.l1Weight[HL + i])),
-                                              clipN0))
-            sumN1 = vecAdd32(sumN1, vecMadd16(vecMullo16(clipN1, vecLoad(addr net.l1Weight[HL + i + CHUNK_SIZE])),
-                                              clipN1))
-            i += CHUNK_SIZE * 2
+    var output = int64(net.l3Bias)
+    for input in 0..<L3_SIZE:
+        output += int64(l2Out[input]) * int64(net.l3Weight[input])
 
-        let rawSum = vecReduceAdd32(
-            vecAdd32(vecAdd32(sumS0, sumS1), vecAdd32(sumN0, sumN1)))
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+    return system.int(output * int64(EVAL_SCALE) div int64(QB * QB * QB * QB))
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
     ## Lazy refresh: recompute accumulator if king crossed mirror boundary
