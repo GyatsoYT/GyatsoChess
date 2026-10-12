@@ -5,7 +5,7 @@ const
   BoundAlpha* = 1'u8
   BoundBeta*  = 2'u8
 
-  EntriesPerCluster* = 3
+  EntriesPerCluster* = 4
 
   NoEval* = 32767'i16
 
@@ -17,16 +17,28 @@ type
   TTCluster* = object
     entries*: array[EntriesPerCluster, TTEntry]
 
+static:
+  doAssert sizeof(TTCluster) == 64, "TTCluster must be exactly 64 bytes (one cache line)"
+
+proc mulhi64(a, b: uint64): uint64 {.inline.} =
+  {.emit: """
+    `result` = (uint64_t)(((unsigned __int128)(uint64_t)`a` * (unsigned __int128)(uint64_t)`b`) >> 64);
+  """.}
+
 var
-  ttTable*:      ptr UncheckedArray[TTCluster] = nil
-  ttMask*:       uint64 = 0
-  ttGeneration*: uint8  = 0
+  ttRawAlloc*:    pointer       = nil
+  ttTable*:       ptr UncheckedArray[TTCluster] = nil
+  ttNumClusters*: uint64        = 0
+  ttGeneration*:  uint8         = 0
 
 func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
 
+proc ttIndex(key: uint64): uint64 {.inline.} =
+  mulhi64(key, ttNumClusters)
+
 proc prefetchTT*(key: uint64) {.inline.} =
   if ttTable != nil:
-    prefetch(addr ttTable[key and ttMask], 0, 3)
+    prefetch(addr ttTable[ttIndex(key)], 0, 3)
 
 proc newTTGeneration*() {.inline.} =
   inc ttGeneration
@@ -55,33 +67,57 @@ func unpackData*(data: uint64, move: var Move, score: var int16,
   eval       = cast[int16](uint16(data shr 48))
 
 proc initTT*(sizeMB: int) =
-  if ttTable != nil:
-    deallocShared(ttTable)
-    ttTable = nil
+  if ttRawAlloc != nil:
+    deallocShared(ttRawAlloc)
+    ttRawAlloc    = nil
+    ttTable       = nil
+    ttNumClusters = 0
 
   if sizeMB <= 0:
-    ttMask = 0
     return
 
-  let clusterSize = sizeof(TTCluster)
-  let bytes = sizeMB * 1024 * 1024
+  let clusterSize    = uint64(sizeof(TTCluster))
+  let requestedBytes = uint64(sizeMB) * 1024'u64 * 1024'u64
 
-  var numClusters = 1'u64
-  while numClusters * uint64(clusterSize) * 2'u64 <= uint64(bytes):
-    numClusters = numClusters shl 1
-
+  let numClusters = requestedBytes div clusterSize
   if numClusters == 0:
-    numClusters = 1024
+    return
 
-  ttMask = numClusters - 1
-  ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(numClusters * uint64(clusterSize)))
+  let allocBytes = numClusters * clusterSize + 63'u64
+  let raw = allocShared0(allocBytes)
+  if raw == nil:
+    return
+
+  let rawAddr     = cast[uint64](raw)
+  let alignedAddr = (rawAddr + 63'u64) and not 63'u64
+  let aligned     = cast[ptr UncheckedArray[TTCluster]](alignedAddr)
+
+  ttRawAlloc    = raw
+  ttTable       = aligned
+  ttNumClusters = numClusters
+
+proc hashfull*(): int =
+  if ttTable == nil or ttNumClusters == 0:
+    return 0
+  let sampled = min(ttNumClusters, 1000'u64)
+  var used = 0
+  for i in 0'u64 ..< sampled:
+    for j in 0 ..< EntriesPerCluster:
+      let d = ttTable[i].entries[j].data
+      if d != 0:
+        var g: uint8
+        var m: Move; var s: int16; var dp: int8; var b: uint8; var e: int16; var tp: bool
+        unpackData(d, m, s, dp, b, g, e, tp)
+        if (g and GenMask) == (ttGeneration and GenMask):
+          inc used
+  result = used * 1000 div (int(sampled) * EntriesPerCluster)
 
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
               depth: var int, bound: var uint8, eval: var int16,
               ttPv: var bool): bool {.inline.} =
-  if ttTable == nil or ttMask == 0: return false
+  if ttTable == nil or ttNumClusters == 0: return false
 
-  let cluster = addr ttTable[key and ttMask]
+  let cluster = addr ttTable[ttIndex(key)]
 
   for i in 0 ..< EntriesPerCluster:
     let dataVal = cluster.entries[i].data
@@ -115,9 +151,9 @@ proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
 
 proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
               bound: uint8, ply: int, eval: int16, ttPv: bool) =
-  if ttTable == nil or ttMask == 0: return
+  if ttTable == nil or ttNumClusters == 0: return
 
-  let cluster = addr ttTable[key and ttMask]
+  let cluster = addr ttTable[ttIndex(key)]
 
   var storedScore = score
   if score > MateThreshold:

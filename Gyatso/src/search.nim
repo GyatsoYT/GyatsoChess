@@ -627,6 +627,7 @@ proc printInfo*(depth, selDepth, score: int, nodes: uint64,
                 elapsed: int64, info: SearchInfo) =
   if info.silent: return
   let nps = if elapsed > 0: nodes * 1000 div cast[uint64](elapsed) else: nodes
+  let hf  = hashfull()
   var line = "info depth " & $depth &
              " seldepth " & $selDepth &
              " score "
@@ -640,6 +641,7 @@ proc printInfo*(depth, selDepth, score: int, nodes: uint64,
     line &= "cp " & $score
   line &= " nodes " & $nodes &
           " nps " & $nps &
+          " hashfull " & $hf &
           " time " & $elapsed &
           " pv"
   for i in 0 ..< info.pvLen[0]:
