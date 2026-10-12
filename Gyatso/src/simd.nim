@@ -10,41 +10,149 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__AVX512VNNI__) && defined(__AVX512BW__)
+#if defined(__AVX512F__) || defined(__AVX2__)
 #include <immintrin.h>
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
-    __m512i acc = _mm512_setzero_si512();
-    for (int group = 0; group < 256; ++group) {
+#endif
+#if defined(__ARM_FEATURE_DOTPROD)
+#include <arm_neon.h>
+#endif
+
+static int gyatso_collect_nonzero_blocks(const uint8_t *inputs, uint16_t *blocks,
+                                          const uint16_t *index_lut,
+                                          const uint8_t *count_lut) {
+    int count = 0;
+#if defined(__AVX512F__)
+    for (int base = 0; base < 256; base += 16) {
+        const __m512i x = _mm512_loadu_si512((const void *) (inputs + base * 4));
+        uint32_t mask = (uint32_t) _mm512_cmpneq_epi32_mask(x, _mm512_setzero_si512());
+        for (int half = 0; half < 2; ++half) {
+            const uint8_t byte_mask = (uint8_t) (mask >> (half * 8));
+            const __m128i indexes = _mm_loadu_si128(
+                (const __m128i *) (index_lut + (int) byte_mask * 8));
+            const __m128i base_vector = _mm_set1_epi16((short) (base + half * 8));
+            _mm_storeu_si128((__m128i *) (blocks + count), _mm_add_epi16(indexes, base_vector));
+            count += count_lut[byte_mask];
+        }
+    }
+#elif defined(__AVX2__)
+    for (int base = 0; base < 256; base += 8) {
+        const __m256i x = _mm256_loadu_si256((const __m256i *) (inputs + base * 4));
+        const __m256i equal_zero = _mm256_cmpeq_epi32(x, _mm256_setzero_si256());
+        const uint8_t mask = (uint8_t) ((~_mm256_movemask_ps(_mm256_castsi256_ps(equal_zero))) & 0xFF);
+        const __m128i indexes = _mm_loadu_si128((const __m128i *) (index_lut + (int) mask * 8));
+        const __m128i base_vector = _mm_set1_epi16((short) base);
+        _mm_storeu_si128((__m128i *) (blocks + count), _mm_add_epi16(indexes, base_vector));
+        count += count_lut[mask];
+    }
+#else
+    for (int base = 0; base < 256; base += 8) {
+        uint8_t mask = 0;
+        for (int bit = 0; bit < 8; ++bit) {
+            uint32_t value;
+            memcpy(&value, inputs + (base + bit) * 4, sizeof(value));
+            if (value != 0) mask |= (uint8_t) (1u << bit);
+        }
+        const uint16_t *indexes = index_lut + (int) mask * 8;
+        for (int bit = 0; bit < 8; ++bit)
+            blocks[count + bit] = (uint16_t) (base + indexes[bit]);
+        count += count_lut[mask];
+    }
+#endif
+    return count;
+}
+
+void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums,
+                          const uint16_t *index_lut, const uint8_t *count_lut) {
+    uint16_t nonzero_blocks[256];
+    const int nonzero_count = gyatso_collect_nonzero_blocks(inputs, nonzero_blocks,
+                                                             index_lut, count_lut);
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__)
+    __m512i acc0 = _mm512_setzero_si512();
+    __m512i acc1 = _mm512_setzero_si512();
+    __m512i acc2 = _mm512_setzero_si512();
+    __m512i acc3 = _mm512_setzero_si512();
+    int i = 0;
+    for (; i + 4 <= nonzero_count; i += 4) {
+        const int g0 = nonzero_blocks[i + 0], g1 = nonzero_blocks[i + 1];
+        const int g2 = nonzero_blocks[i + 2], g3 = nonzero_blocks[i + 3];
+        uint32_t p0, p1, p2, p3;
+        memcpy(&p0, inputs + g0 * 4, sizeof(p0));
+        memcpy(&p1, inputs + g1 * 4, sizeof(p1));
+        memcpy(&p2, inputs + g2 * 4, sizeof(p2));
+        memcpy(&p3, inputs + g3 * 4, sizeof(p3));
+        const __m512i x0 = _mm512_set1_epi32((int) p0);
+        const __m512i x1 = _mm512_set1_epi32((int) p1);
+        const __m512i x2 = _mm512_set1_epi32((int) p2);
+        const __m512i x3 = _mm512_set1_epi32((int) p3);
+        const __m512i w0 = _mm512_loadu_si512((const void *) (weights + g0 * 64));
+        const __m512i w1 = _mm512_loadu_si512((const void *) (weights + g1 * 64));
+        const __m512i w2 = _mm512_loadu_si512((const void *) (weights + g2 * 64));
+        const __m512i w3 = _mm512_loadu_si512((const void *) (weights + g3 * 64));
+        acc0 = _mm512_dpbusd_epi32(acc0, x0, w0);
+        acc1 = _mm512_dpbusd_epi32(acc1, x1, w1);
+        acc2 = _mm512_dpbusd_epi32(acc2, x2, w2);
+        acc3 = _mm512_dpbusd_epi32(acc3, x3, w3);
+    }
+    for (; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         uint32_t packed;
         memcpy(&packed, inputs + group * 4, sizeof(packed));
         const __m512i x = _mm512_set1_epi32((int) packed);
         const __m512i w = _mm512_loadu_si512((const void *) (weights + group * 64));
-        acc = _mm512_dpbusd_epi32(acc, x, w);
+        acc0 = _mm512_dpbusd_epi32(acc0, x, w);
     }
+    const __m512i acc = _mm512_add_epi32(_mm512_add_epi32(acc0, acc1),
+                                          _mm512_add_epi32(acc2, acc3));
     _mm512_storeu_si512((void *) sums, acc);
-}
 #elif defined(__AVXVNNI__) && defined(__AVX2__)
-#include <immintrin.h>
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
-    __m256i acc0 = _mm256_setzero_si256();
-    __m256i acc1 = _mm256_setzero_si256();
-    for (int group = 0; group < 256; ++group) {
+    __m256i acc00 = _mm256_setzero_si256(), acc01 = _mm256_setzero_si256();
+    __m256i acc02 = _mm256_setzero_si256(), acc03 = _mm256_setzero_si256();
+    __m256i acc10 = _mm256_setzero_si256(), acc11 = _mm256_setzero_si256();
+    __m256i acc12 = _mm256_setzero_si256(), acc13 = _mm256_setzero_si256();
+    int i = 0;
+    for (; i + 4 <= nonzero_count; i += 4) {
+        const int g0 = nonzero_blocks[i + 0], g1 = nonzero_blocks[i + 1];
+        const int g2 = nonzero_blocks[i + 2], g3 = nonzero_blocks[i + 3];
+        uint32_t p0, p1, p2, p3;
+        memcpy(&p0, inputs + g0 * 4, sizeof(p0));
+        memcpy(&p1, inputs + g1 * 4, sizeof(p1));
+        memcpy(&p2, inputs + g2 * 4, sizeof(p2));
+        memcpy(&p3, inputs + g3 * 4, sizeof(p3));
+        const __m256i x0 = _mm256_set1_epi32((int) p0);
+        const __m256i x1 = _mm256_set1_epi32((int) p1);
+        const __m256i x2 = _mm256_set1_epi32((int) p2);
+        const __m256i x3 = _mm256_set1_epi32((int) p3);
+        const int8_t *w0 = weights + g0 * 64, *w1 = weights + g1 * 64;
+        const int8_t *w2 = weights + g2 * 64, *w3 = weights + g3 * 64;
+        acc00 = _mm256_dpbusd_epi32(acc00, x0, _mm256_loadu_si256((const __m256i *) w0));
+        acc01 = _mm256_dpbusd_epi32(acc01, x1, _mm256_loadu_si256((const __m256i *) w1));
+        acc02 = _mm256_dpbusd_epi32(acc02, x2, _mm256_loadu_si256((const __m256i *) w2));
+        acc03 = _mm256_dpbusd_epi32(acc03, x3, _mm256_loadu_si256((const __m256i *) w3));
+        acc10 = _mm256_dpbusd_epi32(acc10, x0, _mm256_loadu_si256((const __m256i *) (w0 + 32)));
+        acc11 = _mm256_dpbusd_epi32(acc11, x1, _mm256_loadu_si256((const __m256i *) (w1 + 32)));
+        acc12 = _mm256_dpbusd_epi32(acc12, x2, _mm256_loadu_si256((const __m256i *) (w2 + 32)));
+        acc13 = _mm256_dpbusd_epi32(acc13, x3, _mm256_loadu_si256((const __m256i *) (w3 + 32)));
+    }
+    for (; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         uint32_t packed;
         memcpy(&packed, inputs + group * 4, sizeof(packed));
         const __m256i x = _mm256_set1_epi32((int) packed);
         const int8_t *w = weights + group * 64;
-        acc0 = _mm256_dpbusd_epi32(acc0, x, _mm256_loadu_si256((const __m256i *) w));
-        acc1 = _mm256_dpbusd_epi32(acc1, x, _mm256_loadu_si256((const __m256i *) (w + 32)));
+        acc00 = _mm256_dpbusd_epi32(acc00, x, _mm256_loadu_si256((const __m256i *) w));
+        acc10 = _mm256_dpbusd_epi32(acc10, x, _mm256_loadu_si256((const __m256i *) (w + 32)));
     }
+    const __m256i acc0 = _mm256_add_epi32(_mm256_add_epi32(acc00, acc01),
+                                           _mm256_add_epi32(acc02, acc03));
+    const __m256i acc1 = _mm256_add_epi32(_mm256_add_epi32(acc10, acc11),
+                                           _mm256_add_epi32(acc12, acc13));
     _mm256_storeu_si256((__m256i *) sums, acc0);
     _mm256_storeu_si256((__m256i *) (sums + 8), acc1);
-}
 #elif defined(__AVX512BW__)
-#include <immintrin.h>
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
     const __m512i ones = _mm512_set1_epi16(1);
     __m512i acc = _mm512_setzero_si512();
-    for (int group = 0; group < 256; ++group) {
+    for (int i = 0; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         uint32_t packed;
         memcpy(&packed, inputs + group * 4, sizeof(packed));
         const __m512i x = _mm512_set1_epi32((int) packed);
@@ -53,14 +161,12 @@ void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t 
         acc = _mm512_add_epi32(acc, _mm512_madd_epi16(pairs, ones));
     }
     _mm512_storeu_si512((void *) sums, acc);
-}
 #elif defined(__AVX2__)
-#include <immintrin.h>
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
     const __m256i ones = _mm256_set1_epi16(1);
     __m256i acc0 = _mm256_setzero_si256();
     __m256i acc1 = _mm256_setzero_si256();
-    for (int group = 0; group < 256; ++group) {
+    for (int i = 0; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         uint32_t packed;
         memcpy(&packed, inputs + group * 4, sizeof(packed));
         const __m256i x = _mm256_set1_epi32((int) packed);
@@ -72,15 +178,13 @@ void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t 
     }
     _mm256_storeu_si256((__m256i *) sums, acc0);
     _mm256_storeu_si256((__m256i *) (sums + 8), acc1);
-}
 #elif defined(__ARM_FEATURE_DOTPROD)
-#include <arm_neon.h>
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
     int32x4_t acc0 = vdupq_n_s32(0);
     int32x4_t acc1 = vdupq_n_s32(0);
     int32x4_t acc2 = vdupq_n_s32(0);
     int32x4_t acc3 = vdupq_n_s32(0);
-    for (int group = 0; group < 256; ++group) {
+    for (int i = 0; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         uint32_t packed;
         memcpy(&packed, inputs + group * 4, sizeof(packed));
         const int8x16_t x = vreinterpretq_s8_u32(vdupq_n_u32(packed));
@@ -94,11 +198,10 @@ void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t 
     vst1q_s32(sums + 4, acc1);
     vst1q_s32(sums + 8, acc2);
     vst1q_s32(sums + 12, acc3);
-}
 #else
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums) {
     for (int output = 0; output < 16; ++output) sums[output] = 0;
-    for (int group = 0; group < 256; ++group) {
+    for (int i = 0; i < nonzero_count; ++i) {
+        const int group = nonzero_blocks[i];
         const uint8_t *x = inputs + group * 4;
         const int8_t *w = weights + group * 64;
         for (int output = 0; output < 16; ++output) {
@@ -107,8 +210,8 @@ void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t 
                             (int32_t) x[2] * wo[2] + (int32_t) x[3] * wo[3];
         }
     }
-}
 #endif
+}
 
 #if defined(__AVX512F__) || defined(__AVX2__)
 #include <immintrin.h>
@@ -261,8 +364,9 @@ void gyatso_pairwise(const int16_t *stm, const int16_t *nstm, uint8_t *outputs) 
 }
 """.}
 
-proc gyatsoMultilayerL1*(inputs: ptr uint8, weights: ptr int8,
-                         sums: ptr int32) {.importc: "gyatso_multilayer_l1", cdecl.}
+proc gyatsoMultilayerL1*(inputs: ptr uint8, weights: ptr int8, sums: ptr int32,
+                         indexLut: ptr uint16, countLut: ptr uint8)
+                         {.importc: "gyatso_multilayer_l1", cdecl.}
 proc gyatsoMultilayerL2*(inputs, weights, bias, outputs: ptr int32,
                          maxValue: int32) {.importc: "gyatso_multilayer_l2", cdecl.}
 proc gyatsoPairwise*(stm, nstm: ptr int16, outputs: ptr uint8) {.importc: "gyatso_pairwise", cdecl.}

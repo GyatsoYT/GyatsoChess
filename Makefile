@@ -1,9 +1,11 @@
 EXE      ?= Gyatso
 EVALFILE ?= Gyatso/Net/GyatsoNet1024x16x32.bin
 SRC       = Gyatso/src/main.nim
+DATAGEN_SRC = Gyatso/src/datagen.nim
 NIM      ?= nim
 NIM_CC   ?= clang
 NETFILE   = Gyatso/Net/GyatsoNet1024x16x32.bin
+DATAGEN  ?= GyatsoDatagen
 
 ifeq ($(OS),Windows_NT)
     DETECTED_OS := Windows
@@ -62,7 +64,7 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
 
 LDFLAGS = -O3 -flto $(LD_LLD)
 
-.PHONY: all build clean help check-deps
+.PHONY: all build datagen-stats clean help check-deps
 
 all: build
 
@@ -87,6 +89,16 @@ endif
 		$(SRC)
 	@echo "[Makefile] Done: $(EXE)$(EXE_SUFFIX)"
 
+datagen-stats: check-deps
+	$(NIM) c \
+		$(NIM_FLAGS) \
+		-d:nnueStats \
+		--passC:"$(CFLAGS)" \
+		--passL:"$(LDFLAGS)" \
+		-o:$(DATAGEN)$(EXE_SUFFIX) \
+		$(DATAGEN_SRC)
+	@echo "[Makefile] Done: $(DATAGEN)$(EXE_SUFFIX) (NNUE sparsity statistics enabled)"
+
 clean:
 	@echo "[Makefile] Cleaning ..."
 	rm -f "$(EXE)" "$(EXE).exe"
@@ -96,6 +108,7 @@ help:
 	@echo "Usage:"
 	@echo "  make EXE=GyatsoChess-ABCDEFGH"
 	@echo "  make EXE=GyatsoChess-ABCDEFGH EVALFILE=/path/to/net.bin"
+	@echo "  make datagen-stats DATAGEN=GyatsoDatagen"
 	@echo ""
 	@echo "Variables:"
 	@echo "  EXE       Output binary name           (default: Gyatso)"

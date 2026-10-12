@@ -1,6 +1,8 @@
 import coretypes, bitboard, board, nnuetypes
-import std/streams
+import std/[streams, strutils]
 import simd
+when defined(nnueStats):
+    import std/atomics
 
 func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
@@ -13,11 +15,83 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
 
 const
     NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
+    NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1024x16x32.perm")
     NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
                      L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
                      L3_SIZE * 4 + L3_SIZE * 4 + 4
     NNUE_PADDING_BYTES* = (64 - NNUE_RAW_BYTES mod 64) mod 64
     NNUE_FILE_BYTES* = NNUE_RAW_BYTES + NNUE_PADDING_BYTES
+    NNUE_NNZ_INDEX_LUT: array[256, array[8, uint16]] = block:
+        var table: array[256, array[8, uint16]]
+        for mask in 0..255:
+            var count = 0
+            for bit in 0..7:
+                if (mask and (1 shl bit)) != 0:
+                    table[mask][count] = uint16(bit)
+                    inc count
+        table
+    NNUE_NNZ_COUNT_LUT: array[256, uint8] = block:
+        var table: array[256, uint8]
+        for mask in 0..255:
+            var count = 0
+            for bit in 0..7:
+                if (mask and (1 shl bit)) != 0:
+                    inc count
+            table[mask] = uint8(count)
+        table
+
+proc readPairwisePermutation(): array[PAIR_COUNT, int] =
+    let values = NNUE_PAIRWISE_PERMUTATION.splitWhitespace()
+    if values.len != PAIR_COUNT:
+        raise newException(IOError, "NNUE permutation must contain exactly " & $PAIR_COUNT & " indices")
+
+    var seen: array[PAIR_COUNT, bool]
+    for newIndex, token in values:
+        var oldIndex: int
+        try:
+            oldIndex = parseInt(token)
+        except ValueError:
+            raise newException(IOError, "Invalid integer in NNUE permutation: " & token)
+        if oldIndex < 0 or oldIndex >= PAIR_COUNT or seen[oldIndex]:
+            raise newException(IOError, "NNUE permutation indices must be unique values in 0.." & $(PAIR_COUNT - 1))
+        result[newIndex] = oldIndex
+        seen[oldIndex] = true
+
+when defined(nnueStats):
+    const NNUE_STATS_SAMPLE_MASK = 4095'u64
+    var nnueStatsEvalCounter {.global.}: Atomic[system.uint64]
+    var nnueStatsSampleCounter {.global.}: Atomic[system.uint64]
+    var nnueStatsNonzeroBlocks {.global.}: Atomic[system.uint64]
+    var nnueStatsActivationCounts {.global.}: array[PAIR_COUNT, Atomic[system.uint64]]
+
+    proc recordPairwiseStats(inputs: ptr uint8) {.inline.} =
+        let ticket = nnueStatsEvalCounter.fetchAdd(1'u64, moRelaxed)
+        if (ticket and NNUE_STATS_SAMPLE_MASK) == 0:
+            let values = cast[ptr UncheckedArray[uint8]](inputs)
+            var activeBlocks = 0'u64
+            for pairIndex in 0..<PAIR_COUNT:
+                if values[pairIndex] != 0:
+                    discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
+                if values[PAIR_COUNT + pairIndex] != 0:
+                    discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
+            for blockIdx in 0..<(HL div 4):
+                if values[blockIdx * 4] != 0 or values[blockIdx * 4 + 1] != 0 or
+                   values[blockIdx * 4 + 2] != 0 or values[blockIdx * 4 + 3] != 0:
+                    inc activeBlocks
+            discard nnueStatsNonzeroBlocks.fetchAdd(activeBlocks, moRelaxed)
+            discard nnueStatsSampleCounter.fetchAdd(1'u64, moRelaxed)
+
+    proc writeNNUEActivationStats*(path: string) =
+        let samples = nnueStatsSampleCounter.load(moRelaxed)
+        let blocks = nnueStatsNonzeroBlocks.load(moRelaxed)
+        var output = newFileStream(path, fmWrite)
+        if output == nil:
+            raise newException(IOError, "Cannot write NNUE activation stats: " & path)
+        defer: output.close()
+        output.writeLine("# samples " & $samples)
+        output.writeLine("# nonzero_blocks " & $blocks)
+        for i in 0..<PAIR_COUNT:
+            output.writeLine($i & " " & $nnueStatsActivationCounts[i].load(moRelaxed))
 
 proc readU8(data: string, offset: var int): uint8 {.inline.} =
     result = uint8(ord(data[offset]))
@@ -50,16 +124,29 @@ proc loadNetworkFromBytes(data: string): NNUENetwork =
             raise newException(IOError, "Invalid multilayer NNUE padding marker")
 
     var offset = 0
+    let permutation = readPairwisePermutation()
+    var newIndexByOld: array[PAIR_COUNT, int]
+    for newIndex, oldIndex in permutation:
+        newIndexByOld[oldIndex] = newIndex
 
     for hidden in 0..<HL:
+        let side = hidden div PAIR_COUNT
+        let pair = hidden mod PAIR_COUNT
+        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
         for feature in 0..<FT_IN:
-            result.ftWeight[feature][hidden] = data.readI16(offset)
+            result.ftWeight[feature][permutedHidden] = data.readI16(offset)
 
     for hidden in 0..<HL:
-        result.ftBias[hidden] = data.readI16(offset)
+        let side = hidden div PAIR_COUNT
+        let pair = hidden mod PAIR_COUNT
+        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+        result.ftBias[permutedHidden] = data.readI16(offset)
 
     for output in 0..<L2_SIZE:
-        for input in 0..<HL:
+        for oldInput in 0..<HL:
+            let side = oldInput div PAIR_COUNT
+            let pair = oldInput mod PAIR_COUNT
+            let input = side * PAIR_COUNT + newIndexByOld[pair]
             result.l1Weight[input div 4][output][input mod 4] = data.readI8(offset)
 
     for output in 0..<L2_SIZE:
@@ -242,9 +329,12 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     var pairwise: array[HL, uint8]
     simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
+    when defined(nnueStats):
+        recordPairwiseStats(addr pairwise[0])
 
     var l1Sums: array[L2_SIZE, int32]
-    simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0], addr l1Sums[0])
+    simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0],
+        addr l1Sums[0], addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
 
     var l1Out: array[L2_SIZE, int32]
     for i in 0..<L2_SIZE:
