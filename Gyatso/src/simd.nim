@@ -210,20 +210,14 @@ else:
 
 when defined(avx512):
   {.push header: "immintrin.h".}
-  func mm512AddEpi32(a, b: M512i): M512i {.importc: "_mm512_add_epi32".}
   func mm512AddEpi64(a, b: M512i): M512i {.importc: "_mm512_add_epi64".}
   func mm512LoaduSi512(p: pointer): M512i {.importc: "_mm512_loadu_si512".}
   func mm512StoreuSi512(p: pointer, a: M512i) {.importc: "_mm512_storeu_si512".}
-  func mm512SetzeroSi512(): M512i {.importc: "_mm512_setzero_si512".}
-  func mm512Set1Epi16(a: int16): M512i {.importc: "_mm512_set1_epi16".}
   func mm512Set1Epi32(a: int32): M512i {.importc: "_mm512_set1_epi32".}
-  func mm512MaxEpi16(a, b: M512i): M512i {.importc: "_mm512_max_epi16".}
-  func mm512MinEpi16(a, b: M512i): M512i {.importc: "_mm512_min_epi16".}
   func mm512SlliEpi16(a: M512i, shift: int32): M512i {.importc: "_mm512_slli_epi16".}
   func mm512MulhiEpi16(a, b: M512i): M512i {.importc: "_mm512_mulhi_epi16".}
   func mm512Cvtepi16Epi8(a: M512i): M256i {.importc: "_mm512_cvtepi16_epi8".}
   func mm512MaddubsEpi16(a, b: M512i): M512i {.importc: "_mm512_maddubs_epi16".}
-  func mm512MaddEpi16(a, b: M512i): M512i {.importc: "_mm512_madd_epi16".}
   func mm512DpbusdEpi32(acc, a, b: M512i): M512i {.importc: "_mm512_dpbusd_epi32".}
   func mm512MulEpi32(a, b: M512i): M512i {.importc: "_mm512_mul_epi32".}
   func mm512MulloEpi32(a, b: M512i): M512i {.importc: "_mm512_mullo_epi32".}
