@@ -24,6 +24,7 @@ type
     l2Bias* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Weight* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Bias*: int32
+    l2Int32Safe*: bool
 
   NNUEState* = object
     current*: int

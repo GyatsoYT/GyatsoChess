@@ -75,17 +75,15 @@ type MovePicker* = object
   prev2Piece*:     int
   prev2ToSq*:      int
   stage*:          MovePickerStage
-  noisyMoves:      array[256, Move]
+  noisyMoves:      MoveList
   noisyScores:     array[256, int32]
-  noisyCount:      int
   noisyCur:        int
   badMoves:        array[64, Move]
   badScores:       array[64, int32]
   badCount:        int
   badCur:          int
-  quietMoves:      array[256, Move]
+  quietMoves:      MoveList
   quietScores:     array[256, int32]
-  quietCount:      int
   quietCur:        int
   skipQuietsMark*: bool
   isQSearch*:      bool
@@ -169,11 +167,11 @@ proc initMovePicker*(picker: var MovePicker, b: ptr Board,
   picker.prev2Piece     = prev2Piece
   picker.prev2ToSq      = prev2ToSq
   picker.stage          = StageTTMove
-  picker.noisyCount     = 0
+  picker.noisyMoves.len = 0
   picker.noisyCur       = 0
   picker.badCount       = 0
   picker.badCur         = 0
-  picker.quietCount     = 0
+  picker.quietMoves.len = 0
   picker.quietCur       = 0
   picker.skipQuietsMark = false
   picker.isQSearch      = isQSearch
@@ -196,19 +194,16 @@ proc next*(picker: var MovePicker): Move {.inline.} =
         return picker.ttMove
 
     of StageGenNoisies:
-      var ml: MoveList
-      generateCaptures(b[], ml)
-      picker.noisyCount = ml.len
-      for i in 0 ..< ml.len:
-        picker.noisyMoves[i]  = ml.moves[i]
-        picker.noisyScores[i] = scoreNoisy(b[], ml.moves[i])
+      generateCaptures(b[], picker.noisyMoves)
+      for i in 0 ..< picker.noisyMoves.len:
+        picker.noisyScores[i] = scoreNoisy(b[], picker.noisyMoves.moves[i])
       picker.noisyCur = 0
       picker.stage    = StageGoodNoisies
 
     of StageGoodNoisies:
-      while picker.noisyCur < picker.noisyCount:
-        let m = pickBest(picker.noisyMoves, picker.noisyScores,
-                         picker.noisyCur, picker.noisyCount)
+      while picker.noisyCur < picker.noisyMoves.len:
+        let m = pickBest(picker.noisyMoves.moves, picker.noisyScores,
+                         picker.noisyCur, picker.noisyMoves.len)
         inc picker.noisyCur
         if m == picker.ttMove: continue
         if see(b[], m, 0):
@@ -228,12 +223,9 @@ proc next*(picker: var MovePicker): Move {.inline.} =
       if picker.skipQuietsMark:
         picker.stage = StageBadNoisies
       else:
-        var ml: MoveList
-        generateQuiets(b[], ml)
-        picker.quietCount = ml.len
-        for i in 0 ..< ml.len:
-          picker.quietMoves[i]  = ml.moves[i]
-          picker.quietScores[i] = scoreQuiet(b[], ml.moves[i],
+        generateQuiets(b[], picker.quietMoves)
+        for i in 0 ..< picker.quietMoves.len:
+          picker.quietScores[i] = scoreQuiet(b[], picker.quietMoves.moves[i],
                                              picker.ply,
                                              picker.prevPiece,
                                              picker.prevToSq,
@@ -247,9 +239,9 @@ proc next*(picker: var MovePicker): Move {.inline.} =
         picker.stage = StageBadNoisies
         continue
 
-      while picker.quietCur < picker.quietCount:
-        let m = pickBest(picker.quietMoves, picker.quietScores,
-                         picker.quietCur, picker.quietCount)
+      while picker.quietCur < picker.quietMoves.len:
+        let m = pickBest(picker.quietMoves.moves, picker.quietScores,
+                         picker.quietCur, picker.quietMoves.len)
         inc picker.quietCur
         if m == picker.ttMove: continue
         return m

@@ -165,6 +165,17 @@ proc loadNetworkFromBytes(data: string): NNUENetwork =
 
     doAssert offset == NNUE_RAW_BYTES
 
+    result.l2Int32Safe = true
+    for output in 0..<L3_SIZE:
+        var bound = int64(result.l2Bias[output])
+        if bound < 0: bound = -bound
+        for input in 0..<L2_SIZE:
+            var weight = int64(result.l2Weight[input][output])
+            if weight < 0: weight = -weight
+            bound += int64(QB * QB) * weight
+        if bound > int64(high(int32)):
+            result.l2Int32Safe = false
+
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     return loadNetworkFromBytes(s.readAll())
 
@@ -327,28 +338,28 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.blackNeedsRefresh[0] = false
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
-    var pairwise: array[HL, uint8]
+    var pairwise {.noinit.}: array[HL, uint8]
     simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
     when defined(nnueStats):
         recordPairwiseStats(addr pairwise[0])
 
-    var l1Sums: array[L2_SIZE, int32]
+    var l1Sums {.noinit.}: array[L2_SIZE, int32]
     simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0],
         addr l1Sums[0], addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
 
-    var l1Out: array[L2_SIZE, int32]
+    var l1Out {.noinit.}: array[L2_SIZE, int32]
     for i in 0..<L2_SIZE:
         let scaled = (l1Sums[i] + net.l1Bias[i]) shr 8
         let clipped = clamp(scaled, 0, QB.int32)
         l1Out[i] = clipped * clipped
 
-    var l2Out: array[L3_SIZE, int32]
+    var l2Out {.noinit.}: array[L3_SIZE, int32]
     simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
-        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
+        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+        int32(ord(net.l2Int32Safe)))
 
-    var output = int64(net.l3Bias)
-    for input in 0..<L3_SIZE:
-        output += int64(l2Out[input]) * int64(net.l3Weight[input])
+    let output = simd.gyatsoMultilayerOutput(addr l2Out[0],
+        addr net.l3Weight[0], net.l3Bias)
 
     return system.int(output * int64(EVAL_SCALE) div int64(QB * QB * QB * QB))
 

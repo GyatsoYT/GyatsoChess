@@ -6,373 +6,16 @@
 #   NEON    (-d:neon  OR  aarch64) — 8  × int16 per register  (Apple Silicon / ARM64)
 #   Scalar  (fallback)             — 1  element at a time
 
-{.emit: """
-#include <stdint.h>
-#include <string.h>
+when defined(avx512) or defined(avx2):
+    import nimsimd/avx2
+    import nimsimd/avx
+    import nimsimd/sse2
 
-#if defined(__AVX512F__) || defined(__AVX2__)
-#include <immintrin.h>
-#endif
-#if defined(__ARM_FEATURE_DOTPROD)
-#include <arm_neon.h>
-#endif
-
-static int gyatso_collect_nonzero_blocks(const uint8_t *inputs, uint16_t *blocks,
-                                          const uint16_t *index_lut,
-                                          const uint8_t *count_lut) {
-    int count = 0;
-#if defined(__AVX512F__)
-    for (int base = 0; base < 256; base += 16) {
-        const __m512i x = _mm512_loadu_si512((const void *) (inputs + base * 4));
-        uint32_t mask = (uint32_t) _mm512_cmpneq_epi32_mask(x, _mm512_setzero_si512());
-        for (int half = 0; half < 2; ++half) {
-            const uint8_t byte_mask = (uint8_t) (mask >> (half * 8));
-            const __m128i indexes = _mm_loadu_si128(
-                (const __m128i *) (index_lut + (int) byte_mask * 8));
-            const __m128i base_vector = _mm_set1_epi16((short) (base + half * 8));
-            _mm_storeu_si128((__m128i *) (blocks + count), _mm_add_epi16(indexes, base_vector));
-            count += count_lut[byte_mask];
-        }
-    }
-#elif defined(__AVX2__)
-    for (int base = 0; base < 256; base += 8) {
-        const __m256i x = _mm256_loadu_si256((const __m256i *) (inputs + base * 4));
-        const __m256i equal_zero = _mm256_cmpeq_epi32(x, _mm256_setzero_si256());
-        const uint8_t mask = (uint8_t) ((~_mm256_movemask_ps(_mm256_castsi256_ps(equal_zero))) & 0xFF);
-        const __m128i indexes = _mm_loadu_si128((const __m128i *) (index_lut + (int) mask * 8));
-        const __m128i base_vector = _mm_set1_epi16((short) base);
-        _mm_storeu_si128((__m128i *) (blocks + count), _mm_add_epi16(indexes, base_vector));
-        count += count_lut[mask];
-    }
-#else
-    for (int base = 0; base < 256; base += 8) {
-        uint8_t mask = 0;
-        for (int bit = 0; bit < 8; ++bit) {
-            uint32_t value;
-            memcpy(&value, inputs + (base + bit) * 4, sizeof(value));
-            if (value != 0) mask |= (uint8_t) (1u << bit);
-        }
-        const uint16_t *indexes = index_lut + (int) mask * 8;
-        for (int bit = 0; bit < 8; ++bit)
-            blocks[count + bit] = (uint16_t) (base + indexes[bit]);
-        count += count_lut[mask];
-    }
-#endif
-    return count;
-}
-
-void gyatso_multilayer_l1(const uint8_t *inputs, const int8_t *weights, int32_t *sums,
-                          const uint16_t *index_lut, const uint8_t *count_lut) {
-    uint16_t nonzero_blocks[256];
-    const int nonzero_count = gyatso_collect_nonzero_blocks(inputs, nonzero_blocks,
-                                                             index_lut, count_lut);
-#if defined(__AVX512VNNI__) && defined(__AVX512BW__)
-    __m512i acc0 = _mm512_setzero_si512();
-    __m512i acc1 = _mm512_setzero_si512();
-    __m512i acc2 = _mm512_setzero_si512();
-    __m512i acc3 = _mm512_setzero_si512();
-    int i = 0;
-    for (; i + 4 <= nonzero_count; i += 4) {
-        const int g0 = nonzero_blocks[i + 0], g1 = nonzero_blocks[i + 1];
-        const int g2 = nonzero_blocks[i + 2], g3 = nonzero_blocks[i + 3];
-        uint32_t p0, p1, p2, p3;
-        memcpy(&p0, inputs + g0 * 4, sizeof(p0));
-        memcpy(&p1, inputs + g1 * 4, sizeof(p1));
-        memcpy(&p2, inputs + g2 * 4, sizeof(p2));
-        memcpy(&p3, inputs + g3 * 4, sizeof(p3));
-        const __m512i x0 = _mm512_set1_epi32((int) p0);
-        const __m512i x1 = _mm512_set1_epi32((int) p1);
-        const __m512i x2 = _mm512_set1_epi32((int) p2);
-        const __m512i x3 = _mm512_set1_epi32((int) p3);
-        const __m512i w0 = _mm512_loadu_si512((const void *) (weights + g0 * 64));
-        const __m512i w1 = _mm512_loadu_si512((const void *) (weights + g1 * 64));
-        const __m512i w2 = _mm512_loadu_si512((const void *) (weights + g2 * 64));
-        const __m512i w3 = _mm512_loadu_si512((const void *) (weights + g3 * 64));
-        acc0 = _mm512_dpbusd_epi32(acc0, x0, w0);
-        acc1 = _mm512_dpbusd_epi32(acc1, x1, w1);
-        acc2 = _mm512_dpbusd_epi32(acc2, x2, w2);
-        acc3 = _mm512_dpbusd_epi32(acc3, x3, w3);
-    }
-    for (; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        uint32_t packed;
-        memcpy(&packed, inputs + group * 4, sizeof(packed));
-        const __m512i x = _mm512_set1_epi32((int) packed);
-        const __m512i w = _mm512_loadu_si512((const void *) (weights + group * 64));
-        acc0 = _mm512_dpbusd_epi32(acc0, x, w);
-    }
-    const __m512i acc = _mm512_add_epi32(_mm512_add_epi32(acc0, acc1),
-                                          _mm512_add_epi32(acc2, acc3));
-    _mm512_storeu_si512((void *) sums, acc);
-#elif defined(__AVXVNNI__) && defined(__AVX2__)
-    __m256i acc00 = _mm256_setzero_si256(), acc01 = _mm256_setzero_si256();
-    __m256i acc02 = _mm256_setzero_si256(), acc03 = _mm256_setzero_si256();
-    __m256i acc10 = _mm256_setzero_si256(), acc11 = _mm256_setzero_si256();
-    __m256i acc12 = _mm256_setzero_si256(), acc13 = _mm256_setzero_si256();
-    int i = 0;
-    for (; i + 4 <= nonzero_count; i += 4) {
-        const int g0 = nonzero_blocks[i + 0], g1 = nonzero_blocks[i + 1];
-        const int g2 = nonzero_blocks[i + 2], g3 = nonzero_blocks[i + 3];
-        uint32_t p0, p1, p2, p3;
-        memcpy(&p0, inputs + g0 * 4, sizeof(p0));
-        memcpy(&p1, inputs + g1 * 4, sizeof(p1));
-        memcpy(&p2, inputs + g2 * 4, sizeof(p2));
-        memcpy(&p3, inputs + g3 * 4, sizeof(p3));
-        const __m256i x0 = _mm256_set1_epi32((int) p0);
-        const __m256i x1 = _mm256_set1_epi32((int) p1);
-        const __m256i x2 = _mm256_set1_epi32((int) p2);
-        const __m256i x3 = _mm256_set1_epi32((int) p3);
-        const int8_t *w0 = weights + g0 * 64, *w1 = weights + g1 * 64;
-        const int8_t *w2 = weights + g2 * 64, *w3 = weights + g3 * 64;
-        acc00 = _mm256_dpbusd_epi32(acc00, x0, _mm256_loadu_si256((const __m256i *) w0));
-        acc01 = _mm256_dpbusd_epi32(acc01, x1, _mm256_loadu_si256((const __m256i *) w1));
-        acc02 = _mm256_dpbusd_epi32(acc02, x2, _mm256_loadu_si256((const __m256i *) w2));
-        acc03 = _mm256_dpbusd_epi32(acc03, x3, _mm256_loadu_si256((const __m256i *) w3));
-        acc10 = _mm256_dpbusd_epi32(acc10, x0, _mm256_loadu_si256((const __m256i *) (w0 + 32)));
-        acc11 = _mm256_dpbusd_epi32(acc11, x1, _mm256_loadu_si256((const __m256i *) (w1 + 32)));
-        acc12 = _mm256_dpbusd_epi32(acc12, x2, _mm256_loadu_si256((const __m256i *) (w2 + 32)));
-        acc13 = _mm256_dpbusd_epi32(acc13, x3, _mm256_loadu_si256((const __m256i *) (w3 + 32)));
-    }
-    for (; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        uint32_t packed;
-        memcpy(&packed, inputs + group * 4, sizeof(packed));
-        const __m256i x = _mm256_set1_epi32((int) packed);
-        const int8_t *w = weights + group * 64;
-        acc00 = _mm256_dpbusd_epi32(acc00, x, _mm256_loadu_si256((const __m256i *) w));
-        acc10 = _mm256_dpbusd_epi32(acc10, x, _mm256_loadu_si256((const __m256i *) (w + 32)));
-    }
-    const __m256i acc0 = _mm256_add_epi32(_mm256_add_epi32(acc00, acc01),
-                                           _mm256_add_epi32(acc02, acc03));
-    const __m256i acc1 = _mm256_add_epi32(_mm256_add_epi32(acc10, acc11),
-                                           _mm256_add_epi32(acc12, acc13));
-    _mm256_storeu_si256((__m256i *) sums, acc0);
-    _mm256_storeu_si256((__m256i *) (sums + 8), acc1);
-#elif defined(__AVX512BW__)
-    const __m512i ones = _mm512_set1_epi16(1);
-    __m512i acc = _mm512_setzero_si512();
-    for (int i = 0; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        uint32_t packed;
-        memcpy(&packed, inputs + group * 4, sizeof(packed));
-        const __m512i x = _mm512_set1_epi32((int) packed);
-        const __m512i w = _mm512_loadu_si512((const void *) (weights + group * 64));
-        const __m512i pairs = _mm512_maddubs_epi16(x, w);
-        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(pairs, ones));
-    }
-    _mm512_storeu_si512((void *) sums, acc);
-#elif defined(__AVX2__)
-    const __m256i ones = _mm256_set1_epi16(1);
-    __m256i acc0 = _mm256_setzero_si256();
-    __m256i acc1 = _mm256_setzero_si256();
-    for (int i = 0; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        uint32_t packed;
-        memcpy(&packed, inputs + group * 4, sizeof(packed));
-        const __m256i x = _mm256_set1_epi32((int) packed);
-        const int8_t *w = weights + group * 64;
-        const __m256i p0 = _mm256_maddubs_epi16(x, _mm256_loadu_si256((const __m256i *) w));
-        const __m256i p1 = _mm256_maddubs_epi16(x, _mm256_loadu_si256((const __m256i *) (w + 32)));
-        acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(p0, ones));
-        acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(p1, ones));
-    }
-    _mm256_storeu_si256((__m256i *) sums, acc0);
-    _mm256_storeu_si256((__m256i *) (sums + 8), acc1);
-#elif defined(__ARM_FEATURE_DOTPROD)
-    int32x4_t acc0 = vdupq_n_s32(0);
-    int32x4_t acc1 = vdupq_n_s32(0);
-    int32x4_t acc2 = vdupq_n_s32(0);
-    int32x4_t acc3 = vdupq_n_s32(0);
-    for (int i = 0; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        uint32_t packed;
-        memcpy(&packed, inputs + group * 4, sizeof(packed));
-        const int8x16_t x = vreinterpretq_s8_u32(vdupq_n_u32(packed));
-        const int8_t *w = weights + group * 64;
-        acc0 = vdotq_s32(acc0, x, vld1q_s8(w));
-        acc1 = vdotq_s32(acc1, x, vld1q_s8(w + 16));
-        acc2 = vdotq_s32(acc2, x, vld1q_s8(w + 32));
-        acc3 = vdotq_s32(acc3, x, vld1q_s8(w + 48));
-    }
-    vst1q_s32(sums, acc0);
-    vst1q_s32(sums + 4, acc1);
-    vst1q_s32(sums + 8, acc2);
-    vst1q_s32(sums + 12, acc3);
-#else
-    for (int output = 0; output < 16; ++output) sums[output] = 0;
-    for (int i = 0; i < nonzero_count; ++i) {
-        const int group = nonzero_blocks[i];
-        const uint8_t *x = inputs + group * 4;
-        const int8_t *w = weights + group * 64;
-        for (int output = 0; output < 16; ++output) {
-            const int8_t *wo = w + output * 4;
-            sums[output] += (int32_t) x[0] * wo[0] + (int32_t) x[1] * wo[1] +
-                            (int32_t) x[2] * wo[2] + (int32_t) x[3] * wo[3];
-        }
-    }
-#endif
-}
-
-#if defined(__AVX512F__) || defined(__AVX2__)
-#include <immintrin.h>
-#endif
-#if defined(__AVX512F__)
-static inline int32_t gyatso_clamp_l2(int64_t value, int32_t max_value) {
-    if (value < 0) return 0;
-    if (value > max_value) return max_value;
-    return (int32_t) value;
-}
-void gyatso_multilayer_l2(const int32_t *inputs, const int32_t *weights,
-                          const int32_t *bias, int32_t *outputs,
-                          int32_t max_value) {
-    for (int output_base = 0; output_base < 32; output_base += 16) {
-        __m512i even = _mm512_setzero_si512();
-        __m512i odd = _mm512_setzero_si512();
-        for (int input = 0; input < 16; ++input) {
-            const __m512i w = _mm512_loadu_si512(
-                (const void *) (weights + input * 32 + output_base));
-            const __m512i x = _mm512_set1_epi32(inputs[input]);
-            even = _mm512_add_epi64(even, _mm512_mul_epi32(w, x));
-            odd = _mm512_add_epi64(odd,
-                _mm512_mul_epi32(_mm512_srli_epi64(w, 32), x));
-        }
-        int64_t even_lanes[8], odd_lanes[8];
-        _mm512_storeu_si512((void *) even_lanes, even);
-        _mm512_storeu_si512((void *) odd_lanes, odd);
-        for (int lane = 0; lane < 8; ++lane) {
-            outputs[output_base + lane * 2] = gyatso_clamp_l2(
-                even_lanes[lane] + bias[output_base + lane * 2], max_value);
-            outputs[output_base + lane * 2 + 1] = gyatso_clamp_l2(
-                odd_lanes[lane] + bias[output_base + lane * 2 + 1], max_value);
-        }
-    }
-}
-#elif defined(__AVX2__)
-static inline int32_t gyatso_clamp_l2(int64_t value, int32_t max_value) {
-    if (value < 0) return 0;
-    if (value > max_value) return max_value;
-    return (int32_t) value;
-}
-void gyatso_multilayer_l2(const int32_t *inputs, const int32_t *weights,
-                          const int32_t *bias, int32_t *outputs,
-                          int32_t max_value) {
-    for (int output_base = 0; output_base < 32; output_base += 8) {
-        __m256i even = _mm256_setzero_si256();
-        __m256i odd = _mm256_setzero_si256();
-        for (int input = 0; input < 16; ++input) {
-            const __m256i w = _mm256_loadu_si256(
-                (const __m256i *) (weights + input * 32 + output_base));
-            const __m256i x = _mm256_set1_epi32(inputs[input]);
-            even = _mm256_add_epi64(even, _mm256_mul_epi32(w, x));
-            odd = _mm256_add_epi64(odd,
-                _mm256_mul_epi32(_mm256_srli_epi64(w, 32), x));
-        }
-        int64_t even_lanes[4], odd_lanes[4];
-        _mm256_storeu_si256((__m256i *) even_lanes, even);
-        _mm256_storeu_si256((__m256i *) odd_lanes, odd);
-        for (int lane = 0; lane < 4; ++lane) {
-            outputs[output_base + lane * 2] = gyatso_clamp_l2(
-                even_lanes[lane] + bias[output_base + lane * 2], max_value);
-            outputs[output_base + lane * 2 + 1] = gyatso_clamp_l2(
-                odd_lanes[lane] + bias[output_base + lane * 2 + 1], max_value);
-        }
-    }
-}
-#else
-void gyatso_multilayer_l2(const int32_t *inputs, const int32_t *weights,
-                          const int32_t *bias, int32_t *outputs,
-                          int32_t max_value) {
-    for (int output = 0; output < 32; ++output) {
-        int64_t sum = bias[output];
-        for (int input = 0; input < 16; ++input)
-            sum += (int64_t) inputs[input] * weights[input * 32 + output];
-        if (sum < 0) sum = 0;
-        if (sum > max_value) sum = max_value;
-        outputs[output] = (int32_t) sum;
-    }
-}
-#endif
-
-#if defined(__AVX512BW__) || defined(__AVX2__)
-#include <immintrin.h>
-#endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#include <arm_neon.h>
-#endif
-void gyatso_pairwise(const int16_t *stm, const int16_t *nstm, uint8_t *outputs) {
-#if defined(__AVX512BW__)
-    const __m512i zero = _mm512_setzero_si512();
-    const __m512i max = _mm512_set1_epi16(255);
-    for (int perspective = 0; perspective < 2; ++perspective) {
-        const int16_t *acc = perspective == 0 ? stm : nstm;
-        uint8_t *out = outputs + perspective * 512;
-        for (int i = 0; i < 512; i += 32) {
-            __m512i a = _mm512_loadu_si512((const void *) (acc + i));
-            __m512i b = _mm512_loadu_si512((const void *) (acc + 512 + i));
-            a = _mm512_max_epi16(zero, _mm512_min_epi16(max, a));
-            b = _mm512_max_epi16(zero, _mm512_min_epi16(max, b));
-            const __m512i p = _mm512_mulhi_epi16(_mm512_slli_epi16(a, 7), b);
-            const __m256i bytes = _mm512_cvtepi16_epi8(p);
-            _mm256_storeu_si256((__m256i *) (out + i), bytes);
-        }
-    }
-#elif defined(__AVX2__)
-    const __m256i zero = _mm256_setzero_si256();
-    const __m256i max = _mm256_set1_epi16(255);
-    for (int perspective = 0; perspective < 2; ++perspective) {
-        const int16_t *acc = perspective == 0 ? stm : nstm;
-        uint8_t *out = outputs + perspective * 512;
-        for (int i = 0; i < 512; i += 16) {
-            __m256i a = _mm256_loadu_si256((const __m256i *) (acc + i));
-            __m256i b = _mm256_loadu_si256((const __m256i *) (acc + 512 + i));
-            a = _mm256_max_epi16(zero, _mm256_min_epi16(max, a));
-            b = _mm256_max_epi16(zero, _mm256_min_epi16(max, b));
-            const __m256i p = _mm256_mulhi_epi16(_mm256_slli_epi16(a, 7), b);
-            __m256i bytes = _mm256_packus_epi16(p, p);
-            bytes = _mm256_permute4x64_epi64(bytes, _MM_SHUFFLE(3, 1, 2, 0));
-            _mm_storeu_si128((__m128i *) (out + i), _mm256_castsi256_si128(bytes));
-        }
-    }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
-    const int16x8_t zero = vdupq_n_s16(0);
-    const int16x8_t max = vdupq_n_s16(255);
-    for (int perspective = 0; perspective < 2; ++perspective) {
-        const int16_t *acc = perspective == 0 ? stm : nstm;
-        uint8_t *out = outputs + perspective * 512;
-        for (int i = 0; i < 512; i += 8) {
-            int16x8_t a = vld1q_s16(acc + i);
-            int16x8_t b = vld1q_s16(acc + 512 + i);
-            a = vmaxq_s16(zero, vminq_s16(max, a));
-            b = vmaxq_s16(zero, vminq_s16(max, b));
-            const int16x8_t p = vqdmulhq_s16(vshlq_n_s16(a, 6), b);
-            vst1_u8(out + i, vqmovun_s16(p));
-        }
-    }
-#else
-    for (int perspective = 0; perspective < 2; ++perspective) {
-        const int16_t *acc = perspective == 0 ? stm : nstm;
-        uint8_t *out = outputs + perspective * 512;
-        for (int i = 0; i < 512; ++i) {
-            int32_t a = acc[i];
-            int32_t b = acc[512 + i];
-            if (a < 0) a = 0; else if (a > 255) a = 255;
-            if (b < 0) b = 0; else if (b > 255) b = 255;
-            out[i] = (uint8_t) ((a * b) >> 9);
-        }
-    }
-#endif
-}
-""".}
-
-proc gyatsoMultilayerL1*(inputs: ptr uint8, weights: ptr int8, sums: ptr int32,
-                         indexLut: ptr uint16, countLut: ptr uint8)
-                         {.importc: "gyatso_multilayer_l1", cdecl.}
-proc gyatsoMultilayerL2*(inputs, weights, bias, outputs: ptr int32,
-                         maxValue: int32) {.importc: "gyatso_multilayer_l2", cdecl.}
-proc gyatsoPairwise*(stm, nstm: ptr int16, outputs: ptr uint8) {.importc: "gyatso_pairwise", cdecl.}
 
 when defined(avx512):
     {.passC: "-mavx512f -mavx512bw".}
+    when defined(avx512vnni):
+        {.passC: "-mavx512vnni".}
 
     type
         M512i* {.importc: "__m512i", header: "immintrin.h", bycopy.} = object
@@ -418,8 +61,9 @@ when defined(avx512):
 
 elif defined(avx2):
     {.passC: "-mavx2".}
+    when defined(avxvnni):
+        {.passC: "-mavxvnni".}
 
-    import nimsimd/avx2
 
     type
         VEPI16* = M256i
@@ -563,3 +207,421 @@ else:
     func vecAdd32*(a, b: VEPI32): VEPI32 {.inline.} = a + b
 
     func vecReduceAdd32*(vec: VEPI32): int32 {.inline.} = vec
+
+when defined(avx512):
+  {.push header: "immintrin.h".}
+  func mm512AddEpi32(a, b: M512i): M512i {.importc: "_mm512_add_epi32".}
+  func mm512AddEpi64(a, b: M512i): M512i {.importc: "_mm512_add_epi64".}
+  func mm512LoaduSi512(p: pointer): M512i {.importc: "_mm512_loadu_si512".}
+  func mm512StoreuSi512(p: pointer, a: M512i) {.importc: "_mm512_storeu_si512".}
+  func mm512SetzeroSi512(): M512i {.importc: "_mm512_setzero_si512".}
+  func mm512Set1Epi16(a: int16): M512i {.importc: "_mm512_set1_epi16".}
+  func mm512Set1Epi32(a: int32): M512i {.importc: "_mm512_set1_epi32".}
+  func mm512MaxEpi16(a, b: M512i): M512i {.importc: "_mm512_max_epi16".}
+  func mm512MinEpi16(a, b: M512i): M512i {.importc: "_mm512_min_epi16".}
+  func mm512SlliEpi16(a: M512i, shift: int32): M512i {.importc: "_mm512_slli_epi16".}
+  func mm512MulhiEpi16(a, b: M512i): M512i {.importc: "_mm512_mulhi_epi16".}
+  func mm512Cvtepi16Epi8(a: M512i): M256i {.importc: "_mm512_cvtepi16_epi8".}
+  func mm512MaddubsEpi16(a, b: M512i): M512i {.importc: "_mm512_maddubs_epi16".}
+  func mm512MaddEpi16(a, b: M512i): M512i {.importc: "_mm512_madd_epi16".}
+  func mm512DpbusdEpi32(acc, a, b: M512i): M512i {.importc: "_mm512_dpbusd_epi32".}
+  func mm512MulEpi32(a, b: M512i): M512i {.importc: "_mm512_mul_epi32".}
+  func mm512MulloEpi32(a, b: M512i): M512i {.importc: "_mm512_mullo_epi32".}
+  func mm512SrliEpi64(a: M512i, shift: int32): M512i {.importc: "_mm512_srli_epi64".}
+  func mm512MaxEpi32(a, b: M512i): M512i {.importc: "_mm512_max_epi32".}
+  func mm512MinEpi32(a, b: M512i): M512i {.importc: "_mm512_min_epi32".}
+  {.pop.}
+
+when defined(avxvnni):
+  {.push header: "immintrin.h".}
+  func mm256DpbusdEpi32(acc, a, b: M256i): M256i {.importc: "_mm256_dpbusd_epi32".}
+  {.pop.}
+
+when defined(neon) or defined(arm64) or defined(aarch64):
+  type
+    MLInt16x8 {.importc: "int16x8_t", header: "arm_neon.h", bycopy.} = object
+    MLInt8x16 {.importc: "int8x16_t", header: "arm_neon.h", bycopy.} = object
+    MLInt32x4 {.importc: "int32x4_t", header: "arm_neon.h", bycopy.} = object
+    MLUint32x4 {.importc: "uint32x4_t", header: "arm_neon.h", bycopy.} = object
+    MLUint8x8 {.importc: "uint8x8_t", header: "arm_neon.h", bycopy.} = object
+  {.push header: "arm_neon.h".}
+  func neonLoadS16(p: ptr int16): MLInt16x8 {.importc: "vld1q_s16".}
+  func neonStoreU8(p: ptr uint8, v: MLUint8x8) {.importc: "vst1_u8".}
+  func neonDupS16(v: int16): MLInt16x8 {.importc: "vdupq_n_s16".}
+  func neonDupS32(v: int32): MLInt32x4 {.importc: "vdupq_n_s32".}
+  func neonMinS16(a, b: MLInt16x8): MLInt16x8 {.importc: "vminq_s16".}
+  func neonMaxS16(a, b: MLInt16x8): MLInt16x8 {.importc: "vmaxq_s16".}
+  func neonShiftLeftS16(a: MLInt16x8, shift: int32): MLInt16x8 {.importc: "vshlq_n_s16".}
+  func neonDoublingMulHighS16(a, b: MLInt16x8): MLInt16x8 {.importc: "vqdmulhq_s16".}
+  func neonNarrowUnsignedS16(a: MLInt16x8): MLUint8x8 {.importc: "vqmovun_s16".}
+  when defined(neonDotProd):
+    func neonDupU32(v: uint32): MLUint32x4 {.importc: "vdupq_n_u32".}
+    func neonReinterpretS8(v: MLUint32x4): MLInt8x16 {.importc: "vreinterpretq_s8_u32".}
+    func neonLoadS8(p: ptr int8): MLInt8x16 {.importc: "vld1q_s8".}
+    func neonDotS32(acc: MLInt32x4, a, b: MLInt8x16): MLInt32x4 {.importc: "vdotq_s32".}
+    func neonStoreS32(p: ptr int32, v: MLInt32x4) {.importc: "vst1q_s32".}
+  {.pop.}
+
+type
+  U8Array = UncheckedArray[uint8]
+  I8Array = UncheckedArray[int8]
+  I16Array = UncheckedArray[int16]
+  I32Array = UncheckedArray[int32]
+  U16Array = UncheckedArray[uint16]
+
+func packFourBytes(inputs: ptr U8Array, offset: int): uint32 {.inline.} =
+  copyMem(addr result, addr inputs[offset], sizeof(result))
+
+proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[256, uint16],
+                          indexLut: ptr U16Array, countLut: ptr U8Array): int =
+  var count = 0
+  when defined(avx2) and not defined(avx512):
+    let zero = mm256_setzero_si256()
+    for base in countup(0, 248, 8):
+      let values = mm256_loadu_si256(cast[ptr M256i](addr inputs[base * 4]))
+      let equalZero = mm256_cmpeq_epi32(values, zero)
+      let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
+      let lutRow = mask * 8
+      let indexes = mm_loadu_si128(cast[ptr M128i](addr indexLut[lutRow]))
+      let baseVector = mm_set1_epi16(int16(base))
+      mm_storeu_si128(cast[ptr M128i](addr blocks[count]),
+        mm_add_epi16(indexes, baseVector))
+      count += int(countLut[mask])
+  else:
+    for group in 0..<256:
+      let offset = group * 4
+      if inputs[offset] != 0 or inputs[offset + 1] != 0 or
+         inputs[offset + 2] != 0 or inputs[offset + 3] != 0:
+        blocks[count] = uint16(group)
+        inc count
+  count
+
+proc gyatsoMultilayerL1*(rawInputs: ptr uint8, rawWeights: ptr int8,
+                         rawSums: ptr int32, rawIndexLut: ptr uint16,
+                         rawCountLut: ptr uint8) =
+  let inputs = cast[ptr U8Array](rawInputs)
+  let weights = cast[ptr I8Array](rawWeights)
+  let sums = cast[ptr I32Array](rawSums)
+  let indexLut = cast[ptr U16Array](rawIndexLut)
+  let countLut = cast[ptr U8Array](rawCountLut)
+  var nonzeroBlocks {.noinit.}: array[256, uint16]
+  let nonzeroCount = collectNonzeroBlocks(inputs, nonzeroBlocks, indexLut, countLut)
+
+  when defined(avx512) and defined(avx512vnni):
+    var acc0 {.noinit.} = mm512SetzeroSi512()
+    var acc1 {.noinit.} = mm512SetzeroSi512()
+    var acc2 {.noinit.} = mm512SetzeroSi512()
+    var acc3 {.noinit.} = mm512SetzeroSi512()
+    var i = 0
+    while i + 4 <= nonzeroCount:
+      for j in 0..<4:
+        let group = int(nonzeroBlocks[i + j])
+        let x = mm512Set1Epi32(cast[int32](packFourBytes(inputs, group * 4)))
+        let w = mm512LoaduSi512(addr weights[group * 64])
+        case j
+        of 0: acc0 = mm512DpbusdEpi32(acc0, x, w)
+        of 1: acc1 = mm512DpbusdEpi32(acc1, x, w)
+        of 2: acc2 = mm512DpbusdEpi32(acc2, x, w)
+        else: acc3 = mm512DpbusdEpi32(acc3, x, w)
+      inc i, 4
+    while i < nonzeroCount:
+      let group = int(nonzeroBlocks[i])
+      let x = mm512Set1Epi32(cast[int32](packFourBytes(inputs, group * 4)))
+      let w = mm512LoaduSi512(addr weights[group * 64])
+      acc0 = mm512DpbusdEpi32(acc0, x, w)
+      inc i
+    let acc = mm512AddEpi32(mm512AddEpi32(acc0, acc1), mm512AddEpi32(acc2, acc3))
+    mm512StoreuSi512(addr sums[0], acc)
+  elif defined(avx2) and defined(avxvnni):
+    var acc00 {.noinit.} = mm256_setzero_si256()
+    var acc01 {.noinit.} = mm256_setzero_si256()
+    var acc02 {.noinit.} = mm256_setzero_si256()
+    var acc03 {.noinit.} = mm256_setzero_si256()
+    var acc10 {.noinit.} = mm256_setzero_si256()
+    var acc11 {.noinit.} = mm256_setzero_si256()
+    var acc12 {.noinit.} = mm256_setzero_si256()
+    var acc13 {.noinit.} = mm256_setzero_si256()
+    var i = 0
+    while i + 4 <= nonzeroCount:
+      let group0 = int(nonzeroBlocks[i])
+      let group1 = int(nonzeroBlocks[i + 1])
+      let group2 = int(nonzeroBlocks[i + 2])
+      let group3 = int(nonzeroBlocks[i + 3])
+      let x0 = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group0 * 4)))
+      let x1 = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group1 * 4)))
+      let x2 = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group2 * 4)))
+      let x3 = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group3 * 4)))
+      let w00 = mm256_loadu_si256(cast[ptr M256i](addr weights[group0 * 64]))
+      let w01 = mm256_loadu_si256(cast[ptr M256i](addr weights[group1 * 64]))
+      let w02 = mm256_loadu_si256(cast[ptr M256i](addr weights[group2 * 64]))
+      let w03 = mm256_loadu_si256(cast[ptr M256i](addr weights[group3 * 64]))
+      let w10 = mm256_loadu_si256(cast[ptr M256i](addr weights[group0 * 64 + 32]))
+      let w11 = mm256_loadu_si256(cast[ptr M256i](addr weights[group1 * 64 + 32]))
+      let w12 = mm256_loadu_si256(cast[ptr M256i](addr weights[group2 * 64 + 32]))
+      let w13 = mm256_loadu_si256(cast[ptr M256i](addr weights[group3 * 64 + 32]))
+      acc00 = mm256DpbusdEpi32(acc00, x0, w00)
+      acc01 = mm256DpbusdEpi32(acc01, x1, w01)
+      acc02 = mm256DpbusdEpi32(acc02, x2, w02)
+      acc03 = mm256DpbusdEpi32(acc03, x3, w03)
+      acc10 = mm256DpbusdEpi32(acc10, x0, w10)
+      acc11 = mm256DpbusdEpi32(acc11, x1, w11)
+      acc12 = mm256DpbusdEpi32(acc12, x2, w12)
+      acc13 = mm256DpbusdEpi32(acc13, x3, w13)
+      inc i, 4
+    while i < nonzeroCount:
+      let group = int(nonzeroBlocks[i])
+      let x = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group * 4)))
+      let w = addr weights[group * 64]
+      acc00 = mm256DpbusdEpi32(acc00, x, mm256_loadu_si256(cast[ptr M256i](w)))
+      acc10 = mm256DpbusdEpi32(acc10, x, mm256_loadu_si256(cast[ptr M256i](addr weights[group * 64 + 32])))
+      inc i
+    let acc0 = mm256_add_epi32(mm256_add_epi32(acc00, acc01), mm256_add_epi32(acc02, acc03))
+    let acc1 = mm256_add_epi32(mm256_add_epi32(acc10, acc11), mm256_add_epi32(acc12, acc13))
+    mm256_storeu_si256(cast[ptr M256i](addr sums[0]), acc0)
+    mm256_storeu_si256(cast[ptr M256i](addr sums[8]), acc1)
+  elif defined(avx512) or defined(avx2):
+    let ones = when defined(avx512): mm512Set1Epi16(1) else: mm256_set1_epi16(1)
+    when defined(avx512):
+      var acc = mm512SetzeroSi512()
+      for i in 0..<nonzeroCount:
+        let group = int(nonzeroBlocks[i])
+        let x = mm512Set1Epi32(cast[int32](packFourBytes(inputs, group * 4)))
+        let w = mm512LoaduSi512(addr weights[group * 64])
+        let pairs = mm512MaddubsEpi16(x, w)
+        acc = mm512AddEpi32(acc, mm512MaddEpi16(pairs, ones))
+      mm512StoreuSi512(addr sums[0], acc)
+    else:
+      var acc0 = mm256_setzero_si256()
+      var acc1 = mm256_setzero_si256()
+      for i in 0..<nonzeroCount:
+        let group = int(nonzeroBlocks[i])
+        let x = mm256_set1_epi32(cast[int32](packFourBytes(inputs, group * 4)))
+        let w = addr weights[group * 64]
+        let p0 = mm256_maddubs_epi16(x, mm256_loadu_si256(cast[ptr M256i](w)))
+        let p1 = mm256_maddubs_epi16(x, mm256_loadu_si256(cast[ptr M256i](addr weights[group * 64 + 32])))
+        acc0 = mm256_add_epi32(acc0, mm256_madd_epi16(p0, ones))
+        acc1 = mm256_add_epi32(acc1, mm256_madd_epi16(p1, ones))
+      mm256_storeu_si256(cast[ptr M256i](addr sums[0]), acc0)
+      mm256_storeu_si256(cast[ptr M256i](addr sums[8]), acc1)
+  elif defined(neonDotProd):
+    var acc0 {.noinit.} = neonDupS32(0)
+    var acc1 {.noinit.} = neonDupS32(0)
+    var acc2 {.noinit.} = neonDupS32(0)
+    var acc3 {.noinit.} = neonDupS32(0)
+    for i in 0..<nonzeroCount:
+      let group = int(nonzeroBlocks[i])
+      let x = neonReinterpretS8(neonDupU32(packFourBytes(inputs, group * 4)))
+      let w = addr weights[group * 64]
+      acc0 = neonDotS32(acc0, x, neonLoadS8(w))
+      acc1 = neonDotS32(acc1, x, neonLoadS8(addr weights[group * 64 + 16]))
+      acc2 = neonDotS32(acc2, x, neonLoadS8(addr weights[group * 64 + 32]))
+      acc3 = neonDotS32(acc3, x, neonLoadS8(addr weights[group * 64 + 48]))
+    neonStoreS32(addr sums[0], acc0)
+    neonStoreS32(addr sums[4], acc1)
+    neonStoreS32(addr sums[8], acc2)
+    neonStoreS32(addr sums[12], acc3)
+  else:
+    for output in 0..<16: sums[output] = 0
+    for i in 0..<nonzeroCount:
+      let group = int(nonzeroBlocks[i])
+      let x = group * 4
+      let w = group * 64
+      for output in 0..<16:
+        let wo = w + output * 4
+        sums[output] += int32(inputs[x]) * int32(weights[wo]) +
+          int32(inputs[x + 1]) * int32(weights[wo + 1]) +
+          int32(inputs[x + 2]) * int32(weights[wo + 2]) +
+          int32(inputs[x + 3]) * int32(weights[wo + 3])
+
+func clampI64(value: int64, maximum: int32): int32 {.inline.} =
+  if value < 0: 0
+  elif value > int64(maximum): maximum
+  else: int32(value)
+
+proc gyatsoMultilayerL2*(rawInputs, rawWeights, rawBias, rawOutputs: ptr int32,
+                         maxValue, useFastI32: int32) =
+  let inputs = cast[ptr I32Array](rawInputs)
+  let weights = cast[ptr I32Array](rawWeights)
+  let bias = cast[ptr I32Array](rawBias)
+  let outputs = cast[ptr I32Array](rawOutputs)
+  when defined(avx512):
+    if useFastI32 != 0:
+      let zero = mm512SetzeroSi512()
+      let maxVec = mm512Set1Epi32(maxValue)
+      for outputBase in countup(0, 16, 16):
+        var sum = zero
+        for input in 0..<16:
+          let activation = inputs[input]
+          if activation != 0:
+            let row = input * 32 + outputBase
+            let w = mm512LoaduSi512(addr weights[row])
+            sum = mm512AddEpi32(sum, mm512MulloEpi32(w, mm512Set1Epi32(activation)))
+        sum = mm512AddEpi32(sum, mm512LoaduSi512(addr bias[outputBase]))
+        sum = mm512MaxEpi32(mm512MinEpi32(sum, maxVec), zero)
+        mm512StoreuSi512(addr outputs[outputBase], sum)
+    else:
+      for outputBase in countup(0, 16, 16):
+        var even = mm512SetzeroSi512()
+        var odd = mm512SetzeroSi512()
+        for input in 0..<16:
+          let row = input * 32 + outputBase
+          let w = mm512LoaduSi512(addr weights[row])
+          let x = mm512Set1Epi32(inputs[input])
+          even = mm512AddEpi64(even, mm512MulEpi32(w, x))
+          odd = mm512AddEpi64(odd, mm512MulEpi32(mm512SrliEpi64(w, 32), x))
+        var evenLanes: array[8, int64]
+        var oddLanes: array[8, int64]
+        mm512StoreuSi512(addr evenLanes[0], even)
+        mm512StoreuSi512(addr oddLanes[0], odd)
+        for lane in 0..<8:
+          outputs[outputBase + lane * 2] = clampI64(evenLanes[lane] + int64(bias[outputBase + lane * 2]), maxValue)
+          outputs[outputBase + lane * 2 + 1] = clampI64(oddLanes[lane] + int64(bias[outputBase + lane * 2 + 1]), maxValue)
+  elif defined(avx2):
+    if useFastI32 != 0:
+      let zero = mm256_setzero_si256()
+      let maxVec = mm256_set1_epi32(maxValue)
+      var sum0 {.noinit.} = zero
+      var sum1 {.noinit.} = zero
+      var sum2 {.noinit.} = zero
+      var sum3 {.noinit.} = zero
+      for input in 0..<16:
+        let activation = inputs[input]
+        if activation != 0:
+          let x = mm256_set1_epi32(activation)
+          let row = input * 32
+          sum0 = mm256_add_epi32(sum0, mm256_mullo_epi32(mm256_loadu_si256(cast[ptr M256i](addr weights[row])), x))
+          sum1 = mm256_add_epi32(sum1, mm256_mullo_epi32(mm256_loadu_si256(cast[ptr M256i](addr weights[row + 8])), x))
+          sum2 = mm256_add_epi32(sum2, mm256_mullo_epi32(mm256_loadu_si256(cast[ptr M256i](addr weights[row + 16])), x))
+          sum3 = mm256_add_epi32(sum3, mm256_mullo_epi32(mm256_loadu_si256(cast[ptr M256i](addr weights[row + 24])), x))
+      sum0 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum0, mm256_loadu_si256(cast[ptr M256i](addr bias[0]))), maxVec), zero)
+      sum1 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum1, mm256_loadu_si256(cast[ptr M256i](addr bias[8]))), maxVec), zero)
+      sum2 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum2, mm256_loadu_si256(cast[ptr M256i](addr bias[16]))), maxVec), zero)
+      sum3 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum3, mm256_loadu_si256(cast[ptr M256i](addr bias[24]))), maxVec), zero)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[0]), sum0)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[8]), sum1)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[16]), sum2)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[24]), sum3)
+    else:
+      for outputBase in countup(0, 24, 8):
+        var even = mm256_setzero_si256()
+        var odd = mm256_setzero_si256()
+        for input in 0..<16:
+          let row = input * 32 + outputBase
+          let w = mm256_loadu_si256(cast[ptr M256i](addr weights[row]))
+          let x = mm256_set1_epi32(inputs[input])
+          even = mm256_add_epi64(even, mm256_mul_epi32(w, x))
+          odd = mm256_add_epi64(odd, mm256_mul_epi32(mm256_srli_epi64(w, 32), x))
+        var evenLanes: array[4, int64]
+        var oddLanes: array[4, int64]
+        mm256_storeu_si256(cast[ptr M256i](addr evenLanes[0]), even)
+        mm256_storeu_si256(cast[ptr M256i](addr oddLanes[0]), odd)
+        for lane in 0..<4:
+          outputs[outputBase + lane * 2] = clampI64(evenLanes[lane] + int64(bias[outputBase + lane * 2]), maxValue)
+          outputs[outputBase + lane * 2 + 1] = clampI64(oddLanes[lane] + int64(bias[outputBase + lane * 2 + 1]), maxValue)
+  else:
+    for output in 0..<32:
+      var sum = int64(bias[output])
+      for input in 0..<16:
+        sum += int64(inputs[input]) * int64(weights[input * 32 + output])
+      outputs[output] = clampI64(sum, maxValue)
+
+proc gyatsoMultilayerOutput*(rawInputs, rawWeights: ptr int32,
+                             bias: int32): int64 =
+  let inputs = cast[ptr I32Array](rawInputs)
+  let weights = cast[ptr I32Array](rawWeights)
+  when defined(avx512):
+    var even {.noinit.} = mm512SetzeroSi512()
+    var odd {.noinit.} = mm512SetzeroSi512()
+    for base in countup(0, 16, 16):
+      let x = mm512LoaduSi512(addr inputs[base])
+      let w = mm512LoaduSi512(addr weights[base])
+      even = mm512AddEpi64(even, mm512MulEpi32(x, w))
+      odd = mm512AddEpi64(odd,
+        mm512MulEpi32(mm512SrliEpi64(x, 32), mm512SrliEpi64(w, 32)))
+    var evenLanes {.noinit.}: array[8, int64]
+    var oddLanes {.noinit.}: array[8, int64]
+    mm512StoreuSi512(addr evenLanes[0], even)
+    mm512StoreuSi512(addr oddLanes[0], odd)
+    result = int64(bias)
+    for lane in 0..<8:
+      result += evenLanes[lane] + oddLanes[lane]
+  elif defined(avx2):
+    var even {.noinit.} = mm256_setzero_si256()
+    var odd {.noinit.} = mm256_setzero_si256()
+    for base in countup(0, 24, 8):
+      let x = mm256_loadu_si256(cast[ptr M256i](addr inputs[base]))
+      let w = mm256_loadu_si256(cast[ptr M256i](addr weights[base]))
+      even = mm256_add_epi64(even, mm256_mul_epi32(x, w))
+      odd = mm256_add_epi64(odd,
+        mm256_mul_epi32(mm256_srli_epi64(x, 32), mm256_srli_epi64(w, 32)))
+    var evenLanes {.noinit.}: array[4, int64]
+    var oddLanes {.noinit.}: array[4, int64]
+    mm256_storeu_si256(cast[ptr M256i](addr evenLanes[0]), even)
+    mm256_storeu_si256(cast[ptr M256i](addr oddLanes[0]), odd)
+    result = int64(bias)
+    for lane in 0..<4:
+      result += evenLanes[lane] + oddLanes[lane]
+  else:
+    result = int64(bias)
+    for i in 0..<32:
+      result += int64(inputs[i]) * int64(weights[i])
+
+proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
+  let stm = cast[ptr I16Array](rawStm)
+  let nstm = cast[ptr I16Array](rawNstm)
+  let outputs = cast[ptr U8Array](rawOutputs)
+  when defined(avx512):
+    let zero = mm512SetzeroSi512()
+    let maxVec = mm512Set1Epi16(255)
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in countup(0, 480, 32):
+        var a = mm512LoaduSi512(addr acc[i])
+        var b = mm512LoaduSi512(addr acc[512 + i])
+        a = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, a))
+        b = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, b))
+        let p = mm512MulhiEpi16(mm512SlliEpi16(a, 7), b)
+        let bytes = mm512Cvtepi16Epi8(p)
+        mm256_storeu_si256(cast[ptr M256i](addr outputs[outBase + i]), bytes)
+  elif defined(avx2):
+    let zero = mm256_setzero_si256()
+    let maxVec = mm256_set1_epi16(255)
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in countup(0, 480, 32):
+        var a0 = mm256_loadu_si256(cast[ptr M256i](addr acc[i]))
+        var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i]))
+        var a1 = mm256_loadu_si256(cast[ptr M256i](addr acc[i + 16]))
+        var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i + 16]))
+        a0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a0))
+        b0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b0))
+        a1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a1))
+        b1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b1))
+        let p0 = mm256_mulhi_epi16(mm256_slli_epi16(a0, 7), b0)
+        let p1 = mm256_mulhi_epi16(mm256_slli_epi16(a1, 7), b1)
+        var bytes = mm256_packus_epi16(p0, p1)
+        bytes = mm256_permute4x64_epi64(bytes, MM_SHUFFLE(3, 1, 2, 0))
+        mm256_storeu_si256(cast[ptr M256i](addr outputs[outBase + i]), bytes)
+  elif defined(neon) or defined(arm64) or defined(aarch64):
+    let zero = neonDupS16(0)
+    let maxVec = neonDupS16(255)
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in countup(0, 504, 8):
+        var a = neonLoadS16(addr acc[i])
+        var b = neonLoadS16(addr acc[512 + i])
+        a = neonMaxS16(zero, neonMinS16(maxVec, a))
+        b = neonMaxS16(zero, neonMinS16(maxVec, b))
+        let p = neonDoublingMulHighS16(neonShiftLeftS16(a, 6), b)
+        neonStoreU8(addr outputs[outBase + i], neonNarrowUnsignedS16(p))
+  else:
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in 0..<512:
+        let a = clamp(int(acc[i]), 0, 255)
+        let b = clamp(int(acc[512 + i]), 0, 255)
+        outputs[outBase + i] = uint8((a * b) shr 9)
