@@ -38,6 +38,10 @@ const
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41
+  # Eval-based quiet history swing
+  EvalHistoryBonusScale* = 6
+  EvalHistoryBonusDiv* = 10
+  EvalHistoryBonusClamp* = 100
   # Aspiration Windows
   AspMinDepth* = 3
   AspInitAlpha* = 20

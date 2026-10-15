@@ -25,6 +25,9 @@ type
     piece*: int
     staticEval*: int
     rawEval*: int
+    isQuiet*: bool
+    fromAttacked*: int
+    toAttacked*: int
 
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
@@ -135,6 +138,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
       continue
 
     stack[ply].move = m
+    stack[ply].isQuiet = false
     nnuePush(b, m, nnue[])
     b.makeMove(m)
     prefetchTT(cast[system.uint64](b.hash))
@@ -233,6 +237,19 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         MateThreshold - 1)
   let staticEval = stack[ply].staticEval
 
+  # Eval swing quiet history update
+  if ply >= 1 and not isSingularSearch and not inCheck and
+      stack[ply - 1].move != NullMove and
+      stack[ply - 1].isQuiet and
+      stack[ply - 1].staticEval != Unknown:
+    let sum = stack[ply - 1].staticEval + staticEval
+    let bonus = clamp((-sum * EvalHistoryBonusScale) div EvalHistoryBonusDiv,
+                      -EvalHistoryBonusClamp, EvalHistoryBonusClamp)
+    if bonus != 0:
+      let prevMove = stack[ply - 1].move
+      let prevStm = b.stm.opposite.ord
+      updateHistoryStat(historyTable[prevStm][prevMove.fromSq.int][prevMove.histToSq.int][stack[ply - 1].fromAttacked][stack[ply - 1].toAttacked], bonus)
+
   # Improving flag and delta (improvement) calculation
   var improving = false
   var improvement = 0
@@ -273,6 +290,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
     stack[ply].move = NullMove
+    stack[ply].isQuiet = false
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
     nnuePushNull(nnue[])
@@ -418,6 +436,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     stack[ply].move = m
     stack[ply].piece = ord(b.mailbox[m.fromSq.int])
+    stack[ply].isQuiet = isQuiet
+    stack[ply].fromAttacked = fromAttacked
+    stack[ply].toAttacked = toAttacked
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
 
@@ -673,6 +694,9 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     stack[i].piece = 0
     stack[i].staticEval = Unknown
     stack[i].rawEval = Unknown
+    stack[i].isQuiet = false
+    stack[i].fromAttacked = 0
+    stack[i].toAttacked = 0
 
   # aspirationScore seeds the windows for depth >= AspMinDepth
   var aspirationScore = bestScore
