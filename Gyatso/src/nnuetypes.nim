@@ -9,7 +9,15 @@ const
   PAIR_COUNT* = HL div 2
   QA*        = 255   
   QB*        = 64    
-  EVAL_SCALE* = 337
+  EVAL_SCALE* = 400
+
+const IsaName* =
+  when defined(avx512vnni): "avx512+vnni"
+  elif defined(avx512): "avx512"
+  elif defined(avxvnni): "avx2+vnni"
+  elif defined(avx2): "avx2"
+  elif defined(neon) or defined(arm64) or defined(aarch64): "neon"
+  else: "scalar"
 
 type
   Accumulator* = object
@@ -25,6 +33,8 @@ type
     l3Weight* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Bias*: int32
     l2Int32Safe*: bool
+    l2Int16Safe*: bool
+    l2WeightPacked* {.align(ALIGNMENT).}: array[L2_SIZE div 2, array[L3_SIZE, array[2, int16]]]
 
   NNUEState* = object
     current*: int

@@ -176,6 +176,18 @@ proc loadNetworkFromBytes(data: string): NNUENetwork =
         if bound > int64(high(int32)):
             result.l2Int32Safe = false
 
+    result.l2Int16Safe = result.l2Int32Safe
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            let w = result.l2Weight[input][output]
+            if w < int32(low(int16)) or w > int32(high(int16)):
+                result.l2Int16Safe = false
+    if result.l2Int16Safe:
+        for pair in 0..<(L2_SIZE div 2):
+            for output in 0..<L3_SIZE:
+                result.l2WeightPacked[pair][output][0] = int16(result.l2Weight[pair * 2][output])
+                result.l2WeightPacked[pair][output][1] = int16(result.l2Weight[pair * 2 + 1][output])
+
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
     return loadNetworkFromBytes(s.readAll())
 
@@ -339,13 +351,20 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     var pairwise {.noinit.}: array[HL, uint8]
-    simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
+    var l1Sums {.noinit.}: array[L2_SIZE, int32]
+    when defined(avx512) or defined(avx2):
+        var blocks {.noinit.}: array[256, uint16]
+        let nnzCount = simd.gyatsoPairwiseNnz(addr stmAcc.data[0], addr nstmAcc.data[0],
+            addr pairwise[0], addr blocks[0],
+            addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
+        simd.gyatsoMultilayerL1Blocks(addr pairwise[0], addr net.l1Weight[0][0][0],
+            addr l1Sums[0], addr blocks[0], nnzCount)
+    else:
+        simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
+        simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0],
+            addr l1Sums[0], addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
     when defined(nnueStats):
         recordPairwiseStats(addr pairwise[0])
-
-    var l1Sums {.noinit.}: array[L2_SIZE, int32]
-    simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0],
-        addr l1Sums[0], addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
 
     var l1Out {.noinit.}: array[L2_SIZE, int32]
     for i in 0..<L2_SIZE:
@@ -354,9 +373,18 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         l1Out[i] = clipped * clipped
 
     var l2Out {.noinit.}: array[L3_SIZE, int32]
-    simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
-        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
-        int32(ord(net.l2Int32Safe)))
+    when defined(avx512) or defined(avx2):
+        if net.l2Int16Safe:
+            simd.gyatsoMultilayerL2Madd(addr l1Out[0], addr net.l2WeightPacked[0][0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
+        else:
+            simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+                int32(ord(net.l2Int32Safe)))
+    else:
+        simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+            addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+            int32(ord(net.l2Int32Safe)))
 
     let output = simd.gyatsoMultilayerOutput(addr l2Out[0],
         addr net.l3Weight[0], net.l3Bias)

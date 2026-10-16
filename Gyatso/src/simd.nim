@@ -269,7 +269,7 @@ func packFourBytes(inputs: ptr U8Array, offset: int): uint32 {.inline.} =
 proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[256, uint16],
                           indexLut: ptr U16Array, countLut: ptr U8Array): int =
   var count = 0
-  when defined(avx2) and not defined(avx512):
+  when defined(avx2) or defined(avx512):
     let zero = mm256_setzero_si256()
     for base in countup(0, 248, 8):
       let values = mm256_loadu_si256(cast[ptr M256i](addr inputs[base * 4]))
@@ -290,16 +290,13 @@ proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[256, uint16],
         inc count
   count
 
-proc gyatsoMultilayerL1*(rawInputs: ptr uint8, rawWeights: ptr int8,
-                         rawSums: ptr int32, rawIndexLut: ptr uint16,
-                         rawCountLut: ptr uint8) =
+proc gyatsoMultilayerL1Blocks*(rawInputs: ptr uint8, rawWeights: ptr int8,
+                               rawSums: ptr int32, rawBlocks: ptr uint16,
+                               nonzeroCount: int) =
   let inputs = cast[ptr U8Array](rawInputs)
   let weights = cast[ptr I8Array](rawWeights)
   let sums = cast[ptr I32Array](rawSums)
-  let indexLut = cast[ptr U16Array](rawIndexLut)
-  let countLut = cast[ptr U8Array](rawCountLut)
-  var nonzeroBlocks {.noinit.}: array[256, uint16]
-  let nonzeroCount = collectNonzeroBlocks(inputs, nonzeroBlocks, indexLut, countLut)
+  let nonzeroBlocks = cast[ptr U16Array](rawBlocks)
 
   when defined(avx512) and defined(avx512vnni):
     var acc0 {.noinit.} = mm512SetzeroSi512()
@@ -427,6 +424,14 @@ proc gyatsoMultilayerL1*(rawInputs: ptr uint8, rawWeights: ptr int8,
           int32(inputs[x + 2]) * int32(weights[wo + 2]) +
           int32(inputs[x + 3]) * int32(weights[wo + 3])
 
+proc gyatsoMultilayerL1*(rawInputs: ptr uint8, rawWeights: ptr int8,
+                         rawSums: ptr int32, rawIndexLut: ptr uint16,
+                         rawCountLut: ptr uint8) =
+  var blocks {.noinit.}: array[256, uint16]
+  let count = collectNonzeroBlocks(cast[ptr U8Array](rawInputs), blocks,
+    cast[ptr U16Array](rawIndexLut), cast[ptr U8Array](rawCountLut))
+  gyatsoMultilayerL1Blocks(rawInputs, rawWeights, rawSums, addr blocks[0], count)
+
 func clampI64(value: int64, maximum: int32): int32 {.inline.} =
   if value < 0: 0
   elif value > int64(maximum): maximum
@@ -518,6 +523,64 @@ proc gyatsoMultilayerL2*(rawInputs, rawWeights, rawBias, rawOutputs: ptr int32,
       for input in 0..<16:
         sum += int64(inputs[input]) * int64(weights[input * 32 + output])
       outputs[output] = clampI64(sum, maxValue)
+
+when defined(avx512) or defined(avx2):
+  func packPair(a, b: int32): int32 {.inline.} =
+    cast[int32](uint32(a) or (uint32(b) shl 16))
+
+  proc gyatsoMultilayerL2Madd*(rawInputs: ptr int32, rawWeights: ptr int16,
+                               rawBias, rawOutputs: ptr int32, maxValue: int32) =
+    let inputs = cast[ptr I32Array](rawInputs)
+    let weights = cast[ptr I16Array](rawWeights)
+    let bias = cast[ptr I32Array](rawBias)
+    let outputs = cast[ptr I32Array](rawOutputs)
+    when defined(avx512):
+      let zero = mm512SetzeroSi512()
+      let maxVec = mm512Set1Epi32(maxValue)
+      var sum0 = zero
+      var sum1 = zero
+      for pair in 0..<8:
+        let x = mm512Set1Epi32(packPair(inputs[pair * 2], inputs[pair * 2 + 1]))
+        let w0 = mm512LoaduSi512(addr weights[pair * 64])
+        let w1 = mm512LoaduSi512(addr weights[pair * 64 + 32])
+        sum0 = mm512AddEpi32(sum0, mm512MaddEpi16(x, w0))
+        sum1 = mm512AddEpi32(sum1, mm512MaddEpi16(x, w1))
+      sum0 = mm512MaxEpi32(mm512MinEpi32(
+        mm512AddEpi32(sum0, mm512LoaduSi512(addr bias[0])), maxVec), zero)
+      sum1 = mm512MaxEpi32(mm512MinEpi32(
+        mm512AddEpi32(sum1, mm512LoaduSi512(addr bias[16])), maxVec), zero)
+      mm512StoreuSi512(addr outputs[0], sum0)
+      mm512StoreuSi512(addr outputs[16], sum1)
+    else:
+      let zero = mm256_setzero_si256()
+      let maxVec = mm256_set1_epi32(maxValue)
+      var sum0 = zero
+      var sum1 = zero
+      var sum2 = zero
+      var sum3 = zero
+      for pair in 0..<8:
+        let x = mm256_set1_epi32(packPair(inputs[pair * 2], inputs[pair * 2 + 1]))
+        let base = pair * 64
+        sum0 = mm256_add_epi32(sum0, mm256_madd_epi16(x,
+          mm256_loadu_si256(cast[ptr M256i](addr weights[base]))))
+        sum1 = mm256_add_epi32(sum1, mm256_madd_epi16(x,
+          mm256_loadu_si256(cast[ptr M256i](addr weights[base + 16]))))
+        sum2 = mm256_add_epi32(sum2, mm256_madd_epi16(x,
+          mm256_loadu_si256(cast[ptr M256i](addr weights[base + 32]))))
+        sum3 = mm256_add_epi32(sum3, mm256_madd_epi16(x,
+          mm256_loadu_si256(cast[ptr M256i](addr weights[base + 48]))))
+      sum0 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum0,
+        mm256_loadu_si256(cast[ptr M256i](addr bias[0]))), maxVec), zero)
+      sum1 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum1,
+        mm256_loadu_si256(cast[ptr M256i](addr bias[8]))), maxVec), zero)
+      sum2 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum2,
+        mm256_loadu_si256(cast[ptr M256i](addr bias[16]))), maxVec), zero)
+      sum3 = mm256_max_epi32(mm256_min_epi32(mm256_add_epi32(sum3,
+        mm256_loadu_si256(cast[ptr M256i](addr bias[24]))), maxVec), zero)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[0]), sum0)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[8]), sum1)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[16]), sum2)
+      mm256_storeu_si256(cast[ptr M256i](addr outputs[24]), sum3)
 
 proc gyatsoMultilayerOutput*(rawInputs, rawWeights: ptr int32,
                              bias: int32): int64 =
@@ -619,3 +682,55 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
         let a = clamp(int(acc[i]), 0, 255)
         let b = clamp(int(acc[512 + i]), 0, 255)
         outputs[outBase + i] = uint8((a * b) shr 9)
+
+when defined(avx512) or defined(avx2):
+  proc gyatsoPairwiseNnz*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8,
+                          rawBlocks, rawIndexLut: ptr uint16,
+                          rawCountLut: ptr uint8): int =
+    let stm = cast[ptr I16Array](rawStm)
+    let nstm = cast[ptr I16Array](rawNstm)
+    let outputs = cast[ptr U8Array](rawOutputs)
+    let blocks = cast[ptr U16Array](rawBlocks)
+    let indexLut = cast[ptr U16Array](rawIndexLut)
+    let countLut = cast[ptr U8Array](rawCountLut)
+    var count = 0
+    let zero256 = mm256_setzero_si256()
+    when defined(avx512):
+      let zero = mm512SetzeroSi512()
+      let maxVec = mm512Set1Epi16(255)
+    else:
+      let zero = mm256_setzero_si256()
+      let maxVec = mm256_set1_epi16(255)
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in countup(0, 480, 32):
+        var bytes: M256i
+        when defined(avx512):
+          var a = mm512LoaduSi512(addr acc[i])
+          var b = mm512LoaduSi512(addr acc[512 + i])
+          a = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, a))
+          b = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, b))
+          bytes = mm512Cvtepi16Epi8(mm512MulhiEpi16(mm512SlliEpi16(a, 7), b))
+        else:
+          var a0 = mm256_loadu_si256(cast[ptr M256i](addr acc[i]))
+          var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i]))
+          var a1 = mm256_loadu_si256(cast[ptr M256i](addr acc[i + 16]))
+          var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i + 16]))
+          a0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a0))
+          b0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b0))
+          a1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a1))
+          b1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b1))
+          let p0 = mm256_mulhi_epi16(mm256_slli_epi16(a0, 7), b0)
+          let p1 = mm256_mulhi_epi16(mm256_slli_epi16(a1, 7), b1)
+          bytes = mm256_packus_epi16(p0, p1)
+          bytes = mm256_permute4x64_epi64(bytes, MM_SHUFFLE(3, 1, 2, 0))
+        mm256_storeu_si256(cast[ptr M256i](addr outputs[outBase + i]), bytes)
+        let equalZero = mm256_cmpeq_epi32(bytes, zero256)
+        let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
+        let indexes = mm_loadu_si128(cast[ptr M128i](addr indexLut[mask * 8]))
+        let groupBase = mm_set1_epi16(int16((outBase + i) div 4))
+        mm_storeu_si128(cast[ptr M128i](addr blocks[count]),
+          mm_add_epi16(indexes, groupBase))
+        count += int(countLut[mask])
+    count
