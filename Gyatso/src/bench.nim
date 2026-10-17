@@ -6,6 +6,7 @@ import perft
 import search
 import tt
 import history
+import nnuetypes
 
 const
   DefaultBenchDepth* = 15
@@ -99,6 +100,7 @@ proc runBench*(depth: int = DefaultBenchDepth) =
 
   echo ""
   echo "=== BENCHMARK RESULTS ==="
+  echo &"ISA:         {IsaName}"
   echo &"Depth:       {depth}"
   echo &"Positions:   {BenchmarkPositions.len}"
   echo &"Total nodes: {totalNodes}"

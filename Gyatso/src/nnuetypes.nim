@@ -4,9 +4,20 @@ const
   ALIGNMENT* = 64
   FT_IN*     = 768   
   HL*        = 1024  
+  L2_SIZE*   = 16
+  L3_SIZE*   = 32
+  PAIR_COUNT* = HL div 2
   QA*        = 255   
   QB*        = 64    
-  EVAL_SCALE* = 331
+  EVAL_SCALE* = 400
+
+const IsaName* =
+  when defined(avx512vnni): "avx512+vnni"
+  elif defined(avx512): "avx512"
+  elif defined(avxvnni): "avx2+vnni"
+  elif defined(avx2): "avx2"
+  elif defined(neon) or defined(arm64) or defined(aarch64): "neon"
+  else: "scalar"
 
 type
   Accumulator* = object
@@ -15,8 +26,15 @@ type
   NNUENetwork* = object
     ftWeight* {.align(ALIGNMENT).}: array[FT_IN, array[HL, int16]]
     ftBias*   {.align(ALIGNMENT).}: array[HL, int16]
-    l1Weight* {.align(ALIGNMENT).}: array[HL * 2, int16]
-    l1Bias*:  int32
+    l1Weight* {.align(ALIGNMENT).}: array[HL div 4, array[L2_SIZE, array[4, int8]]]
+    l1Bias* {.align(ALIGNMENT).}: array[L2_SIZE, int32]
+    l2Weight* {.align(ALIGNMENT).}: array[L2_SIZE, array[L3_SIZE, int32]]
+    l2Bias* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
+    l3Weight* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
+    l3Bias*: int32
+    l2Int32Safe*: bool
+    l2Int16Safe*: bool
+    l2WeightPacked* {.align(ALIGNMENT).}: array[L2_SIZE div 2, array[L3_SIZE, array[2, int16]]]
 
   NNUEState* = object
     current*: int

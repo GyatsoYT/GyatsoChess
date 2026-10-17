@@ -359,6 +359,11 @@ when isMainModule:
   saveState(outputDir, gTotalPositions.load(moRelaxed),
             gTotalGames.load(moRelaxed), seed)
 
+  when defined(nnueStats):
+    let statsPath = outputDir / "nnue_nnz_counts.txt"
+    writeNNUEActivationStats(statsPath)
+    echo "  NNUE stats: ", statsPath
+
   let elapsed  = (getMonoTime() - startTime).inSeconds
   let finalPos = gTotalPositions.load(moRelaxed)
   let finalGms = gTotalGames.load(moRelaxed)

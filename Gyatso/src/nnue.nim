@@ -1,8 +1,8 @@
 import coretypes, bitboard, board, nnuetypes
-import std/[streams, endians]
-
-when defined(simd):
-    import simd
+import std/[streams, strutils]
+import simd
+when defined(nnueStats):
+    import std/atomics
 
 func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
     let colorIdx = if perspective == pieceColor: 0 else: 1
@@ -13,32 +13,183 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
         sqIdx = sqIdx xor 7
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
-const NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024.bin")
+const
+    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
+    NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1024x16x32.perm")
+    NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
+                     L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
+                     L3_SIZE * 4 + L3_SIZE * 4 + 4
+    NNUE_PADDING_BYTES* = (64 - NNUE_RAW_BYTES mod 64) mod 64
+    NNUE_FILE_BYTES* = NNUE_RAW_BYTES + NNUE_PADDING_BYTES
+    NNUE_NNZ_INDEX_LUT: array[256, array[8, uint16]] = block:
+        var table: array[256, array[8, uint16]]
+        for mask in 0..255:
+            var count = 0
+            for bit in 0..7:
+                if (mask and (1 shl bit)) != 0:
+                    table[mask][count] = uint16(bit)
+                    inc count
+        table
+    NNUE_NNZ_COUNT_LUT: array[256, uint8] = block:
+        var table: array[256, uint8]
+        for mask in 0..255:
+            var count = 0
+            for bit in 0..7:
+                if (mask and (1 shl bit)) != 0:
+                    inc count
+            table[mask] = uint8(count)
+        table
+
+proc readPairwisePermutation(): array[PAIR_COUNT, int] =
+    let values = NNUE_PAIRWISE_PERMUTATION.splitWhitespace()
+    if values.len != PAIR_COUNT:
+        raise newException(IOError, "NNUE permutation must contain exactly " & $PAIR_COUNT & " indices")
+
+    var seen: array[PAIR_COUNT, bool]
+    for newIndex, token in values:
+        var oldIndex: int
+        try:
+            oldIndex = parseInt(token)
+        except ValueError:
+            raise newException(IOError, "Invalid integer in NNUE permutation: " & token)
+        if oldIndex < 0 or oldIndex >= PAIR_COUNT or seen[oldIndex]:
+            raise newException(IOError, "NNUE permutation indices must be unique values in 0.." & $(PAIR_COUNT - 1))
+        result[newIndex] = oldIndex
+        seen[oldIndex] = true
+
+when defined(nnueStats):
+    const NNUE_STATS_SAMPLE_MASK = 4095'u64
+    var nnueStatsEvalCounter {.global.}: Atomic[system.uint64]
+    var nnueStatsSampleCounter {.global.}: Atomic[system.uint64]
+    var nnueStatsNonzeroBlocks {.global.}: Atomic[system.uint64]
+    var nnueStatsActivationCounts {.global.}: array[PAIR_COUNT, Atomic[system.uint64]]
+
+    proc recordPairwiseStats(inputs: ptr uint8) {.inline.} =
+        let ticket = nnueStatsEvalCounter.fetchAdd(1'u64, moRelaxed)
+        if (ticket and NNUE_STATS_SAMPLE_MASK) == 0:
+            let values = cast[ptr UncheckedArray[uint8]](inputs)
+            var activeBlocks = 0'u64
+            for pairIndex in 0..<PAIR_COUNT:
+                if values[pairIndex] != 0:
+                    discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
+                if values[PAIR_COUNT + pairIndex] != 0:
+                    discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
+            for blockIdx in 0..<(HL div 4):
+                if values[blockIdx * 4] != 0 or values[blockIdx * 4 + 1] != 0 or
+                   values[blockIdx * 4 + 2] != 0 or values[blockIdx * 4 + 3] != 0:
+                    inc activeBlocks
+            discard nnueStatsNonzeroBlocks.fetchAdd(activeBlocks, moRelaxed)
+            discard nnueStatsSampleCounter.fetchAdd(1'u64, moRelaxed)
+
+    proc writeNNUEActivationStats*(path: string) =
+        let samples = nnueStatsSampleCounter.load(moRelaxed)
+        let blocks = nnueStatsNonzeroBlocks.load(moRelaxed)
+        var output = newFileStream(path, fmWrite)
+        if output == nil:
+            raise newException(IOError, "Cannot write NNUE activation stats: " & path)
+        defer: output.close()
+        output.writeLine("# samples " & $samples)
+        output.writeLine("# nonzero_blocks " & $blocks)
+        for i in 0..<PAIR_COUNT:
+            output.writeLine($i & " " & $nnueStatsActivationCounts[i].load(moRelaxed))
+
+proc readU8(data: string, offset: var int): uint8 {.inline.} =
+    result = uint8(ord(data[offset]))
+    inc offset
+
+proc readI8(data: string, offset: var int): int8 {.inline.} =
+    result = cast[int8](data.readU8(offset))
+
+proc readI16(data: string, offset: var int): int16 {.inline.} =
+    let lo = uint16(data.readU8(offset))
+    let hi = uint16(data.readU8(offset))
+    result = cast[int16](lo or (hi shl 8))
+
+proc readI32(data: string, offset: var int): int32 {.inline.} =
+    let b0 = uint32(data.readU8(offset))
+    let b1 = uint32(data.readU8(offset))
+    let b2 = uint32(data.readU8(offset))
+    let b3 = uint32(data.readU8(offset))
+    result = cast[int32](b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24))
+
+proc loadNetworkFromBytes(data: string): NNUENetwork =
+    if data.len != NNUE_FILE_BYTES:
+        raise newException(IOError,
+            "Invalid multilayer NNUE length: got " & $data.len &
+            " bytes; expected " & $NNUE_FILE_BYTES & " (raw tensors plus Bullet padding)")
+
+    const PaddingMarker = "bullet"
+    for i in 0..<NNUE_PADDING_BYTES:
+        if data[NNUE_RAW_BYTES + i] != PaddingMarker[i mod PaddingMarker.len]:
+            raise newException(IOError, "Invalid multilayer NNUE padding marker")
+
+    var offset = 0
+    let permutation = readPairwisePermutation()
+    var newIndexByOld: array[PAIR_COUNT, int]
+    for newIndex, oldIndex in permutation:
+        newIndexByOld[oldIndex] = newIndex
+
+    for hidden in 0..<HL:
+        let side = hidden div PAIR_COUNT
+        let pair = hidden mod PAIR_COUNT
+        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+        for feature in 0..<FT_IN:
+            result.ftWeight[feature][permutedHidden] = data.readI16(offset)
+
+    for hidden in 0..<HL:
+        let side = hidden div PAIR_COUNT
+        let pair = hidden mod PAIR_COUNT
+        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+        result.ftBias[permutedHidden] = data.readI16(offset)
+
+    for output in 0..<L2_SIZE:
+        for oldInput in 0..<HL:
+            let side = oldInput div PAIR_COUNT
+            let pair = oldInput mod PAIR_COUNT
+            let input = side * PAIR_COUNT + newIndexByOld[pair]
+            result.l1Weight[input div 4][output][input mod 4] = data.readI8(offset)
+
+    for output in 0..<L2_SIZE:
+        result.l1Bias[output] = data.readI32(offset)
+
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            result.l2Weight[input][output] = data.readI32(offset)
+
+    for output in 0..<L3_SIZE:
+        result.l2Bias[output] = data.readI32(offset)
+
+    for input in 0..<L3_SIZE:
+        result.l3Weight[input] = data.readI32(offset)
+    result.l3Bias = data.readI32(offset)
+
+    doAssert offset == NNUE_RAW_BYTES
+
+    result.l2Int32Safe = true
+    for output in 0..<L3_SIZE:
+        var bound = int64(result.l2Bias[output])
+        if bound < 0: bound = -bound
+        for input in 0..<L2_SIZE:
+            var weight = int64(result.l2Weight[input][output])
+            if weight < 0: weight = -weight
+            bound += int64(QB * QB) * weight
+        if bound > int64(high(int32)):
+            result.l2Int32Safe = false
+
+    result.l2Int16Safe = result.l2Int32Safe
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            let w = result.l2Weight[input][output]
+            if w < int32(low(int16)) or w > int32(high(int16)):
+                result.l2Int16Safe = false
+    if result.l2Int16Safe:
+        for pair in 0..<(L2_SIZE div 2):
+            for output in 0..<L3_SIZE:
+                result.l2WeightPacked[pair][output][0] = int16(result.l2Weight[pair * 2][output])
+                result.l2WeightPacked[pair][output][1] = int16(result.l2Weight[pair * 2 + 1][output])
 
 proc loadNetworkFromStream*(s: Stream): NNUENetwork =
-    for hlIdx in 0..<HL:
-        for ftIdx in 0..<FT_IN:
-            var raw = s.readInt16()
-            var val: int16
-            littleEndian16(addr val, addr raw)
-            result.ftWeight[ftIdx][hlIdx] = val
-
-    for i in 0..<HL:
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.ftBias[i] = val
-
-    for i in 0..<(HL * 2):
-        var raw = s.readInt16()
-        var val: int16
-        littleEndian16(addr val, addr raw)
-        result.l1Weight[i] = val
-
-    var rawBias = s.readInt32()
-    var val32: int32
-    littleEndian32(addr val32, addr rawBias)
-    result.l1Bias = val32
+    return loadNetworkFromBytes(s.readAll())
 
 proc loadNetwork*(path: string): NNUENetwork =
     let s = newFileStream(path, fmRead)
@@ -199,57 +350,46 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.blackNeedsRefresh[0] = false
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
-    when not defined(simd):
-        var output: int32 = 0
-
-        # STM half
-        for i in 0..<HL:
-            let input = stmAcc.data[i].int32
-            let weight = net.l1Weight[i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-
-        # NSTM half
-        for i in 0..<HL:
-            let input = nstmAcc.data[i].int32
-            let weight = net.l1Weight[HL + i].int32
-            let clipped = clamp(input, 0, QA.int32)
-            output += (clipped * weight).int16 * clipped
-        return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
-
+    var pairwise {.noinit.}: array[HL, uint8]
+    var l1Sums {.noinit.}: array[L2_SIZE, int32]
+    when defined(avx512) or defined(avx2):
+        var blocks {.noinit.}: array[256, uint16]
+        let nnzCount = simd.gyatsoPairwiseNnz(addr stmAcc.data[0], addr nstmAcc.data[0],
+            addr pairwise[0], addr blocks[0],
+            addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
+        simd.gyatsoMultilayerL1Blocks(addr pairwise[0], addr net.l1Weight[0][0][0],
+            addr l1Sums[0], addr blocks[0], nnzCount)
     else:
-        let qa   = vecSetOne16(QA.int16)
-        let zero = vecZero16()
-        var sumS0 = vecZero32()
-        var sumS1 = vecZero32()
-        var sumN0 = vecZero32()
-        var sumN1 = vecZero32()
+        simd.gyatsoPairwise(addr stmAcc.data[0], addr nstmAcc.data[0], addr pairwise[0])
+        simd.gyatsoMultilayerL1(addr pairwise[0], addr net.l1Weight[0][0][0],
+            addr l1Sums[0], addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
+    when defined(nnueStats):
+        recordPairwiseStats(addr pairwise[0])
 
-        var i = 0
-        while i < HL:
-            # STM pair
-            let inpS0 = vecLoad(addr stmAcc.data[i])
-            let inpS1 = vecLoad(addr stmAcc.data[i + CHUNK_SIZE])
-            let clipS0 = vecMin16(vecMax16(inpS0, zero), qa)
-            let clipS1 = vecMin16(vecMax16(inpS1, zero), qa)
-            sumS0 = vecAdd32(sumS0, vecMadd16(vecMullo16(clipS0, vecLoad(addr net.l1Weight[i])),
-                                              clipS0))
-            sumS1 = vecAdd32(sumS1, vecMadd16(vecMullo16(clipS1, vecLoad(addr net.l1Weight[i + CHUNK_SIZE])),
-                                              clipS1))
-            # NSTM pair
-            let inpN0 = vecLoad(addr nstmAcc.data[i])
-            let inpN1 = vecLoad(addr nstmAcc.data[i + CHUNK_SIZE])
-            let clipN0 = vecMin16(vecMax16(inpN0, zero), qa)
-            let clipN1 = vecMin16(vecMax16(inpN1, zero), qa)
-            sumN0 = vecAdd32(sumN0, vecMadd16(vecMullo16(clipN0, vecLoad(addr net.l1Weight[HL + i])),
-                                              clipN0))
-            sumN1 = vecAdd32(sumN1, vecMadd16(vecMullo16(clipN1, vecLoad(addr net.l1Weight[HL + i + CHUNK_SIZE])),
-                                              clipN1))
-            i += CHUNK_SIZE * 2
+    var l1Out {.noinit.}: array[L2_SIZE, int32]
+    for i in 0..<L2_SIZE:
+        let scaled = (l1Sums[i] + net.l1Bias[i]) shr 8
+        let clipped = clamp(scaled, 0, QB.int32)
+        l1Out[i] = clipped * clipped
 
-        let rawSum = vecReduceAdd32(
-            vecAdd32(vecAdd32(sumS0, sumS1), vecAdd32(sumN0, sumN1)))
-        return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
+    var l2Out {.noinit.}: array[L3_SIZE, int32]
+    when defined(avx512) or defined(avx2):
+        if net.l2Int16Safe:
+            simd.gyatsoMultilayerL2Madd(addr l1Out[0], addr net.l2WeightPacked[0][0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
+        else:
+            simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+                int32(ord(net.l2Int32Safe)))
+    else:
+        simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+            addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+            int32(ord(net.l2Int32Safe)))
+
+    let output = simd.gyatsoMultilayerOutput(addr l2Out[0],
+        addr net.l3Weight[0], net.l3Bias)
+
+    return system.int(output * int64(EVAL_SCALE) div int64(QB * QB * QB * QB))
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
     ## Lazy refresh: recompute accumulator if king crossed mirror boundary
