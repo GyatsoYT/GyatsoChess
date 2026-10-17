@@ -35,6 +35,12 @@ const
   SeNegativeExtTtBeta* = 2
   SeRecaptureExt* = 1
   SeRecaptureCap* = 2
+  # ProbCut
+  ProbcutMinDepth*        = 5
+  ProbcutMargin*          = 200
+  ProbcutDepthReduction*  = 4
+  ProbcutTtDepthMargin*   = 3
+  ProbcutSeeThreshold*    = 0
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41

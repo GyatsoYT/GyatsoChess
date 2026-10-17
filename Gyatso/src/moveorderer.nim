@@ -100,7 +100,7 @@ func isTTMoveLegal(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant and b.epSquare != m.toSq: return false
   true
 
-proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
+proc scoreNoisy*(b: Board, m: Move): int32 {.inline.} =
   let mt      = m.moveType
   let isPromo = mt == Promotion
   let isEP    = mt == EnPassant

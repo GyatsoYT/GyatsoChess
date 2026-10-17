@@ -300,6 +300,80 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
+  # ProbCut
+  if not pvNode and
+     not inCheck and
+     depth >= ProbcutMinDepth and
+     abs(beta) < MateThreshold and
+     not isSingularSearch:
+    let probcutBeta = beta + ProbcutMargin
+    if probcutBeta < MateThreshold:
+      let probcutDepth = max(1, depth - ProbcutDepthReduction)
+
+      let ttHit = hasTT
+      let ttD = if ttHit: ttDepth else: 0
+      let ttS = if ttHit: ttScore else: 0
+
+      if not ttHit or ttD + ProbcutTtDepthMargin < depth or ttS >= probcutBeta:
+        var captures: MoveList
+        generateCaptures(b, captures)
+        var scores: array[256, int32]
+        for i in 0 ..< captures.len:
+          let m = captures.moves[i]
+          if m == ttMove:
+            scores[i] = int32(TtMoveScore)
+          else:
+            scores[i] = scoreNoisy(b, m)
+
+        for i in 0 ..< captures.len:
+          var bestIdx = i
+          var bestScore = scores[i]
+          for j in (i + 1) ..< captures.len:
+            if scores[j] > bestScore:
+              bestScore = scores[j]
+              bestIdx = j
+          if bestIdx != i:
+            let tmpMove = captures.moves[i]
+            let tmpScore = scores[i]
+            captures.moves[i] = captures.moves[bestIdx]
+            scores[i] = scores[bestIdx]
+            captures.moves[bestIdx] = tmpMove
+            scores[bestIdx] = tmpScore
+
+          let move = captures.moves[i]
+
+          if not see(b, move, ProbcutSeeThreshold):
+            continue
+
+          stack[ply].move = move
+          stack[ply].piece = ord(b.mailbox[move.fromSq.int])
+          stack[ply + 1].staticEval = Unknown
+          stack[ply + 1].rawEval = Unknown
+
+          nnuePush(b, move, nnue[])
+          b.makeMove(move)
+          prefetchTT(cast[system.uint64](b.hash))
+
+          var probcutValue = -qSearch(b, -probcutBeta, -probcutBeta + 1, ply + 1, info, stack)
+
+          let stoppedAfterQ = info.stopFlag != nil and info.stopFlag[].load(moAcquire)
+          if not stoppedAfterQ and probcutValue >= probcutBeta:
+            probcutValue = -negamax[false](b, probcutDepth, -probcutBeta, -probcutBeta + 1,
+                                           ply + 1, info, stack, cutnode = not cutnode)
+
+          b.unmakeMove(move)
+          nnuePop(nnue[])
+
+          if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+            return 0
+
+          if probcutValue >= probcutBeta:
+            let evalToStore = if stack[ply].rawEval == Unknown: NoEval else: int16(stack[ply].rawEval)
+            storeTT(hashVal, move, probcutValue.int16, int8(probcutDepth + 1), BoundBeta,
+                    ply, evalToStore, wasPV)
+
+            return probcutValue
+
   let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
   let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
