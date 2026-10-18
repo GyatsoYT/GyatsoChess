@@ -202,39 +202,6 @@ proc loadNetworkFromEmbedded*(): NNUENetwork =
     let s = newStringStream(NNUE_EMBEDDED)
     return loadNetworkFromStream(s)
 
-proc initAccumulator*(net: ptr NNUENetwork, acc: var Accumulator) {.inline.} =
-    acc.data = net.ftBias
-
-proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for o in 0..<HL:
-            acc.data[o] += net.ftWeight[index][o]
-    else:
-        var o = 0
-        while o < HL:
-            let w0 = vecLoad(addr net.ftWeight[index][o])
-            let d0 = vecLoad(addr acc.data[o])
-            let w1 = vecLoad(addr net.ftWeight[index][o + CHUNK_SIZE])
-            let d1 = vecLoad(addr acc.data[o + CHUNK_SIZE])
-            vecStore(addr acc.data[o], vecAdd16(d0, w0))
-            vecStore(addr acc.data[o + CHUNK_SIZE], vecAdd16(d1, w1))
-            o += CHUNK_SIZE * 2
-
-proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for o in 0..<HL:
-            acc.data[o] -= net.ftWeight[index][o]
-    else:
-        var o = 0
-        while o < HL:
-            let w0 = vecLoad(addr net.ftWeight[index][o])
-            let d0 = vecLoad(addr acc.data[o])
-            let w1 = vecLoad(addr net.ftWeight[index][o + CHUNK_SIZE])
-            let d1 = vecLoad(addr acc.data[o + CHUNK_SIZE])
-            vecStore(addr acc.data[o], vecSub16(d0, w0))
-            vecStore(addr acc.data[o + CHUNK_SIZE], vecSub16(d1, w1))
-            o += CHUNK_SIZE * 2
-
 proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
     when not defined(simd):
@@ -310,18 +277,38 @@ proc applyDelta(net: ptr NNUENetwork, d: AccumulatorDelta,
         curr = prev
 
 proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
-    ## Full recompute of accumulator from board state
+    ## Full recompute of accumulator from board state. Features are summed
+    ## tile by tile in registers so the accumulator is written once.
     let perspKingSq = board.kingSquare(perspective)
-    net.initAccumulator(acc)
+    var features {.noinit.}: array[32, uint16]
+    var count = 0
     var occ = board.occupied
     while occ != Bitboard(0):
         let sq = poplsb(occ)
         let piece = board.mailbox[sq.int]
-        if piece == NoPiece: continue
-        let pt = piece.pieceType
-        let pc = piece.color
-        let idx = featureIndex(perspective, pc, pt, sq, perspKingSq)
-        net.addFeature(idx, acc)
+        features[count] = uint16(featureIndex(perspective, piece.color, piece.pieceType, sq, perspKingSq))
+        inc count
+    when not defined(simd):
+        acc.data = net.ftBias
+        for i in 0..<count:
+            let f = system.int(features[i])
+            for o in 0..<HL:
+                acc.data[o] += net.ftWeight[f][o]
+    else:
+        const TileRegs = 8
+        const TileSize = TileRegs * CHUNK_SIZE
+        var base = 0
+        while base < HL:
+            var regs {.noinit.}: array[TileRegs, VEPI16]
+            for r in 0..<TileRegs:
+                regs[r] = vecLoad(addr net.ftBias[base + r * CHUNK_SIZE])
+            for i in 0..<count:
+                let f = system.int(features[i])
+                for r in 0..<TileRegs:
+                    regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftWeight[f][base + r * CHUNK_SIZE]))
+            for r in 0..<TileRegs:
+                vecStore(addr acc.data[base + r * CHUNK_SIZE], regs[r])
+            base += TileSize
 
 proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.current = 0
