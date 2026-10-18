@@ -124,7 +124,7 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
 
   int32(GoodCaptureBase + promoBonus + mvvlva)
 
-proc scoreQuiets(b: Board, ml: MoveList, scores: var array[256, int32],
+proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
                  ply, prevPiece, prevToSq, prev2Piece, prev2ToSq: int) {.inline.} =
   ## Thread-local tables and continuation rows are resolved once per batch
   ## instead of once per move.
