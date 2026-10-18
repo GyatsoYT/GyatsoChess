@@ -320,8 +320,13 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
         let isOurKingMoving = (perspective == us) and (movingPt == King)
 
         if isOurKingMoving:
+            # Castling is encoded king->rook; use the king's real destination
+            # (g/c file). Comparing against the rook square misses FRC castles
+            # that cross the mirror axis (e.g. Kd1 with the h-rook -> Kg1).
             let fromFile = m.fromSq.file
-            let toFile   = m.toSq.file
+            let toFile   = if not m.isCastling: m.toSq.file
+                           elif m.fromSq.file < m.toSq.file: 6
+                           else: 2
             if (fromFile > 3) != (toFile > 3):
                 if perspective == White:
                     state.whiteNeedsRefresh[ply + 1] = true
