@@ -269,7 +269,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].move = NullMove
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
-    nnuePushNull(nnueState)
+    nnuePushNull(b, nnueState)
     b.makeNullMove()
 
     let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,

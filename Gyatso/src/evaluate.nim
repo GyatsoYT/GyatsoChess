@@ -24,8 +24,8 @@ proc nnuePush*(b: Board, m: Move, state: var NNUEState) {.inline.} =
 proc nnuePop*(state: var NNUEState) {.inline.} =
   popAccumulator(state)
 
-proc nnuePushNull*(state: var NNUEState) {.inline.} =
-  pushNullMove(state)
+proc nnuePushNull*(b: Board, state: var NNUEState) {.inline.} =
+  pushNullMove(addr gNetwork, b, state)
 
 proc nnuePopNull*(state: var NNUEState) {.inline.} =
   popNullMove(state)

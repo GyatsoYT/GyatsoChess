@@ -24,3 +24,15 @@ type
     black*:   array[MaxPly + 1, Accumulator]
     whiteNeedsRefresh*: array[MaxPly + 1, bool]
     blackNeedsRefresh*: array[MaxPly + 1, bool]
+    ## Deferred incremental update: when pending[ply][p] is set, accumulator
+    ## `p` at `ply` equals the one at ply-1 plus delta[ply][p], not yet applied.
+    pending*: array[MaxPly + 1, array[2, bool]]
+    delta*:   array[MaxPly + 1, array[2, AccDelta]]
+
+  ## Feature changes of one move for one perspective. subCount == 0 means a
+  ## plain copy (null move); otherwise 1 add with 1-2 subs, or 2 adds/2 subs.
+  AccDelta* = object
+    adds*: array[2, int32]
+    subs*: array[2, int32]
+    addCount*: int32
+    subCount*: int32

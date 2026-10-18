@@ -167,6 +167,7 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     net.refreshAccumulator(board, state.black[0], Black)
     state.whiteNeedsRefresh[0] = false
     state.blackNeedsRefresh[0] = false
+    state.pending[0] = [false, false]
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     when not defined(simd):
@@ -215,9 +216,26 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         let rawSum = vecReduceAdd32(total)
         return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
+proc applyDelta(net: ptr NNUENetwork, d: AccDelta,
+                prev: var Accumulator, curr: var Accumulator) {.inline.} =
+    if d.addCount == 2:
+        net.addSubAddSub(d.adds[0], d.subs[0], d.adds[1], d.subs[1], prev, curr)
+    elif d.subCount == 2:
+        net.addSubSub(d.adds[0], d.subs[0], d.subs[1], prev, curr)
+    else:
+        net.addSub(d.adds[0], d.subs[0], prev, curr)
+
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
-    ## Lazy refresh: recompute accumulator if king crossed mirror boundary
+    ## Materialise the current ply: apply a deferred incremental update, or
+    ## recompute if the king crossed the mirror boundary. The parent ply is
+    ## always materialised before a child is pushed, so deferral is one level.
     let ply = state.current
+    if state.pending[ply][White.ord]:
+        net.applyDelta(state.delta[ply][White.ord], state.white[ply - 1], state.white[ply])
+        state.pending[ply][White.ord] = false
+    if state.pending[ply][Black.ord]:
+        net.applyDelta(state.delta[ply][Black.ord], state.black[ply - 1], state.black[ply])
+        state.pending[ply][Black.ord] = false
     if state.whiteNeedsRefresh[ply]:
         net.refreshAccumulator(board, state.white[ply], White)
         state.whiteNeedsRefresh[ply] = false
@@ -239,9 +257,8 @@ proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): in
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
-proc applyMoveUpdate(net: ptr NNUENetwork, board: Board, m: Move,
-                     perspective: Color, prev: var Accumulator, curr: var Accumulator) =
-    ## curr = prev updated by the feature changes of `m` (board is pre-move).
+proc computeDelta(board: Board, m: Move, perspective: Color): AccDelta {.inline.} =
+    ## Feature changes of `m` (board is pre-move) for one perspective.
     let us = board.stm
     let them = us.opposite()
     let fromSq = m.fromSq
@@ -253,25 +270,24 @@ proc applyMoveUpdate(net: ptr NNUENetwork, board: Board, m: Move,
     # Get perspective king square for horizontal mirroring
     let perspKingSq = board.kingSquare(perspective)
 
+    template idx(c: Color, pt: PieceType, sq: Square): int32 =
+        int32(featureIndex(perspective, c, pt, sq, perspKingSq))
+
     if m.isCastling:
-        let kingFrom = fromSq
         let rookFrom = toSq
         let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
         let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
-
-        let kingAddIdx = featureIndex(perspective, us, King, kingTo,   perspKingSq)
-        let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
-        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo,   perspKingSq)
-        let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
-
-        net.addSubAddSub(kingAddIdx, kingSubIdx, rookAddIdx, rookSubIdx, prev, curr)
+        result.adds = [idx(us, King, kingTo), idx(us, Rook, rookTo)]
+        result.subs = [idx(us, King, fromSq), idx(us, Rook, rookFrom)]
+        result.addCount = 2
+        result.subCount = 2
 
     elif m.isEnPassant:
         let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-        let addIdx = featureIndex(perspective, us, Pawn, toSq, perspKingSq)
-        let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-        let subIdx2 = featureIndex(perspective, them, Pawn, capSq, perspKingSq)
-        net.addSubSub(addIdx, subIdx1, subIdx2, prev, curr)
+        result.adds[0] = idx(us, Pawn, toSq)
+        result.subs = [idx(us, Pawn, fromSq), idx(them, Pawn, capSq)]
+        result.addCount = 1
+        result.subCount = 2
 
     else:
         let addPt = if m.isPromotion:
@@ -281,15 +297,15 @@ proc applyMoveUpdate(net: ptr NNUENetwork, board: Board, m: Move,
                         of PromoRook:   Rook
                         of PromoQueen:  Queen
                     else: movingPt
-        let addIdx = featureIndex(perspective, movingColor, addPt, toSq, perspKingSq)
-        let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
+        result.adds[0] = idx(movingColor, addPt, toSq)
+        result.subs[0] = idx(movingColor, movingPt, fromSq)
+        result.addCount = 1
         let capturedPiece = board.mailbox[toSq.int]
         if capturedPiece != NoPiece:
-            let capIdx = featureIndex(perspective, capturedPiece.color, capturedPiece.pieceType,
-                                      toSq, perspKingSq)
-            net.addSubSub(addIdx, subIdx, capIdx, prev, curr)
+            result.subs[1] = idx(capturedPiece.color, capturedPiece.pieceType, toSq)
+            result.subCount = 2
         else:
-            net.addSub(addIdx, subIdx, prev, curr)
+            result.subCount = 1
 
 proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                       state: var NNUEState) =
@@ -298,6 +314,7 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
     let movingPt = board.mailbox[m.fromSq.int].pieceType
 
     ensureAccumulatorReady(net, board, state)
+    state.pending[ply + 1] = [false, false]
 
     for perspective in [White, Black]:
         let isOurKingMoving = (perspective == us) and (movingPt == King)
@@ -312,12 +329,12 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                     state.blackNeedsRefresh[ply + 1] = true
                 continue
 
-        # Normal incremental update
+        # Incremental update, deferred until this ply is evaluated or extended
+        state.delta[ply + 1][perspective.ord] = computeDelta(board, m, perspective)
+        state.pending[ply + 1][perspective.ord] = true
         if perspective == White:
-            net.applyMoveUpdate(board, m, White, state.white[ply], state.white[ply + 1])
             state.whiteNeedsRefresh[ply + 1] = false
         else:
-            net.applyMoveUpdate(board, m, Black, state.black[ply], state.black[ply + 1])
             state.blackNeedsRefresh[ply + 1] = false
 
     inc state.current
@@ -325,14 +342,16 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
 proc popAccumulator*(state: var NNUEState) {.inline.} =
     dec state.current
 
-proc pushNullMove*(state: var NNUEState) =
+proc pushNullMove*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
+    # Materialise the parent first (deferral is only one level deep), then
+    # the null-move child is a plain copy.
+    ensureAccumulatorReady(net, board, state)
     let ply = state.current
-    state.whiteNeedsRefresh[ply + 1] = state.whiteNeedsRefresh[ply]
-    state.blackNeedsRefresh[ply + 1] = state.blackNeedsRefresh[ply]
-    if not state.whiteNeedsRefresh[ply]:
-        state.white[ply + 1] = state.white[ply]
-    if not state.blackNeedsRefresh[ply]:
-        state.black[ply + 1] = state.black[ply]
+    state.pending[ply + 1] = [false, false]
+    state.whiteNeedsRefresh[ply + 1] = false
+    state.blackNeedsRefresh[ply + 1] = false
+    state.white[ply + 1] = state.white[ply]
+    state.black[ply + 1] = state.black[ply]
     inc state.current
 
 proc popNullMove*(state: var NNUEState) {.inline.} =
