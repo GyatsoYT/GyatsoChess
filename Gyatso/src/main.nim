@@ -11,7 +11,6 @@ import genfens
 
 when isMainModule:
   initAttacks()
-  initThreadAttacks()
   initTT(16)
   initTables()
   initNNUE()

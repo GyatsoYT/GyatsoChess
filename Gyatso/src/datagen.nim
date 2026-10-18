@@ -165,7 +165,6 @@ var gTotalGames     {.global.}: Atomic[int64]
 var gStopFlag       {.global.}: Atomic[bool]
 
 proc workerThread(args: WorkerArgs) {.thread.} =
-  initThreadAttacks()
   initHistoryData()
 
   var book: OpeningBook
@@ -261,7 +260,6 @@ when isMainModule:
     softNodes = hardNodes
 
   initAttacks()
-  initThreadAttacks()
   initTT(ttSizeMb)
   initTables()
   initNNUE()

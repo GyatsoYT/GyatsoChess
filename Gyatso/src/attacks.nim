@@ -263,13 +263,6 @@ var bishopMagics*: array[64, MagicEntry]
 var gRookAttackTable:   ptr UncheckedArray[Bitboard]
 var gBishopAttackTable: ptr UncheckedArray[Bitboard]
 
-var rookAttacks*   {.threadvar.}: ptr UncheckedArray[Bitboard]
-var bishopAttacks* {.threadvar.}: ptr UncheckedArray[Bitboard]
-
-proc initThreadAttacks*() {.inline.} =
-  rookAttacks   = gRookAttackTable
-  bishopAttacks = gBishopAttackTable
-
 var rayBetweenTable: array[64, array[64, Bitboard]]
 var rayPastTable:    array[64, array[64, Bitboard]]
 
@@ -347,17 +340,14 @@ proc initMagics*() =
       gBishopAttackTable[bishopOffset + idx] = attacks
     bishopOffset += 1 shl (64 - bishopShifts[sq])
 
-  # Set thread-local pointers for the main thread
-  initThreadAttacks()
-
 # Magic lookups
 proc getRookAttacksMagic(sq: Square, occ: Bitboard): Bitboard {.inline.} =
   let e = rookMagics[sq.int]
-  rookAttacks[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
+  gRookAttackTable[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
 
 proc getBishopAttacksMagic(sq: Square, occ: Bitboard): Bitboard {.inline.} =
   let e = bishopMagics[sq.int]
-  bishopAttacks[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
+  gBishopAttackTable[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
 
 # BMI2 data structures and tables
 type
