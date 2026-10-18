@@ -244,6 +244,11 @@ proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUE
         state.blackNeedsRefresh[ply] = false
 
 proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
+    let key = cast[uint64](board.hash)
+    let entry = addr state.evalCache[system.int(key and system.uint64(EvalCacheSize - 1))]
+    if entry.key == key:
+        return system.int(entry.value)
+
     # Ensure accumulators are valid before evaluation
     ensureAccumulatorReady(net, board, state)
     let ply = state.current
@@ -256,6 +261,9 @@ proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): in
     const MaxEval = MateValue - MaxPly - 100
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
+
+    entry.key = key
+    entry.value = int32(result)
 
 proc computeDelta(board: Board, m: Move, perspective: Color): AccDelta {.inline.} =
     ## Feature changes of `m` (board is pre-move) for one perspective.
