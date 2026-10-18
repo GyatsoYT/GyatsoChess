@@ -207,6 +207,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       # TT-Hit History Reward
       if ttMove != NullMove and isQuietMove(b, ttMove):
         let ttBonus = getBonus(depth) div 2
+        b.ensureAttackState()  # history is indexed by threatened squares
         updateHistory(b, ttMove, ttBonus)
       return ttScore
 

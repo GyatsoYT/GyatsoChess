@@ -160,6 +160,8 @@ proc initMovePicker*(picker: var MovePicker, b: ptr Board,
                      ply, prevPiece, prevToSq,
                      prev2Piece, prev2ToSq: int,
                      inCheck, isQSearch: bool) {.inline.} =
+  # Search reads threats/pins for every move it gets from the picker.
+  b[].ensureAttackState()
   picker.board          = b
   picker.ttMove         = ttMove
   picker.ply            = ply

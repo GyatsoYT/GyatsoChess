@@ -199,7 +199,8 @@ proc generatePawnMoves(b: Board, ml: var MoveList, dstMask: Bitboard) =
         if isEpLegal(b, fromSq, epSq):
           ml.add(makeEnPassant(fromSq, epSq))
 
-proc generateMoves*(b: Board, ml: var MoveList) =
+proc generateMoves*(b: var Board, ml: var MoveList) =
+  b.ensureAttackState()
   ml.clear()
   let us     = b.stm
   let kingSq = b.kingSquare(us)
@@ -222,7 +223,8 @@ proc generateMoves*(b: Board, ml: var MoveList) =
   if b.checkers.isEmpty():
     generateCastlingMoves(b, ml)
 
-proc generateCaptures*(b: Board, ml: var MoveList) {.inline.} =
+proc generateCaptures*(b: var Board, ml: var MoveList) {.inline.} =
+  b.ensureAttackState()
   ml.clear()
   let us     = b.stm
   let them   = us.opposite()
@@ -252,7 +254,8 @@ proc generateCaptures*(b: Board, ml: var MoveList) {.inline.} =
   generateKnightMoves(b, ml, pieceMask)
   generateSliderMoves(b, ml, pieceMask)
 
-proc generateQuiets*(b: Board, ml: var MoveList) =
+proc generateQuiets*(b: var Board, ml: var MoveList) =
+  b.ensureAttackState()
   ml.clear()
   let us        = b.stm
   let them      = us.opposite()
