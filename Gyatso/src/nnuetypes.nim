@@ -10,6 +10,7 @@ const
   QA*        = 255   
   QB*        = 64    
   EVAL_SCALE* = 400
+  EvalCacheSize* = 65536
 
 const IsaName* =
   when defined(avx512vnni): "avx512+vnni"
@@ -36,12 +37,18 @@ type
     l2Int16Safe*: bool
     l2WeightPacked* {.align(ALIGNMENT).}: array[L2_SIZE div 2, array[L3_SIZE, array[2, int16]]]
 
+  EvalCacheEntry* = uint64  ## upper 48 hash bits | uint16(eval)
+
   NNUEState* = object
     current*: int
     white*:   array[MaxPly + 1, Accumulator]
     black*:   array[MaxPly + 1, Accumulator]
     whiteNeedsRefresh*: array[MaxPly + 1, bool]
     blackNeedsRefresh*: array[MaxPly + 1, bool]
+    ## Per-thread cache of final evaluations keyed by full Zobrist hash.
+    ## NNUE output depends only on piece placement and side to move, both
+    ## covered by the hash, so a key match reproduces the exact same score.
+    evalCache*: array[EvalCacheSize, EvalCacheEntry]
 
   UpdateQueue* = object
     adds*: array[2, int]
