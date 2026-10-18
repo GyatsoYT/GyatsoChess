@@ -352,7 +352,7 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     var pairwise {.noinit.}: array[HL, uint8]
     var l1Sums {.noinit.}: array[L2_SIZE, int32]
-    when defined(avx512) or defined(avx2):
+    when defined(avx512) or defined(avx2) or defined(neon) or defined(arm64) or defined(aarch64):
         var blocks {.noinit.}: array[256, uint16]
         let nnzCount = simd.gyatsoPairwiseNnz(addr stmAcc.data[0], addr nstmAcc.data[0],
             addr pairwise[0], addr blocks[0],
