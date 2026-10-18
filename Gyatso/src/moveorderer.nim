@@ -12,11 +12,6 @@ proc storeKiller*(ply: int, m: Move) {.inline.} =
     killerMoves[ply][1] = killerMoves[ply][0]
     killerMoves[ply][0] = m
 
-proc isKiller(m: Move, ply: int): int {.inline.} =
-  if killerMoves[ply][0] == m: 2
-  elif killerMoves[ply][1] == m: 1
-  else: 0
-
 func isCapture*(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant: return true
   if m.isCastling: return false  # toSq is own rook, not a capture
@@ -129,36 +124,44 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
 
   int32(GoodCaptureBase + promoBonus + mvvlva)
 
-proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
-                prev2Piece, prev2ToSq: int): int32 {.inline.} =
-  let killerSlot = isKiller(m, ply)
-  if killerSlot > 0:
-    return int32(KillerBase + killerSlot * 1_000)
-
-  let stm       = b.stm.ord
-  let fromSq    = m.fromSq.int
-  let toSq      = m.histToSq.int
-  let fromThrt  = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toThrt    = if b.threats.hasSq(m.histToSq):   1 else: 0
-  let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
-  let curPiece  = ord(b.mailbox[m.fromSq.int])
-  let cont1 =
-    if prevPiece >= 0:
-      getContHistScore(prevPiece, prevToSq, curPiece, toSq)
-    else: 0
-  let cont2 =
-    if prev2Piece >= 0:
-      getContHistScore2(prev2Piece, prev2ToSq, curPiece, toSq)
-    else: 0
-  let contScore = 2 * cont1 + cont2
-
-  int32(histScore + contScore)
+proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
+                 ply, prevPiece, prevToSq, prev2Piece, prev2ToSq: int) {.inline.} =
+  ## Thread-local tables and continuation rows are resolved once per batch
+  ## instead of once per move.
+  let killer0 = killerMoves[ply][0]
+  let killer1 = killerMoves[ply][1]
+  let hist = gHistData
+  let stm = b.stm.ord
+  let threats = b.threats
+  let cont1 = if prevPiece >= 0: addr hist.continuationHistory[prevPiece][prevToSq] else: nil
+  let cont2 = if prev2Piece >= 0: addr hist.continuationHistory2[prev2Piece][prev2ToSq] else: nil
+  for i in 0 ..< ml.len:
+    let m = ml.moves[i]
+    if m == killer0:
+      scores[i] = int32(KillerBase + 2 * 1_000)
+      continue
+    if m == killer1:
+      scores[i] = int32(KillerBase + 1 * 1_000)
+      continue
+    let fromSq   = m.fromSq.int
+    let toSq     = m.histToSq.int
+    let fromThrt = if threats.hasSq(m.fromSq): 1 else: 0
+    let toThrt   = if threats.hasSq(m.histToSq): 1 else: 0
+    var score = system.int(hist.historyTable[stm][fromSq][toSq][fromThrt][toThrt])
+    let curPiece = ord(b.mailbox[fromSq])
+    if cont1 != nil:
+      score += 2 * system.int(cont1[][curPiece][toSq])
+    if cont2 != nil:
+      score += system.int(cont2[][curPiece][toSq])
+    scores[i] = int32(score)
 
 proc initMovePicker*(picker: var MovePicker, b: ptr Board,
                      ttMove: Move,
                      ply, prevPiece, prevToSq,
                      prev2Piece, prev2ToSq: int,
                      inCheck, isQSearch: bool) {.inline.} =
+  # Search reads threats/pins for every move it gets from the picker.
+  b[].ensureAttackState()
   picker.board          = b
   picker.ttMove         = ttMove
   picker.ply            = ply
@@ -224,13 +227,9 @@ proc next*(picker: var MovePicker): Move {.inline.} =
         picker.stage = StageBadNoisies
       else:
         generateQuiets(b[], picker.quietMoves)
-        for i in 0 ..< picker.quietMoves.len:
-          picker.quietScores[i] = scoreQuiet(b[], picker.quietMoves.moves[i],
-                                             picker.ply,
-                                             picker.prevPiece,
-                                             picker.prevToSq,
-                                             picker.prev2Piece,
-                                             picker.prev2ToSq)
+        scoreQuiets(b[], picker.quietMoves, picker.quietScores, picker.ply,
+                    picker.prevPiece, picker.prevToSq,
+                    picker.prev2Piece, picker.prev2ToSq)
         picker.quietCur = 0
         picker.stage    = StageQuiets
 

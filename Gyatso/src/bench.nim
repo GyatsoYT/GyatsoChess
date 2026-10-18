@@ -1,7 +1,6 @@
 import std/[atomics, monotimes, times, strformat]
 import coretypes
 import board
-import attacks
 import perft
 import search
 import tt
@@ -37,7 +36,6 @@ type BenchWorkerData = object
 
 proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   initHistoryData()
-  initThreadAttacks()
 
   var b = parseFen(data.fen)
 

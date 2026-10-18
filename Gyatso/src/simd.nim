@@ -238,9 +238,11 @@ when defined(neon) or defined(arm64) or defined(aarch64):
     MLInt32x4 {.importc: "int32x4_t", header: "arm_neon.h", bycopy.} = object
     MLUint32x4 {.importc: "uint32x4_t", header: "arm_neon.h", bycopy.} = object
     MLUint8x8 {.importc: "uint8x8_t", header: "arm_neon.h", bycopy.} = object
+    MLUint8x16 {.importc: "uint8x16_t", header: "arm_neon.h", bycopy.} = object
+    MLUint16x8 {.importc: "uint16x8_t", header: "arm_neon.h", bycopy.} = object
+    MLUint16x4 {.importc: "uint16x4_t", header: "arm_neon.h", bycopy.} = object
   {.push header: "arm_neon.h".}
   func neonLoadS16(p: ptr int16): MLInt16x8 {.importc: "vld1q_s16".}
-  func neonStoreU8(p: ptr uint8, v: MLUint8x8) {.importc: "vst1_u8".}
   func neonDupS16(v: int16): MLInt16x8 {.importc: "vdupq_n_s16".}
   func neonDupS32(v: int32): MLInt32x4 {.importc: "vdupq_n_s32".}
   func neonMinS16(a, b: MLInt16x8): MLInt16x8 {.importc: "vminq_s16".}
@@ -248,6 +250,24 @@ when defined(neon) or defined(arm64) or defined(aarch64):
   func neonShiftLeftS16(a: MLInt16x8, shift: int32): MLInt16x8 {.importc: "vshlq_n_s16".}
   func neonDoublingMulHighS16(a, b: MLInt16x8): MLInt16x8 {.importc: "vqdmulhq_s16".}
   func neonNarrowUnsignedS16(a: MLInt16x8): MLUint8x8 {.importc: "vqmovun_s16".}
+  func neonNarrowUnsignedHighS16(lo: MLUint8x8, a: MLInt16x8): MLUint8x16 {.importc: "vqmovun_high_s16".}
+  func neonStoreU8x16(p: ptr uint8, v: MLUint8x16) {.importc: "vst1q_u8".}
+  func neonAsU32(v: MLUint8x16): MLUint32x4 {.importc: "vreinterpretq_u32_u8".}
+  func neonTestU32(a, b: MLUint32x4): MLUint32x4 {.importc: "vtstq_u32".}
+  func neonLoadU16(p: ptr uint16): MLUint16x8 {.importc: "vld1q_u16".}
+  func neonStoreU16(p: ptr uint16, v: MLUint16x8) {.importc: "vst1q_u16".}
+  func neonDupU16(v: uint16): MLUint16x8 {.importc: "vdupq_n_u16".}
+  func neonAddU16(a, b: MLUint16x8): MLUint16x8 {.importc: "vaddq_u16".}
+  func neonLoadS32(p: ptr int32): MLInt32x4 {.importc: "vld1q_s32".}
+  func neonMlaLaneS32(acc, a: MLInt32x4, b: int32): MLInt32x4 {.importc: "vmlaq_n_s32".}
+  func neonMinS32(a, b: MLInt32x4): MLInt32x4 {.importc: "vminq_s32".}
+  func neonMaxS32(a, b: MLInt32x4): MLInt32x4 {.importc: "vmaxq_s32".}
+  func neonAddS32(a, b: MLInt32x4): MLInt32x4 {.importc: "vaddq_s32".}
+  func neonStoreS32x4(p: ptr int32, v: MLInt32x4) {.importc: "vst1q_s32".}
+  func neonMoveNarrowU32(a: MLUint32x4): MLUint16x4 {.importc: "vmovn_u32".}
+  func neonMoveNarrowHighU32(lo: MLUint16x4, a: MLUint32x4): MLUint16x8 {.importc: "vmovn_high_u32".}
+  func neonAndU16(a, b: MLUint16x8): MLUint16x8 {.importc: "vandq_u16".}
+  func neonAddAcrossU16(v: MLUint16x8): uint16 {.importc: "vaddvq_u16".}
   when defined(neonDotProd):
     func neonDupU32(v: uint32): MLUint32x4 {.importc: "vdupq_n_u32".}
     func neonReinterpretS8(v: MLUint32x4): MLInt8x16 {.importc: "vreinterpretq_s8_u32".}
@@ -399,18 +419,36 @@ proc gyatsoMultilayerL1Blocks*(rawInputs: ptr uint8, rawWeights: ptr int8,
     var acc1 {.noinit.} = neonDupS32(0)
     var acc2 {.noinit.} = neonDupS32(0)
     var acc3 {.noinit.} = neonDupS32(0)
-    for i in 0..<nonzeroCount:
-      let group = int(nonzeroBlocks[i])
-      let x = neonReinterpretS8(neonDupU32(packFourBytes(inputs, group * 4)))
-      let w = addr weights[group * 64]
-      acc0 = neonDotS32(acc0, x, neonLoadS8(w))
-      acc1 = neonDotS32(acc1, x, neonLoadS8(addr weights[group * 64 + 16]))
-      acc2 = neonDotS32(acc2, x, neonLoadS8(addr weights[group * 64 + 32]))
-      acc3 = neonDotS32(acc3, x, neonLoadS8(addr weights[group * 64 + 48]))
-    neonStoreS32(addr sums[0], acc0)
-    neonStoreS32(addr sums[4], acc1)
-    neonStoreS32(addr sums[8], acc2)
-    neonStoreS32(addr sums[12], acc3)
+    var acc4 {.noinit.} = neonDupS32(0)
+    var acc5 {.noinit.} = neonDupS32(0)
+    var acc6 {.noinit.} = neonDupS32(0)
+    var acc7 {.noinit.} = neonDupS32(0)
+    var i = 0
+    while i + 1 < nonzeroCount:
+      let g0 = int(nonzeroBlocks[i])
+      let g1 = int(nonzeroBlocks[i + 1])
+      let x0 = neonReinterpretS8(neonDupU32(packFourBytes(inputs, g0 * 4)))
+      let x1 = neonReinterpretS8(neonDupU32(packFourBytes(inputs, g1 * 4)))
+      acc0 = neonDotS32(acc0, x0, neonLoadS8(addr weights[g0 * 64]))
+      acc1 = neonDotS32(acc1, x0, neonLoadS8(addr weights[g0 * 64 + 16]))
+      acc2 = neonDotS32(acc2, x0, neonLoadS8(addr weights[g0 * 64 + 32]))
+      acc3 = neonDotS32(acc3, x0, neonLoadS8(addr weights[g0 * 64 + 48]))
+      acc4 = neonDotS32(acc4, x1, neonLoadS8(addr weights[g1 * 64]))
+      acc5 = neonDotS32(acc5, x1, neonLoadS8(addr weights[g1 * 64 + 16]))
+      acc6 = neonDotS32(acc6, x1, neonLoadS8(addr weights[g1 * 64 + 32]))
+      acc7 = neonDotS32(acc7, x1, neonLoadS8(addr weights[g1 * 64 + 48]))
+      i += 2
+    if i < nonzeroCount:
+      let g0 = int(nonzeroBlocks[i])
+      let x0 = neonReinterpretS8(neonDupU32(packFourBytes(inputs, g0 * 4)))
+      acc0 = neonDotS32(acc0, x0, neonLoadS8(addr weights[g0 * 64]))
+      acc1 = neonDotS32(acc1, x0, neonLoadS8(addr weights[g0 * 64 + 16]))
+      acc2 = neonDotS32(acc2, x0, neonLoadS8(addr weights[g0 * 64 + 32]))
+      acc3 = neonDotS32(acc3, x0, neonLoadS8(addr weights[g0 * 64 + 48]))
+    neonStoreS32(addr sums[0], neonAddS32(acc0, acc4))
+    neonStoreS32(addr sums[4], neonAddS32(acc1, acc5))
+    neonStoreS32(addr sums[8], neonAddS32(acc2, acc6))
+    neonStoreS32(addr sums[12], neonAddS32(acc3, acc7))
   else:
     for output in 0..<16: sums[output] = 0
     for i in 0..<nonzeroCount:
@@ -517,6 +555,27 @@ proc gyatsoMultilayerL2*(rawInputs, rawWeights, rawBias, rawOutputs: ptr int32,
         for lane in 0..<4:
           outputs[outputBase + lane * 2] = clampI64(evenLanes[lane] + int64(bias[outputBase + lane * 2]), maxValue)
           outputs[outputBase + lane * 2 + 1] = clampI64(oddLanes[lane] + int64(bias[outputBase + lane * 2 + 1]), maxValue)
+  elif defined(neon) or defined(arm64) or defined(aarch64):
+    if useFastI32 != 0:
+      let zero = neonDupS32(0)
+      let maxVec = neonDupS32(maxValue)
+      var sums {.noinit.}: array[8, MLInt32x4]
+      for j in 0..<8:
+        sums[j] = neonLoadS32(addr bias[j * 4])
+      for input in 0..<16:
+        let activation = inputs[input]
+        if activation != 0:
+          let row = input * 32
+          for j in 0..<8:
+            sums[j] = neonMlaLaneS32(sums[j], neonLoadS32(addr weights[row + j * 4]), activation)
+      for j in 0..<8:
+        neonStoreS32x4(addr outputs[j * 4], neonMaxS32(neonMinS32(sums[j], maxVec), zero))
+    else:
+      for output in 0..<32:
+        var sum = int64(bias[output])
+        for input in 0..<16:
+          sum += int64(inputs[input]) * int64(weights[input * 32 + output])
+        outputs[output] = clampI64(sum, maxValue)
   else:
     for output in 0..<32:
       var sum = int64(bias[output])
@@ -661,19 +720,6 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
         var bytes = mm256_packus_epi16(p0, p1)
         bytes = mm256_permute4x64_epi64(bytes, MM_SHUFFLE(3, 1, 2, 0))
         mm256_storeu_si256(cast[ptr M256i](addr outputs[outBase + i]), bytes)
-  elif defined(neon) or defined(arm64) or defined(aarch64):
-    let zero = neonDupS16(0)
-    let maxVec = neonDupS16(255)
-    for perspective in 0..<2:
-      let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in countup(0, 504, 8):
-        var a = neonLoadS16(addr acc[i])
-        var b = neonLoadS16(addr acc[512 + i])
-        a = neonMaxS16(zero, neonMinS16(maxVec, a))
-        b = neonMaxS16(zero, neonMinS16(maxVec, b))
-        let p = neonDoublingMulHighS16(neonShiftLeftS16(a, 6), b)
-        neonStoreU8(addr outputs[outBase + i], neonNarrowUnsignedS16(p))
   else:
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
@@ -682,6 +728,50 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
         let a = clamp(int(acc[i]), 0, 255)
         let b = clamp(int(acc[512 + i]), 0, 255)
         outputs[outBase + i] = uint8((a * b) shr 9)
+
+when defined(neon) or defined(arm64) or defined(aarch64):
+  const NeonGroupBits: array[8, uint16] = [1'u16, 2, 4, 8, 16, 32, 64, 128]
+
+  proc gyatsoPairwiseNnz*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8,
+                          rawBlocks, rawIndexLut: ptr uint16,
+                          rawCountLut: ptr uint8): int =
+    ## Pairwise activation fused with collection of nonzero 4-byte groups.
+    let stm = cast[ptr I16Array](rawStm)
+    let nstm = cast[ptr I16Array](rawNstm)
+    let outputs = cast[ptr U8Array](rawOutputs)
+    let blocks = cast[ptr U16Array](rawBlocks)
+    let indexLut = cast[ptr U16Array](rawIndexLut)
+    let countLut = cast[ptr U8Array](rawCountLut)
+    let zero = neonDupS16(0)
+    let maxVec = neonDupS16(255)
+    let bitVec = neonLoadU16(unsafeAddr NeonGroupBits[0])
+    var count = 0
+    for perspective in 0..<2:
+      let acc = if perspective == 0: stm else: nstm
+      let outBase = perspective * 512
+      for i in countup(0, 480, 32):
+        template pairBytes(off: int): MLUint8x16 =
+          let a0 = neonMaxS16(zero, neonMinS16(maxVec, neonLoadS16(addr acc[i + off])))
+          let b0 = neonMinS16(maxVec, neonLoadS16(addr acc[512 + i + off]))
+          let a1 = neonMaxS16(zero, neonMinS16(maxVec, neonLoadS16(addr acc[i + off + 8])))
+          let b1 = neonMinS16(maxVec, neonLoadS16(addr acc[512 + i + off + 8]))
+          let p0 = neonDoublingMulHighS16(neonShiftLeftS16(a0, 6), b0)
+          let p1 = neonDoublingMulHighS16(neonShiftLeftS16(a1, 6), b1)
+          neonNarrowUnsignedHighS16(neonNarrowUnsignedS16(p0), p1)
+        let lo = pairBytes(0)
+        let hi = pairBytes(16)
+        neonStoreU8x16(addr outputs[outBase + i], lo)
+        neonStoreU8x16(addr outputs[outBase + i + 16], hi)
+        let loW = neonAsU32(lo)
+        let hiW = neonAsU32(hi)
+        let nonzero = neonMoveNarrowHighU32(neonMoveNarrowU32(neonTestU32(loW, loW)),
+          neonTestU32(hiW, hiW))
+        let mask = int(neonAddAcrossU16(neonAndU16(nonzero, bitVec)))
+        let indexes = neonLoadU16(addr indexLut[mask * 8])
+        neonStoreU16(addr blocks[count],
+          neonAddU16(indexes, neonDupU16(uint16((outBase + i) div 4))))
+        count += int(countLut[mask])
+    count
 
 when defined(avx512) or defined(avx2):
   proc gyatsoPairwiseNnz*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8,
@@ -718,9 +808,9 @@ when defined(avx512) or defined(avx2):
           var a1 = mm256_loadu_si256(cast[ptr M256i](addr acc[i + 16]))
           var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i + 16]))
           a0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a0))
-          b0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b0))
+          b0 = mm256_min_epi16(maxVec, b0)
           a1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a1))
-          b1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b1))
+          b1 = mm256_min_epi16(maxVec, b1)
           let p0 = mm256_mulhi_epi16(mm256_slli_epi16(a0, 7), b0)
           let p1 = mm256_mulhi_epi16(mm256_slli_epi16(a1, 7), b1)
           bytes = mm256_packus_epi16(p0, p1)

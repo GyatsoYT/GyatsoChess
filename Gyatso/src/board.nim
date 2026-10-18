@@ -39,6 +39,7 @@ type
     pinHV*: Bitboard
     pinD12*: Bitboard
     threats*: Bitboard
+    attackStateValid*: bool
 
   Board* = object
     byPiece*: array[12, Bitboard]
@@ -58,6 +59,9 @@ type
     pinHV*: Bitboard
     pinD12*: Bitboard
     threats*: Bitboard
+    ## pinHV/pinD12/threats are only meaningful when attackStateValid; call
+    ## ensureAttackState before reading them after makeMove.
+    attackStateValid*: bool
     history*: array[1024, UndoInfo]
     histLen*: int
 
@@ -156,13 +160,11 @@ func pawnAttackRight(bb: Bitboard, c: Color): Bitboard {.inline.} =
   if c == White: (bb and not FileH) shl 9
   else: (bb and not FileA) shr 9
 
-proc updateAttackState*(b: var Board) =
+proc computePinsAndThreats(b: var Board) =
   let us = b.stm
   let them = us.opposite()
   let kingSq = b.byPiece[us.ord * 6 + King.ord].lsb()
   let occ = b.occupied
-
-  b.checkers = b.attackersTo(kingSq, occ, them)
 
   b.pinHV = Bitboard(0)
   b.pinD12 = Bitboard(0)
@@ -218,6 +220,21 @@ proc updateAttackState*(b: var Board) =
   var enemyBishopsAndQueens = enemyBishops or enemyQueens
   for sq in enemyBishopsAndQueens:
     b.threats = b.threats or getBishopAttacks(sq, occNoKing)
+
+  b.attackStateValid = true
+
+proc ensureAttackState*(b: var Board) {.inline.} =
+  ## Pins and threats are computed on first use after a move: most nodes
+  ## return (stand pat, TT or eval cutoffs) before generating moves.
+  if not b.attackStateValid:
+    computePinsAndThreats(b)
+
+proc updateAttackState*(b: var Board) {.inline.} =
+  ## Checkers are needed by almost every node, so they are kept eager.
+  let us = b.stm
+  let kingSq = b.byPiece[us.ord * 6 + King.ord].lsb()
+  b.checkers = b.attackersTo(kingSq, b.occupied, us.opposite())
+  b.attackStateValid = false
 
 func pinRayOf*(b: Board, sq: Square): Bitboard {.inline.} =
   if b.pinHV.hasSq(sq): return b.pinHV
@@ -472,7 +489,8 @@ proc makeMove*(b: var Board, m: Move) =
     checkers: b.checkers,
     pinHV: b.pinHV,
     pinD12: b.pinD12,
-    threats: b.threats
+    threats: b.threats,
+    attackStateValid: b.attackStateValid
   )
   inc b.histLen
 
@@ -596,6 +614,7 @@ proc unmakeMove*(b: var Board, m: Move) =
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
   b.threats = undo.threats
+  b.attackStateValid = undo.attackStateValid
 
 proc makeNullMove*(b: var Board) =
   doAssert b.histLen < 1024
@@ -611,7 +630,8 @@ proc makeNullMove*(b: var Board) =
     checkers: b.checkers,
     pinHV: b.pinHV,
     pinD12: b.pinD12,
-    threats: b.threats
+    threats: b.threats,
+    attackStateValid: b.attackStateValid
   )
   inc b.histLen
 
@@ -645,6 +665,7 @@ proc unmakeNullMove*(b: var Board) =
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
   b.threats = undo.threats
+  b.attackStateValid = undo.attackStateValid
 
   # Restore STM, gamePly, fullmove
   b.stm = b.stm.opposite()

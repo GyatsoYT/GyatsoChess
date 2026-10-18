@@ -1,7 +1,6 @@
 import std/[atomics, locks, monotimes]
 import coretypes
 import board
-import attacks
 import search
 import history
 
@@ -35,7 +34,6 @@ proc totalNodes*(): uint64 =
 
 proc threadEntry(td: ptr ThreadData) {.thread.} =
   initHistoryData()
-  initThreadAttacks()
   td.histData = gHistData
 
   while true:
@@ -107,7 +105,6 @@ proc initThreadPool*(requestedCount: int) =
     gThreadPool.threads[i] = td
 
   initHistoryData()
-  initThreadAttacks()
   gNodeAggregator = totalNodes
 
   for i in 1 ..< count:
