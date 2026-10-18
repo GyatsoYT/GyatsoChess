@@ -120,8 +120,8 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
-    addr b, NullMove, ply, prevPiece, prevToSq,
+  var picker {.noinit.}: MovePicker
+  picker.init(addr b, NullMove, ply, prevPiece, prevToSq,
     -1, -1,
     inCheck = inCheckQ, isQSearch = true)
 
@@ -301,8 +301,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   let prev2ToSq = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
       2].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
-    addr b, ttMove, ply, prevPiece, prevToSq,
+  var picker {.noinit.}: MovePicker
+  picker.init(addr b, ttMove, ply, prevPiece, prevToSq,
     prev2Piece, prev2ToSq,
     inCheck = inCheck, isQSearch = false)
 
@@ -310,7 +310,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var curAlpha = alpha
   var bestMove = NullMove
 
-  var triedQuiets: array[128, Move]
+  var triedQuiets {.noinit.}: array[128, Move]
   var triedQuietsLen = 0
   var movesSearched = 0
 

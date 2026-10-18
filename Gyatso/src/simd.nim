@@ -45,11 +45,12 @@ when defined(avx512):
     func vecMax16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_max_epi16(a, b)
     func vecMin16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_min_epi16(a, b)
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_mullo_epi16(a, b)
-    func vecMadd16*(a, b: VEPI16): VEPI32 {.inline.} = mm512_madd_epi16(a, b)
     func vecAdd16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_add_epi16(a, b)
     func vecAdd32*(a, b: VEPI32): VEPI32 {.inline.} = mm512_add_epi32(a, b)
     func vecSub16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_sub_epi16(a, b)
     func vecReduceAdd32*(vec: VEPI32): int32 {.inline.} = mm512_reduce_add_epi32(vec)
+    func vecMaddAcc16*(acc: VEPI32, a, b: VEPI16): VEPI32 {.inline.} =
+        mm512_add_epi32(acc, mm512_madd_epi16(a, b))
 
 elif defined(avx2):
     {.passC: "-mavx2".}
@@ -71,7 +72,6 @@ elif defined(avx2):
     func vecMax16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_max_epi16(a, b)
     func vecMin16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_min_epi16(a, b)
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_mullo_epi16(a, b)
-    func vecMadd16*(a, b: VEPI16): VEPI32 {.inline.} = mm256_madd_epi16(a, b)
     func vecAdd32*(a, b: VEPI32): VEPI32 {.inline.} = mm256_add_epi32(a, b)
     func vecAdd16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_add_epi16(a, b)
     func vecSub16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_sub_epi16(a, b)
@@ -87,10 +87,13 @@ elif defined(avx2):
             sum32 = mm_add_epi32(hi32, sum64)
         mm_cvtsi128_si32(sum32)
 
+    func vecMaddAcc16*(acc: VEPI32, a, b: VEPI16): VEPI32 {.inline.} =
+        mm256_add_epi32(acc, mm256_madd_epi16(a, b))
+
 elif defined(neon) or defined(arm64) or defined(aarch64):
     # ARM NEON — Apple Silicon (M1/M2/M3/M4) and other AArch64 targets
-    # vaddvq_s32 / vpaddq_s32 / vget_low|high_s16 are all AArch64-only, which
-    # is fine because arm64 / aarch64 implies a 64-bit ARM core.
+    # vaddvq_s32 / vmlal_high_s16 are AArch64-only, which is fine because
+    # arm64 / aarch64 implies a 64-bit ARM core.
     {.passC: "-march=armv8-a+simd".}
 
     type
@@ -110,10 +113,10 @@ elif defined(neon) or defined(arm64) or defined(aarch64):
     func vdupq_n_s32(v: int32): int32x4 {.importc: "vdupq_n_s32".}
     func vaddq_s32(a, b: int32x4): int32x4 {.importc: "vaddq_s32".}
     func vaddvq_s32(a: int32x4): int32 {.importc: "vaddvq_s32".}
-    func vmull_s16(a, b: int16x4): int32x4 {.importc: "vmull_s16".}
     func vget_low_s16(v: int16x8): int16x4 {.importc: "vget_low_s16".}
     func vget_high_s16(v: int16x8): int16x4 {.importc: "vget_high_s16".}
-    func vpaddq_s32(a, b: int32x4): int32x4 {.importc: "vpaddq_s32".}
+    func vmlal_s16(acc: int32x4, a, b: int16x4): int32x4 {.importc: "vmlal_s16".}
+    func vmlal_high_s16(acc: int32x4, a, b: int16x8): int32x4 {.importc: "vmlal_high_s16".}
     {.pop.}
 
     type
@@ -139,16 +142,15 @@ elif defined(neon) or defined(arm64) or defined(aarch64):
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = vmulq_s16(a, b)
     func vecAdd32*(a, b: VEPI32): VEPI32 {.inline.} = vaddq_s32(a, b)
 
-    func vecMadd16*(a, b: VEPI16): VEPI32 {.inline.} =
-        ## Equivalent to _mm256_madd_epi16:
-        ## result[j] = a[2j]*b[2j] + a[2j+1]*b[2j+1]  (4 int32 outputs from 8 int16 inputs)
-        let lo = vmull_s16(vget_low_s16(a), vget_low_s16(b))
-        let hi = vmull_s16(vget_high_s16(a), vget_high_s16(b))
-        vpaddq_s32(lo, hi) # pairwise add within each half, then interleave
-
     func vecReduceAdd32*(vec: VEPI32): int32 {.inline.} =
         ## Horizontal sum of all four int32 lanes.
         vaddvq_s32(vec)
+
+    func vecMaddAcc16*(acc: VEPI32, a, b: VEPI16): VEPI32 {.inline.} =
+        ## acc + madd(a, b): widening multiply-accumulate of all 8 lanes. Lane
+        ## placement differs from x86 madd but the horizontal total is the
+        ## same, which is all the NNUE output layer needs.
+        vmlal_high_s16(vmlal_s16(acc, vget_low_s16(a), vget_low_s16(b)), a, b)
 
 else:
     # ── Scalar fallback ──────────────────────────────────────────────────────
@@ -177,11 +179,10 @@ else:
     func vecMin16*(a, b: VEPI16): VEPI16 {.inline.} = min(a, b)
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = a * b
 
-    func vecMadd16*(a, b: VEPI16): VEPI32 {.inline.} =
-        ## Scalar: with CHUNK_SIZE=1 there are no adjacent pairs to sum,
-        ## so this is simply a widening multiply — equivalent total result.
-        int32(a) * int32(b)
-
     func vecAdd32*(a, b: VEPI32): VEPI32 {.inline.} = a + b
 
     func vecReduceAdd32*(vec: VEPI32): int32 {.inline.} = vec
+
+    func vecMaddAcc16*(acc: VEPI32, a, b: VEPI16): VEPI32 {.inline.} =
+        ## Scalar: CHUNK_SIZE=1, so madd reduces to a widening multiply-add.
+        acc + int32(a) * int32(b)

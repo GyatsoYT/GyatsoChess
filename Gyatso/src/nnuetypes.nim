@@ -24,9 +24,3 @@ type
     black*:   array[MaxPly + 1, Accumulator]
     whiteNeedsRefresh*: array[MaxPly + 1, bool]
     blackNeedsRefresh*: array[MaxPly + 1, bool]
-
-  UpdateQueue* = object
-    adds*: array[2, int]
-    addCount*: int8
-    subs*: array[2, int]
-    subCount*: int8

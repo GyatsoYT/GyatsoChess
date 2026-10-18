@@ -67,18 +67,19 @@ proc addFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inlin
             vecStore(addr acc.data[o], sum)
             o += CHUNK_SIZE
 
-proc removeFeature*(net: ptr NNUENetwork, index: int, acc: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for o in 0..<HL:
-            acc.data[o] -= net.ftWeight[index][o]
-    else:
-        var o = 0
-        while o < HL:
-            let weight = vecLoad(addr net.ftWeight[index][o])
-            let data = vecLoad(addr acc.data[o])
-            let sum = vecSub16(data, weight)
-            vecStore(addr acc.data[o], sum)
-            o += CHUNK_SIZE
+when defined(simd):
+    const UpdateUnroll = 4
+    static: doAssert HL mod (CHUNK_SIZE * UpdateUnroll) == 0
+
+    template updateLoop(body: untyped) =
+        ## Runs `body` for every vector offset `i`, manually unrolled so the
+        ## independent loads/stores of several vectors overlap.
+        var base = 0
+        while base < HL:
+            for u in 0 ..< UpdateUnroll:
+                let i {.inject.} = base + u * CHUNK_SIZE
+                body
+            base += CHUNK_SIZE * UpdateUnroll
 
 proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
              prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -86,14 +87,12 @@ proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
         for i in 0..<HL:
             curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx][i]
     else:
-        var i = 0
-        while i < HL:
-            let a = vecLoad(addr net.ftWeight[addIdx][i])
-            let b = vecLoad(addr net.ftWeight[subIdx][i])
-            let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecAdd16(p, a), b)
+        let wa = addr net.ftWeight[addIdx]
+        let ws = addr net.ftWeight[subIdx]
+        updateLoop:
+            let r = vecSub16(vecAdd16(vecLoad(addr prev.data[i]), vecLoad(addr wa[i])),
+                             vecLoad(addr ws[i]))
             vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
 
 proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
                 prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -101,15 +100,13 @@ proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
         for i in 0..<HL:
             curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
     else:
-        var i = 0
-        while i < HL:
-            let a = vecLoad(addr net.ftWeight[addIdx][i])
-            let b = vecLoad(addr net.ftWeight[subIdx1][i])
-            let c = vecLoad(addr net.ftWeight[subIdx2][i])
-            let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecSub16(vecAdd16(p, a), b), c)
+        let wa = addr net.ftWeight[addIdx]
+        let ws1 = addr net.ftWeight[subIdx1]
+        let ws2 = addr net.ftWeight[subIdx2]
+        updateLoop:
+            let r = vecSub16(vecSub16(vecAdd16(vecLoad(addr prev.data[i]), vecLoad(addr wa[i])),
+                                      vecLoad(addr ws1[i])), vecLoad(addr ws2[i]))
             vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
 
 proc addSubAddSub*(net: ptr NNUENetwork, addIdx1, subIdx1, addIdx2, subIdx2: int,
                    prev: var Accumulator, curr: var Accumulator) {.inline.} =
@@ -118,62 +115,51 @@ proc addSubAddSub*(net: ptr NNUENetwork, addIdx1, subIdx1, addIdx2, subIdx2: int
             curr.data[i] = prev.data[i] + net.ftWeight[addIdx1][i] - net.ftWeight[subIdx1][i] +
                            net.ftWeight[addIdx2][i] - net.ftWeight[subIdx2][i]
     else:
-        var i = 0
-        while i < HL:
-            let a1 = vecLoad(addr net.ftWeight[addIdx1][i])
-            let s1 = vecLoad(addr net.ftWeight[subIdx1][i])
-            let a2 = vecLoad(addr net.ftWeight[addIdx2][i])
-            let s2 = vecLoad(addr net.ftWeight[subIdx2][i])
+        let wa1 = addr net.ftWeight[addIdx1]
+        let ws1 = addr net.ftWeight[subIdx1]
+        let wa2 = addr net.ftWeight[addIdx2]
+        let ws2 = addr net.ftWeight[subIdx2]
+        updateLoop:
             let p = vecLoad(addr prev.data[i])
-            let r = vecSub16(vecAdd16(a2, vecSub16(vecAdd16(p, a1), s1)), s2)
+            let r = vecSub16(vecAdd16(vecLoad(addr wa2[i]),
+                                      vecSub16(vecAdd16(p, vecLoad(addr wa1[i])), vecLoad(addr ws1[i]))),
+                             vecLoad(addr ws2[i]))
             vecStore(addr curr.data[i], r)
-            i += CHUNK_SIZE
-
-proc reset*(q: var UpdateQueue) {.inline.} =
-    q.addCount = 0
-    q.subCount = 0
-
-proc queueAddSub*(q: var UpdateQueue, addIdx, subIdx: int) {.inline.} =
-    q.adds[q.addCount] = addIdx
-    inc q.addCount
-    q.subs[q.subCount] = subIdx
-    inc q.subCount
-
-proc queueAddSubSub*(q: var UpdateQueue, addIdx, subIdx1, subIdx2: int) {.inline.} =
-    q.adds[q.addCount] = addIdx
-    inc q.addCount
-    q.subs[q.subCount] = subIdx1
-    inc q.subCount
-    q.subs[q.subCount] = subIdx2
-    inc q.subCount
-
-proc apply*(q: var UpdateQueue, net: ptr NNUENetwork,
-            oldAcc, newAcc: var Accumulator) {.inline.} =
-    if q.addCount == 0 and q.subCount == 0:
-        return
-    elif q.addCount == 1 and q.subCount == 1:
-        net.addSub(q.adds[0], q.subs[0], oldAcc, newAcc)
-    elif q.addCount == 1 and q.subCount == 2:
-        net.addSubSub(q.adds[0], q.subs[0], q.subs[1], oldAcc, newAcc)
-    elif q.addCount == 2 and q.subCount == 2:
-        net.addSubAddSub(q.adds[0], q.subs[0], q.adds[1], q.subs[1], oldAcc, newAcc)
-    else:
-        doAssert false, "invalid add/sub configuration: " & $q.addCount & " adds, " & $q.subCount & " subs"
-    q.reset()
 
 proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
     ## Full recompute of accumulator from board state
     let perspKingSq = board.kingSquare(perspective)
-    net.initAccumulator(acc)
+    var features {.noinit.}: array[32, int]
+    var count = 0
     var occ = board.occupied
     while occ != Bitboard(0):
         let sq = poplsb(occ)
         let piece = board.mailbox[sq.int]
         if piece == NoPiece: continue
-        let pt = piece.pieceType
-        let pc = piece.color
-        let idx = featureIndex(perspective, pc, pt, sq, perspKingSq)
-        net.addFeature(idx, acc)
+        features[count] = featureIndex(perspective, piece.color, piece.pieceType, sq, perspKingSq)
+        inc count
+
+    when not defined(simd):
+        net.initAccumulator(acc)
+        for f in 0 ..< count:
+            net.addFeature(features[f], acc)
+    else:
+        # Keep a tile of the accumulator in registers while summing every
+        # feature row, instead of one load/store pass over `acc` per piece.
+        const Tile = 8
+        static: doAssert HL mod (CHUNK_SIZE * Tile) == 0
+        var base = 0
+        while base < HL:
+            var regs {.noinit.}: array[Tile, VEPI16]
+            for t in 0 ..< Tile:
+                regs[t] = vecLoad(addr net.ftBias[base + t * CHUNK_SIZE])
+            for f in 0 ..< count:
+                let row = addr net.ftWeight[features[f]]
+                for t in 0 ..< Tile:
+                    regs[t] = vecAdd16(regs[t], vecLoad(addr row[base + t * CHUNK_SIZE]))
+            for t in 0 ..< Tile:
+                vecStore(addr acc.data[base + t * CHUNK_SIZE], regs[t])
+            base += CHUNK_SIZE * Tile
 
 proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.current = 0
@@ -202,32 +188,31 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         return system.int((output div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
     else:
-        var
-            sum = vecZero32()
-            qa = vecSetOne16(QA.int16)
-            zero = vecZero16()
+        # Independent int32 accumulator chains for ILP; int32 addition is
+        # associative so the reduced total is bit-identical to a single chain.
+        const Lanes = 4
+        static: doAssert HL mod (CHUNK_SIZE * Lanes) == 0
+        let qa = vecSetOne16(QA.int16)
+        let zero = vecZero16()
+        var sums {.noinit.}: array[2 * Lanes, VEPI32]
+        for k in 0 ..< 2 * Lanes:
+            sums[k] = vecZero32()
 
-        # STM half: weight indices 0..<HL
         var i = 0
         while i < HL:
-            let inp = vecLoad(addr stmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[i])
-            let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
-            i += CHUNK_SIZE
+            for k in 0 ..< Lanes:
+                let o = i + k * CHUNK_SIZE
+                let c = vecMin16(vecMax16(vecLoad(addr stmAcc.data[o]), zero), qa)
+                let n = vecMin16(vecMax16(vecLoad(addr nstmAcc.data[o]), zero), qa)
+                sums[k] = vecMaddAcc16(sums[k], vecMullo16(c, vecLoad(addr net.l1Weight[o])), c)
+                sums[Lanes + k] = vecMaddAcc16(sums[Lanes + k],
+                                               vecMullo16(n, vecLoad(addr net.l1Weight[HL + o])), n)
+            i += Lanes * CHUNK_SIZE
 
-        # NSTM half: weight indices HL..<HL*2
-        i = 0
-        while i < HL:
-            let inp = vecLoad(addr nstmAcc.data[i])
-            let wt = vecLoad(addr net.l1Weight[HL + i])
-            let clipped = vecMin16(vecMax16(inp, zero), qa)
-            let product = vecMadd16(vecMullo16(clipped, wt), clipped)
-            sum = vecAdd32(sum, product)
-            i += CHUNK_SIZE
-
-        let rawSum = vecReduceAdd32(sum)
+        var total = sums[0]
+        for k in 1 ..< 2 * Lanes:
+            total = vecAdd32(total, sums[k])
+        let rawSum = vecReduceAdd32(total)
         return system.int((rawSum div QA + net.l1Bias) * EVAL_SCALE div (QA * QB))
 
 proc ensureAccumulatorReady*(net: ptr NNUENetwork, board: Board, state: var NNUEState) {.inline.} =
@@ -254,8 +239,9 @@ proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): in
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
-proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
-                         perspective: Color, state: var NNUEState) =
+proc applyMoveUpdate(net: ptr NNUENetwork, board: Board, m: Move,
+                     perspective: Color, prev: var Accumulator, curr: var Accumulator) =
+    ## curr = prev updated by the feature changes of `m` (board is pre-move).
     let us = board.stm
     let them = us.opposite()
     let fromSq = m.fromSq
@@ -266,11 +252,6 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
 
     # Get perspective king square for horizontal mirroring
     let perspKingSq = board.kingSquare(perspective)
-
-    var queue: UpdateQueue
-    queue.reset()
-
-    let ply = state.current
 
     if m.isCastling:
         let kingFrom = fromSq
@@ -283,52 +264,32 @@ proc computeUpdateQueue*(net: ptr NNUENetwork, board: Board, m: Move,
         let rookAddIdx = featureIndex(perspective, us, Rook, rookTo,   perspKingSq)
         let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
 
-        queue.queueAddSub(kingAddIdx, kingSubIdx)
-        queue.queueAddSub(rookAddIdx, rookSubIdx)
+        net.addSubAddSub(kingAddIdx, kingSubIdx, rookAddIdx, rookSubIdx, prev, curr)
 
     elif m.isEnPassant:
         let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
         let addIdx = featureIndex(perspective, us, Pawn, toSq, perspKingSq)
         let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
         let subIdx2 = featureIndex(perspective, them, Pawn, capSq, perspKingSq)
-        queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
-
-    elif m.isPromotion:
-        let promoPt = case m.promoType
-            of PromoKnight: Knight
-            of PromoBishop: Bishop
-            of PromoRook:   Rook
-            of PromoQueen:  Queen
-        let capturedPiece = board.mailbox[toSq.int]
-        if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
-            let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
-            let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
-            queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
-        else:
-            let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
-            let subIdx = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-            queue.queueAddSub(addIdx, subIdx)
+        net.addSubSub(addIdx, subIdx1, subIdx2, prev, curr)
 
     else:
+        let addPt = if m.isPromotion:
+                        case m.promoType
+                        of PromoKnight: Knight
+                        of PromoBishop: Bishop
+                        of PromoRook:   Rook
+                        of PromoQueen:  Queen
+                    else: movingPt
+        let addIdx = featureIndex(perspective, movingColor, addPt, toSq, perspKingSq)
+        let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
         let capturedPiece = board.mailbox[toSq.int]
         if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
-            let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx1 = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
-            queue.queueAddSubSub(addIdx, subIdx1, subIdx2)
+            let capIdx = featureIndex(perspective, capturedPiece.color, capturedPiece.pieceType,
+                                      toSq, perspKingSq)
+            net.addSubSub(addIdx, subIdx, capIdx, prev, curr)
         else:
-            let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
-            queue.queueAddSub(addIdx, subIdx)
-    if perspective == White:
-        queue.apply(net, state.white[ply], state.white[ply + 1])
-    else:
-        queue.apply(net, state.black[ply], state.black[ply + 1])
+            net.addSub(addIdx, subIdx, prev, curr)
 
 proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                       state: var NNUEState) =
@@ -352,10 +313,11 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                 continue
 
         # Normal incremental update
-        computeUpdateQueue(net, board, m, perspective, state)
         if perspective == White:
+            net.applyMoveUpdate(board, m, White, state.white[ply], state.white[ply + 1])
             state.whiteNeedsRefresh[ply + 1] = false
         else:
+            net.applyMoveUpdate(board, m, Black, state.black[ply], state.black[ply + 1])
             state.blackNeedsRefresh[ply + 1] = false
 
     inc state.current
