@@ -503,8 +503,11 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
         let isOurKingMoving = (perspective == us) and (movingPt == King)
 
         if isOurKingMoving:
+            # Castling is encoded king->rook, so the king's real destination
+            # is the g- or c-file, not toSq.
             let fromFile = m.fromSq.file
-            let toFile   = m.toSq.file
+            let toFile   = if m.isCastling: (if m.fromSq.file < m.toSq.file: 6 else: 2)
+                           else: m.toSq.file
             if (fromFile > 3) != (toFile > 3):
                 if perspective == White:
                     state.whiteNeedsRefresh[ply + 1] = true
