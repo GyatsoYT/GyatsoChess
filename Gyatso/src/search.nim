@@ -801,7 +801,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
             bmIdx = i
             break
         let bmNodes = if bmIdx >= 0: info.rootMoveNodes[bmIdx] else: 0'u64
-        info.timeManager.update(depth, info.nodes, bestMove, bmNodes)
+        info.timeManager.update(depth, info.nodes, bestMove, bmNodes, bestScore)
 
         if info.timeManager.stopSoft(elapsed):
           if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)

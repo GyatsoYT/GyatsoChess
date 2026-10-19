@@ -61,6 +61,10 @@ const
   TmBmStabOffset*     = 0.9
   TmBmStabPower*      = -2.57
   TmScaleMin*         = 0.20
+  # Score-drop time scaling: scale = min(TmScoreDropMax,
+  # 1 + (avgScore - score) * TmScoreDropScale) when score falls.
+  TmScoreDropScale*   = 0.008
+  TmScoreDropMax*     = 1.50
 
 var
   gMoveOverhead*: int = MoveOverheadMs
