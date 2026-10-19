@@ -139,6 +139,20 @@ proc getNonPawnCorrection*(b: Board): int {.inline.} =
 proc getCorrection*(b: Board): int {.inline.} =
   getPawnCorrection(b) + getNonPawnCorrection(b)
 
+func corrPrefetch(p: pointer) {.importc: "__builtin_prefetch", nodecl, inline.}
+
+proc prefetchCorrection*(b: Board) {.inline.} =
+  ## Warm the three correction-table lines a child's getCorrection will read.
+  ## Called right after makeMove so the loads overlap the child's prologue.
+  if gHistData == nil: return
+  let side = b.stm.ord
+  corrPrefetch(addr gHistData.pawnCorrHist[side][
+      system.int(b.pawnHash.uint64 and CorrHistMask)])
+  corrPrefetch(addr gHistData.nonPawnCorrHist[0][side][
+      system.int(b.nonPawnHash[0].uint64 and CorrHistMask)])
+  corrPrefetch(addr gHistData.nonPawnCorrHist[1][side][
+      system.int(b.nonPawnHash[1].uint64 and CorrHistMask)])
+
 proc updateCorrEntry(entry: var int16, newWeight, scaledDiff: int) {.inline.} =
   let old = system.int(entry)
   var update = old * (CorrHistWeightScale - newWeight) + scaledDiff * newWeight

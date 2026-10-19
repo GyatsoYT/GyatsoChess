@@ -22,7 +22,7 @@ const Unknown* = high(int)
 type
   SearchStackEntry* = object
     move*: Move
-    piece*: int
+    piece*: uint8
     staticEval*: int
     rawEval*: int
 
@@ -118,7 +118,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   var curAlpha = max(alpha, standPat)
 
-  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
 
   var picker {.noinit.}: MovePicker
@@ -131,13 +131,16 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     let m = picker.next()
     if m == NullMove: break
 
-    if not inCheckQ and m.isPromotion() and not see(b, m, 0):
+    # Promotions from StageGoodNoisies already passed see(m, 0); from
+    # StageBadNoisies they already failed it. (qsearch passes NullMove
+    # as ttMove, so no other stage yields promotions.)
+    if not inCheckQ and m.isPromotion() and picker.stage == StageBadNoisies:
       continue
 
-    stack[ply].move = m
     nnuePush(b, m, nnue[])
     b.makeMove(m)
-    prefetchTT(cast[system.uint64](b.hash))
+    prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
+    prefetchCorrection(b)
     let score = -qSearch(b, -beta, -curAlpha, ply + 1, info, stack)
     b.unmakeMove(m)
     nnuePop(nnue[])
@@ -168,6 +171,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   if checkStop(info):
     return 0
+  # `info.stopFlag` is set once before the search and never reassigned; keep a
+  # local so the per-move checks don't re-load it through the var parameter.
+  let stopFlag = info.stopFlag
 
   # Clear PV length for this ply — will be populated if we find a best move.
   info.pvLen[ply] = 0
@@ -286,7 +292,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     b.unmakeNullMove()
     nnuePopNull(nnue[])
 
-    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+    if stopFlag != nil and stopFlag[].load(moAcquire):
       return 0
 
     if nullScore >= beta:
@@ -301,10 +307,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
-  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
-  let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
-      2].piece else: -1
+  let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: system.int(stack[ply -
+      2].piece) else: -1
   let prev2ToSq = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
       2].move.histToSq.int else: -1
 
@@ -318,7 +324,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var curAlpha = alpha
   var bestMove = NullMove
 
-  var triedQuiets: array[128, Move]
+  var triedQuiets {.noinit.}: array[128, Move]
   var triedQuietsLen = 0
   var movesSearched = 0
 
@@ -368,11 +374,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        not see(b, m, StaticPruning[depth]):
       continue
 
-    # Noisy SEE Pruning
+    # Noisy SEE Pruning.
+    # Moves yielded during StageGoodNoisies already passed see(m, 0) inside
+    # picker.next(); SEEPruning[depth] <= 0 for all d, and see() is monotone
+    # in its threshold, so the check is guaranteed to pass there. TT moves
+    # and StageBadNoisies moves still need the real test.
     if movesSearched > 0 and
        not inCheck and
        not isQuiet and
        not m.isPromotion() and
+       picker.stage != StageGoodNoisies and
        abs(curAlpha) < MateThreshold and
        not see(b, m, SEEPruning[depth]):
       continue
@@ -399,7 +410,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                                          excludedMove = ttMove)
       info.pvLen[ply] = 0
 
-      if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+      if stopFlag != nil and stopFlag[].load(moAcquire):
         return 0
 
       if singularScore < sBeta:
@@ -418,19 +429,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         singularExtension = min(singularExtension + SeRecaptureExt, SeRecaptureCap)
 
     stack[ply].move = m
-    stack[ply].piece = ord(b.mailbox[m.fromSq.int])
+    stack[ply].piece = uint8(ord(b.mailbox[m.fromSq.int]))
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
 
+    # historyTable lookup is only needed for quiet moves; defer it into the
+    # isQuiet branch of the LMR block so noisy moves skip the memory read.
     let lmrStm = b.stm.ord
-    let lmrHistScore = system.int(historyTable[lmrStm][m.fromSq.int][
-        histToSqInt][fromAttacked][toAttacked])
+
 
     let prevNodes = if ply == 0: info.nodes else: 0'u64
 
     nnuePush(b, m, nnue[])
     b.makeMove(m)
+    # The child's TT cluster and evalCache slot are both keyed on its hash;
+    # start both loads now so the probes pay less latency.
     prefetchTT(cast[system.uint64](b.hash))
+    prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
+    prefetchCorrection(b)
 
     # Check Extension and Singular Extension
     let givesCheck = not b.checkers.isEmpty
@@ -462,9 +478,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
         # History-based LMR adjustment
         if isQuiet:
-          let curPiece = stack[ply].piece
+          let curPiece = system.int(stack[ply].piece)
           let curToSq = histToSqInt
-          var histAdj = lmrHistScore
+          var histAdj = system.int(historyTable[lmrStm][m.fromSq.int][
+              histToSqInt][fromAttacked][toAttacked])
           # 1-ply continuation history
           if prevPiece >= 0:
             histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
@@ -521,7 +538,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           info.rootMoveNodes[rIdx] += deltaNodes
           break
 
-    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+    if stopFlag != nil and stopFlag[].load(moAcquire):
       return 0
 
     inc movesSearched
@@ -544,7 +561,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               let malus = -bonus
               updateHistory(b, m, bonus)
               if prevPiece >= 0:
-                let curPiece = stack[ply].piece
+                let curPiece = system.int(stack[ply].piece)
                 let curToSq = histToSqInt
                 updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
                 if prev2Piece >= 0:
@@ -671,7 +688,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
   var stack: SearchStack
   for i in 0 .. MaxPly + 1:
     stack[i].move = NullMove
-    stack[i].piece = 0
+    stack[i].piece = 0'u8
     stack[i].staticEval = Unknown
     stack[i].rawEval = Unknown
 

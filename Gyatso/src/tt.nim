@@ -97,11 +97,11 @@ proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
       var tp: bool
       unpackData(dataVal, m, s, d, b, g, e, tp)
 
-      move  = m
+      move = m
       depth = int(d)
       bound = b
-      eval  = e
-      ttPv  = tp
+      eval = e
+      ttPv = tp
 
       var finalScore = int(s)
       if finalScore > MateThreshold:
@@ -141,17 +141,14 @@ proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
       target = i
       break
 
-    var eg: uint8
-    var em: Move
-    var es: int16
-    var ed: int8
-    var eb: uint8
-    var ee: int16
-    var etp: bool
-    unpackData(entryData, em, es, ed, eb, eg, ee, etp)
+    # Only depth and generation fields feed the replacement score; decode
+    # just those instead of unpacking all seven fields. Depth is stored
+    # sign-extended as int8.
+    let ed = system.int(cast[int8](uint8((entryData shr 32) and 0xFF'u64)))
+    let eg = uint8((entryData shr 42) and 0x1F'u64)
 
     let relativeAge  = int((32'u16 + uint16(ttGeneration) - uint16(eg)) and 31'u16)
-    let replaceScore = int(ed) - relativeAge * 2
+    let replaceScore = ed - relativeAge * 2
 
     if replaceScore < minScore:
       minScore = replaceScore

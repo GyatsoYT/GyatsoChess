@@ -34,15 +34,44 @@ const mvvlvaAttackerPenalty: array[PieceType, int] = [
 func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
   mvvlvaVictimBonus[victimPt] * 8 - mvvlvaAttackerPenalty[attackerPt]
 
+# Finds the first index in `cur ..< count` holding the maximum score and swaps
+# it into position `cur`. The search must keep the FIRST max (the scalar loop
+# only replaces `best` on a strictly greater score), so the SIMD scan uses
+# strictly-greater lane masks and earliest-lane wins.
+when defined(avx2):
+  import std/bitops
+  import nimsimd/avx2
+  import nimsimd/avx
+  import nimsimd/sse2
+
 proc pickBest(moves: var array[256, Move],
               scores: var array[256, int32],
               cur, count: int): Move {.inline.} =
   var bestIdx    = cur
   var bestScore = scores[cur]
-  for i in (cur + 1) ..< count:
+  var i = cur + 1
+  when defined(avx2):
+    # SIMD pays off only when enough tail remains to amortize the setup.
+    if count - i >= 64:
+      while i + 8 <= count:
+        let chunk = mm256_loadu_si256(cast[ptr M256i](addr scores[i]))
+        let thr   = mm256_cmpgt_epi32(chunk, mm256_set1_epi32(bestScore))
+        var mask  = uint32(bitand(mm256_movemask_ps(mm256_castsi256_ps(thr)), 0xFF))
+        # Only lanes beating the pre-chunk best are candidates; each accepted
+        # lane raises bestScore, so later lanes must re-validate — this keeps
+        # strict first-maximum semantics identical to the scalar loop.
+        while mask != 0:
+          let j = countTrailingZeroBits(mask)
+          mask = mask and (mask - 1)
+          if scores[i + j] > bestScore:
+            bestScore = scores[i + j]
+            bestIdx   = i + j
+        i += 8
+  while i < count:
     if scores[i] > bestScore:
       bestScore = scores[i]
-      bestIdx    = i
+      bestIdx   = i
+    inc i
   if bestIdx != cur:
     let tmpMove     = moves[cur]
     let tmpScore    = scores[cur]

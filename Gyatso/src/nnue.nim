@@ -314,8 +314,7 @@ proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
     state.current = 0
     for p in [White, Black]:
         net.refreshAccumulator(board, state.acc[p][0], p)
-        state.computed[p][0] = true
-        state.needsRefresh[p][0] = false
+        state.accFlags[p][0] = AccComputed
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     var pairwise {.noinit.}: array[HL, uint8]
@@ -366,20 +365,19 @@ proc updateAccumulator(net: ptr NNUENetwork, board: Board, state: var NNUEState,
     ## the root is always computed, so the backward walk terminates on a
     ## valid accumulator.
     let n = state.current
-    if state.computed[p][n]:
+    if (state.accFlags[p][n] and AccComputed) != 0:
         return
-    if state.needsRefresh[p][n]:
+    if (state.accFlags[p][n] and AccNeedsRefresh) != 0:
         net.refreshAccumulator(board, state.acc[p][n], p)
-        state.needsRefresh[p][n] = false
-        state.computed[p][n] = true
+        state.accFlags[p][n] = AccComputed
         return
     var j = n - 1
-    while not state.computed[p][j]:
+    while (state.accFlags[p][j] and AccComputed) == 0:
         dec j
     while j < n:
         net.applyDelta(state.delta[p][j + 1], state.acc[p][j], state.acc[p][j + 1])
         inc j
-        state.computed[p][j] = true
+        state.accFlags[p][j] = AccComputed
 
 proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
     let ply = state.current
@@ -470,6 +468,99 @@ func computeDelta(board: Board, m: Move, perspective: Color): AccumulatorDelta {
             let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
             addSub(addIdx, subIdx)
 
+proc computeDeltaBoth(board: Board, m: Move,
+                      deltas: var array[Color, AccumulatorDelta]) {.inline.} =
+    ## Computes both perspectives' deltas in one pass: the move is decoded
+    ## once, and each feature event fans out to White and Black indices.
+    let us = board.stm
+    let them = us.opposite()
+    let fromSq = m.fromSq
+    let toSq = m.toSq
+    let movingPiece = board.mailbox[fromSq.int]
+    let movingPt = movingPiece.pieceType
+    let movingColor = movingPiece.color
+
+    template addSub2(p: Color, pcA, ptA, pcS, ptS: untyped, sqA, sqS: Square) =
+        let k = if p == White: board.kingSquare(White)
+                else: board.kingSquare(Black)
+        deltas[p].adds[deltas[p].addCount] =
+          uint16(featureIndex(p, pcA, ptA, sqA, k))
+        inc deltas[p].addCount
+        deltas[p].subs[deltas[p].subCount] =
+          uint16(featureIndex(p, pcS, ptS, sqS, k))
+        inc deltas[p].subCount
+
+    for p in [White, Black]:
+        if m.isCastling:
+            let kingFrom = fromSq
+            let rookFrom = toSq
+            let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
+            let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
+            addSub2(p, us, King, us, King, kingTo, kingFrom)
+            addSub2(p, us, Rook, us, Rook, rookTo, rookFrom)
+
+        elif m.isEnPassant:
+            let capSq = if us == White: (toSq.int - 8).Square
+                        else: (toSq.int + 8).Square
+            let k = if p == White: board.kingSquare(White)
+                    else: board.kingSquare(Black)
+            deltas[p].adds[deltas[p].addCount] =
+              uint16(featureIndex(p, us, Pawn, toSq, k))
+            inc deltas[p].addCount
+            deltas[p].subs[deltas[p].subCount] =
+              uint16(featureIndex(p, us, Pawn, fromSq, k))
+            inc deltas[p].subCount
+            deltas[p].subs[deltas[p].subCount] =
+              uint16(featureIndex(p, them, Pawn, capSq, k))
+            inc deltas[p].subCount
+
+
+        elif m.isPromotion:
+            let promoPt = case m.promoType
+                of PromoKnight: Knight
+                of PromoBishop: Bishop
+                of PromoRook:   Rook
+                of PromoQueen:  Queen
+            let capturedPiece = board.mailbox[toSq.int]
+            if capturedPiece != NoPiece:
+                let capturedPt    = capturedPiece.pieceType
+                let capturedColor = capturedPiece.color
+                # add: promoPt at toSq; sub: pawn at fromSq; sub: captured at toSq
+                let k = if p == White: board.kingSquare(White)
+                        else: board.kingSquare(Black)
+                deltas[p].adds[deltas[p].addCount] =
+                  uint16(featureIndex(p, us, promoPt, toSq, k))
+                inc deltas[p].addCount
+                deltas[p].subs[deltas[p].subCount] =
+                  uint16(featureIndex(p, us, Pawn, fromSq, k))
+                inc deltas[p].subCount
+                deltas[p].subs[deltas[p].subCount] =
+                  uint16(featureIndex(p, capturedColor, capturedPt, toSq, k))
+                inc deltas[p].subCount
+            else:
+                addSub2(p, us, promoPt, us, Pawn, toSq, fromSq)
+
+        else:
+            let capturedPiece = board.mailbox[toSq.int]
+            if capturedPiece != NoPiece:
+                let capturedPt    = capturedPiece.pieceType
+                let capturedColor = capturedPiece.color
+                # add: mover at toSq; sub: mover at fromSq; sub: captured at toSq
+                let k = if p == White: board.kingSquare(White)
+                        else: board.kingSquare(Black)
+                deltas[p].adds[deltas[p].addCount] =
+                  uint16(featureIndex(p, movingColor, movingPt, toSq, k))
+                inc deltas[p].addCount
+                deltas[p].subs[deltas[p].subCount] =
+                  uint16(featureIndex(p, movingColor, movingPt, fromSq, k))
+                inc deltas[p].subCount
+                deltas[p].subs[deltas[p].subCount] =
+                  uint16(featureIndex(p, capturedColor, capturedPt, toSq, k))
+                inc deltas[p].subCount
+            else:
+                addSub2(p, movingColor, movingPt, movingColor, movingPt,
+                        toSq, fromSq)
+
 proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
                       state: var NNUEState) =
     ## Record the move's feature delta; it is applied only if a descendant
@@ -478,25 +569,33 @@ proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
     let us = board.stm
     let movingPt = board.mailbox[m.fromSq.int].pieceType
 
+    # Compute both perspectives' deltas in one pass (the move is decoded
+    # once); each is stored only if the child ply doesn't need a refresh.
+    var deltas {.noinit.}: array[Color, AccumulatorDelta]
+    for p in [White, Black]:
+        deltas[p].addCount = 0
+        deltas[p].subCount = 0
+    computeDeltaBoth(board, m, deltas)
+
+
     for perspective in [White, Black]:
         # The board is at this ply only now, so a pending refresh must be
         # resolved before the next ply can depend on it.
-        if state.needsRefresh[perspective][ply]:
+        if (state.accFlags[perspective][ply] and AccNeedsRefresh) != 0:
             net.refreshAccumulator(board, state.acc[perspective][ply], perspective)
-            state.needsRefresh[perspective][ply] = false
-            state.computed[perspective][ply] = true
+            state.accFlags[perspective][ply] = AccComputed
 
-        state.computed[perspective][ply + 1] = false
+        state.accFlags[perspective][ply + 1] = 0
         # Castling is encoded king->rook, so the king's real destination is
         # the g- or c-file, not toSq.
         let kingToFile = if m.isCastling: (if m.fromSq.file < m.toSq.file: 6 else: 2)
                          else: m.toSq.file
         if perspective == us and movingPt == King and
                 (m.fromSq.file > 3) != (kingToFile > 3):
-            state.needsRefresh[perspective][ply + 1] = true
+            state.accFlags[perspective][ply + 1] = AccNeedsRefresh
         else:
-            state.needsRefresh[perspective][ply + 1] = false
-            state.delta[perspective][ply + 1] = computeDelta(board, m, perspective)
+            state.accFlags[perspective][ply + 1] = 0
+            state.delta[perspective][ply + 1] = deltas[perspective]
 
     inc state.current
 
@@ -508,8 +607,7 @@ proc pushNullMove*(state: var NNUEState) =
     ## delta, or inherits a pending refresh (the board has the same pieces).
     let ply = state.current
     for p in [White, Black]:
-        state.computed[p][ply + 1] = false
-        state.needsRefresh[p][ply + 1] = state.needsRefresh[p][ply]
+        state.accFlags[p][ply + 1] = state.accFlags[p][ply] and AccNeedsRefresh
         state.delta[p][ply + 1] = AccumulatorDelta()
     inc state.current
 
