@@ -67,6 +67,16 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
 
 LDFLAGS = -O3 -flto $(LD_LLD)
 
+PGO_DIR ?= pgo
+ifdef PGO_GEN
+CFLAGS  += -fprofile-generate=$(PGO_DIR)
+LDFLAGS += -fprofile-generate=$(PGO_DIR)
+endif
+ifdef PGO_USE
+CFLAGS  += -fprofile-use=$(PGO_DIR)/merged.profdata
+LDFLAGS += -fprofile-use=$(PGO_DIR)/merged.profdata
+endif
+
 .PHONY: all build datagen-stats clean help check-deps
 
 all: build

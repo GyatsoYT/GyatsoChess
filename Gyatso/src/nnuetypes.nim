@@ -10,7 +10,7 @@ const
   QA*        = 255   
   QB*        = 64    
   EVAL_SCALE* = 400
-  EvalCacheSize* = 65536
+  EvalCacheSize* = 131072
 
 const IsaName* =
   when defined(avx512vnni): "avx512+vnni"
@@ -19,6 +19,10 @@ const IsaName* =
   elif defined(avx2): "avx2"
   elif defined(neon) or defined(arm64) or defined(aarch64): "neon"
   else: "scalar"
+
+const
+  AccComputed* = 1'u8
+  AccNeedsRefresh* = 2'u8
 
 type
   Accumulator* = object
@@ -54,10 +58,9 @@ type
     ## Accumulator at [persp][ply] holds valid values. Updates are applied
     ## lazily: a push only records the delta, and evaluation walks back to
     ## the nearest computed ancestor and replays the pending deltas.
-    computed*: array[Color, array[MaxPly + 1, bool]]
-    ## King crossed the mirror boundary; recompute from the board instead
-    ## of applying a delta. Resolved at the latest when pushing from that ply.
-    needsRefresh*: array[Color, array[MaxPly + 1, bool]]
+    ## packed: bit0 = computed, bit1 = needsRefresh (a pending king-mirror
+    ## refresh; resolved no later than the next push from that ply).
+    accFlags*: array[Color, array[MaxPly + 1, uint8]]
     delta*: array[Color, array[MaxPly + 1, AccumulatorDelta]]
     ## Per-thread cache of final evaluations keyed by full Zobrist hash.
     ## NNUE output depends only on piece placement and side to move, both

@@ -83,17 +83,18 @@ proc see*(b: Board, m: Move, threshold: int = 0): bool =
                     b.pieces(Queen,  White) or b.pieces(Queen,  Black)
   let hvSliders   = b.pieces(Rook,  White) or b.pieces(Rook,  Black)  or
                     b.pieces(Queen,  White) or b.pieces(Queen,  Black)
-  let whiteKingSq = b.kingSquare(White)
-  let blackKingSq = b.kingSquare(Black)
-
-  let whiteKingRay = rayBetween(whiteKingSq, sq) or sq.bit
-  let blackKingRay = rayBetween(blackKingSq, sq) or sq.bit
-
-  let allowed = not (b.pinHV or b.pinD12) or
-                (b.pinHV and whiteKingRay) or
-                (b.pinD12 and whiteKingRay) or
-                (b.pinHV and blackKingRay) or
-                (b.pinD12 and blackKingRay)
+  # In most positions nothing is pinned; skip the king-ray computation.
+  var allowed = AllSquares
+  if not (b.pinHV or b.pinD12).isEmpty:
+    let whiteKingSq = b.kingSquare(White)
+    let blackKingSq = b.kingSquare(Black)
+    let whiteKingRay = rayBetween(whiteKingSq, sq) or sq.bit
+    let blackKingRay = rayBetween(blackKingSq, sq) or sq.bit
+    allowed = not (b.pinHV or b.pinD12) or
+              (b.pinHV and whiteKingRay) or
+              (b.pinD12 and whiteKingRay) or
+              (b.pinHV and blackKingRay) or
+              (b.pinD12 and blackKingRay)
 
   var attackers = b.attackersTo(sq, occ) and allowed
 

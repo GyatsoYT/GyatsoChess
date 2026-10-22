@@ -23,6 +23,12 @@ proc evaluate*(b: Board, state: var NNUEState): int {.inline.} =
     result = -MateThreshold
   entry[] = (key and KeyMask) or uint64(cast[uint16](int16(result)))
 
+func evalCachePrefetch(p: pointer) {.importc: "__builtin_prefetch", nodecl, inline.}
+
+proc prefetchEvalCache*(state: var NNUEState, key: uint64) {.inline.} =
+  ## Warm the evalCache line for `key` ahead of the child's evaluate() call.
+  evalCachePrefetch(addr state.evalCache[key and uint64(EvalCacheSize - 1)])
+
 proc refreshNNUE*(b: Board, state: var NNUEState) {.inline.} =
   refreshState(addr gNetwork, b, state)
 

@@ -52,3 +52,5 @@ tests/*.out
 # Custom build directories
 builds/
 dist/
+
+/gyatso_bench

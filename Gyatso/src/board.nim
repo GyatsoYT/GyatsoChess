@@ -63,6 +63,9 @@ type
     ## ensureAttackState before reading them after makeMove.
     attackStateValid*: bool
     history*: array[1024, UndoInfo]
+    ## repHash[i] == history[i].hash (the hash before move i was made).
+    ## Kept contiguous so isRepetition scans 8-byte stride instead of ~80-byte.
+    repHash*: array[1024, ZobristKey]
     histLen*: int
 
 func pieceOn*(b: Board, sq: Square): Piece {.inline.} =
@@ -150,7 +153,20 @@ proc attackersTo*(b: Board, sq: Square, occ: Bitboard, them: Color): Bitboard =
   (getKingAttacks(sq) and enemyKing)
 
 proc attackersTo*(b: Board, sq: Square, occ: Bitboard): Bitboard {.inline.} =
-  b.attackersTo(sq, occ, White) or b.attackersTo(sq, occ, Black)
+  # Fused two-color version: per-color attackersTo would compute the slider
+  # attacks (magic lookups) twice; the result is identical.
+  let diag = getBishopAttacks(sq, occ)
+  let hv   = getRookAttacks(sq, occ)
+  let diagSliders = b.byPiece[Bishop.ord] or b.byPiece[Bishop.ord + 6] or
+                    b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+  let hvSliders   = b.byPiece[Rook.ord]   or b.byPiece[Rook.ord + 6] or
+                    b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+  (getPawnAttacks(sq, Black) and b.byPiece[Pawn.ord]) or
+  (getPawnAttacks(sq, White) and b.byPiece[Pawn.ord + 6]) or
+  (getKnightAttacks(sq) and (b.byPiece[Knight.ord] or b.byPiece[Knight.ord + 6])) or
+  (diag and diagSliders) or
+  (hv and hvSliders) or
+  (getKingAttacks(sq) and (b.byPiece[King.ord] or b.byPiece[King.ord + 6]))
 
 func pawnAttackLeft(bb: Bitboard, c: Color): Bitboard {.inline.} =
   if c == White: (bb and not FileA) shl 7
@@ -478,20 +494,20 @@ proc makeMove*(b: var Board, m: Move) =
   else:
     captured = b.mailbox[toSq.int]
 
-  b.history[b.histLen] = UndoInfo(
-    hash: b.hash,
-    pawnHash: b.pawnHash,
-    nonPawnHash: b.nonPawnHash,
-    castlingRooks: b.castlingRooks,
-    epSquare: b.epSquare,
-    halfmove: b.halfmove,
-    captured: captured,
-    checkers: b.checkers,
-    pinHV: b.pinHV,
-    pinD12: b.pinD12,
-    threats: b.threats,
-    attackStateValid: b.attackStateValid
-  )
+  let undo = addr b.history[b.histLen]
+  undo.hash             = b.hash
+  undo.pawnHash         = b.pawnHash
+  undo.nonPawnHash      = b.nonPawnHash
+  undo.castlingRooks    = b.castlingRooks
+  undo.epSquare         = b.epSquare
+  undo.halfmove         = b.halfmove
+  undo.captured         = captured
+  undo.checkers         = b.checkers
+  undo.pinHV            = b.pinHV
+  undo.pinD12           = b.pinD12
+  undo.threats          = b.threats
+  undo.attackStateValid = b.attackStateValid
+  b.repHash[b.histLen] = b.hash
   inc b.histLen
 
   b.hash = b.hash xor castlingKeys[b.castlingRooks.rightsMask]
@@ -567,7 +583,7 @@ proc makeMove*(b: var Board, m: Move) =
 
 proc unmakeMove*(b: var Board, m: Move) =
   dec b.histLen
-  let undo = b.history[b.histLen]
+  let undo = addr b.history[b.histLen]
 
   let fromSq = m.fromSq
   let toSq = m.toSq
@@ -619,20 +635,20 @@ proc unmakeMove*(b: var Board, m: Move) =
 proc makeNullMove*(b: var Board) =
   doAssert b.histLen < 1024
 
-  b.history[b.histLen] = UndoInfo(
-    hash: b.hash,
-    pawnHash: b.pawnHash,
-    nonPawnHash: b.nonPawnHash,
-    castlingRooks: b.castlingRooks,
-    epSquare: b.epSquare,
-    halfmove: b.halfmove,
-    captured: NoPiece,
-    checkers: b.checkers,
-    pinHV: b.pinHV,
-    pinD12: b.pinD12,
-    threats: b.threats,
-    attackStateValid: b.attackStateValid
-  )
+  let undo = addr b.history[b.histLen]
+  undo.hash             = b.hash
+  undo.pawnHash         = b.pawnHash
+  undo.nonPawnHash      = b.nonPawnHash
+  undo.castlingRooks    = b.castlingRooks
+  undo.epSquare         = b.epSquare
+  undo.halfmove         = b.halfmove
+  undo.captured         = NoPiece
+  undo.checkers         = b.checkers
+  undo.pinHV            = b.pinHV
+  undo.pinD12           = b.pinD12
+  undo.threats          = b.threats
+  undo.attackStateValid = b.attackStateValid
+  b.repHash[b.histLen] = b.hash
   inc b.histLen
 
   if b.epSquare != NoSquare:
@@ -649,11 +665,15 @@ proc makeNullMove*(b: var Board) =
 
   b.hash = b.hash xor sideKey
 
-  updateAttackState(b)
+  # A null move cannot give check: occupancy is unchanged, so the new stm's
+  # king has the same attackers it had before — none, in a legal position.
+  # Pins/threats are stm-relative and must still be recomputed lazily.
+  b.checkers = Bitboard(0)
+  b.attackStateValid = false
 
 proc unmakeNullMove*(b: var Board) =
   dec b.histLen
-  let undo = b.history[b.histLen]
+  let undo = addr b.history[b.histLen]
 
   b.castlingRooks = undo.castlingRooks
   b.epSquare = undo.epSquare
@@ -674,10 +694,19 @@ proc unmakeNullMove*(b: var Board) =
   dec b.gamePly
 
 func isRepetition*(b: Board): bool {.inline.} =
+  # A repetition needs at least 4 plies; skip the scan entirely below that.
+  if b.halfmove < 4 or b.histLen < 2:
+    return false
   let limit = max(0, b.histLen - system.int(b.halfmove))
   var i = b.histLen - 2
+  # Two comparisons per iteration: amortizes the loop/branch cost over
+  # the step-2 scan.
+  while i >= limit + 2:
+    if b.repHash[i] == b.hash or b.repHash[i - 2] == b.hash:
+      return true
+    dec(i, 4)
   while i >= limit:
-    if b.history[i].hash == b.hash:
+    if b.repHash[i] == b.hash:
       return true
     dec(i, 2)
   return false
