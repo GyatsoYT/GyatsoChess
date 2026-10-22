@@ -25,6 +25,8 @@ type
     piece*: uint8
     staticEval*: int
     rawEval*: int
+    reduction*: int
+    quietMove*: bool
 
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
@@ -240,6 +242,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         MateThreshold - 1)
   let staticEval = stack[ply].staticEval
 
+  if not pvNode and not inCheck and not isSingularSearch and ply > 0 and
+      depth < MaxPly and
+      stack[ply - 1].reduction >= HindsightMinReduction and
+      stack[ply - 1].quietMove and
+      stack[ply - 1].staticEval != Unknown and
+      staticEval < alpha and
+      staticEval + stack[ply - 1].staticEval < 0:
+    inc depth
+
   # Improving flag and delta (improvement) calculation
   var improving = false
   var improvement = 0
@@ -280,6 +291,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
     stack[ply].move = NullMove
+    stack[ply].reduction = 0
+    stack[ply].quietMove = false
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
     nnuePushNull(nnue[])
@@ -430,6 +443,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     stack[ply].move = m
     stack[ply].piece = uint8(ord(b.mailbox[m.fromSq.int]))
+    stack[ply].reduction = 0
+    stack[ply].quietMove = isQuiet
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
 
@@ -515,8 +530,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                          else: newDepth
 
       # Null-window search
+      stack[ply].reduction = reduction
       score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply +
           1, info, stack, cutnode = not cutnode)
+      stack[ply].reduction = 0
 
       # Re-search at full depth if LMR raised alpha
       if reduction > 0 and score > curAlpha:

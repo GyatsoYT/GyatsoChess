@@ -2,6 +2,7 @@ import std/math
 import coretypes
 
 const
+  HindsightMinReduction* = 2
   NmpMinDepth* = 3
   NmpMinPly* = 1
   NmpBaseR* = 2
