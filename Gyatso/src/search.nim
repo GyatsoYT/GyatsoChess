@@ -442,10 +442,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     nnuePush(b, m, nnue[])
     b.makeMove(m)
+    let childHash = cast[system.uint64](b.hash)
     # The child's TT cluster and evalCache slot are both keyed on its hash;
     # start both loads now so the probes pay less latency.
-    prefetchTT(cast[system.uint64](b.hash))
-    prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
+    prefetchTT(childHash)
+    prefetchEvalCache(nnue[], childHash)
     prefetchCorrection(b)
 
     # Check Extension and Singular Extension
@@ -498,6 +499,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         if cutnode and isQuiet:
           inc reduction
 
+        if reduction > 0:
+          let childRegret = probeTTRegret(childHash)
+          if childRegret >= 12:
+            reduction -= 2
+          elif childRegret >= 6:
+            dec reduction
+
         # Clamp reduction to valid range
         if gSmpThreadCount > 1:
           let phase = system.int((info.nodes + system.uint64(info.id) * 23) mod 100)
@@ -519,7 +527,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           1, info, stack, cutnode = not cutnode)
 
       # Re-search at full depth if LMR raised alpha
+      var reducedScore = -Infinity
+      var verifiedReduction = false
       if reduction > 0 and score > curAlpha:
+        reducedScore = score
+        verifiedReduction = true
         score = -negamax[false](b, newDepth, -curAlpha - 1, -curAlpha, ply + 1,
             info, stack, cutnode = not cutnode)
 
@@ -527,6 +539,13 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       if score > curAlpha and score < beta:
         score = -negamax[true](b, newDepth, -beta, -curAlpha, ply + 1, info,
             stack, cutnode = false)
+
+      if verifiedReduction and score > curAlpha and score < beta and
+          abs(score) < MateThreshold and abs(reducedScore) < MateThreshold and
+          (stopFlag == nil or not stopFlag[].load(moAcquire)):
+        let regretSample = uint8(clamp(max(0, score - reducedScore) div 16,
+            0, system.int(MaxRegret)))
+        updateTTRegret(childHash, regretSample)
 
     b.unmakeMove(m)
     nnuePop(nnue[])

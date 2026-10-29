@@ -1,3 +1,4 @@
+import std/atomics
 import coretypes
 
 const
@@ -8,6 +9,7 @@ const
   EntriesPerCluster* = 3
 
   NoEval* = 32767'i16
+  MaxRegret* = 15'u8
 
 type
   TTEntry* = object
@@ -19,6 +21,7 @@ type
 
 var
   ttTable*:      ptr UncheckedArray[TTCluster] = nil
+  ttRegret:       ptr UncheckedArray[Atomic[uint8]] = nil
   ttMask*:       uint64 = 0
   ttGeneration*: uint8  = 0
 
@@ -27,6 +30,9 @@ func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builti
 proc prefetchTT*(key: uint64) {.inline.} =
   if ttTable != nil:
     prefetch(addr ttTable[key and ttMask], 0, 3)
+    if ttRegret != nil:
+      let regretIndex = (key and ttMask) * uint64(EntriesPerCluster)
+      prefetch(addr ttRegret[regretIndex], 0, 3)
 
 proc newTTGeneration*() {.inline.} =
   inc ttGeneration
@@ -58,6 +64,9 @@ proc initTT*(sizeMB: int) =
   if ttTable != nil:
     deallocShared(ttTable)
     ttTable = nil
+  if ttRegret != nil:
+    deallocShared(ttRegret)
+    ttRegret = nil
 
   if sizeMB <= 0:
     ttMask = 0
@@ -75,6 +84,48 @@ proc initTT*(sizeMB: int) =
 
   ttMask = numClusters - 1
   ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(numClusters * uint64(clusterSize)))
+  ttRegret = cast[ptr UncheckedArray[Atomic[uint8]]](allocShared0(
+      numClusters * uint64(EntriesPerCluster) * uint64(sizeof(Atomic[uint8]))))
+
+proc probeTTRegret*(key: uint64): int {.inline.} =
+  if ttTable == nil or ttRegret == nil or ttMask == 0: return 0
+
+  let clusterIndex = key and ttMask
+  let cluster = addr ttTable[clusterIndex]
+
+  for i in 0 ..< EntriesPerCluster:
+    let entry = cluster.entries[i]
+    if (entry.key xor entry.data) == key:
+      let regretIndex = clusterIndex * uint64(EntriesPerCluster) + uint64(i)
+      return int(ttRegret[regretIndex].load(moRelaxed) and MaxRegret)
+
+  return 0
+
+proc updateTTRegret*(key: uint64, sample: uint8) {.inline.} =
+  if ttTable == nil or ttRegret == nil or ttMask == 0: return
+
+  let clusterIndex = key and ttMask
+  let cluster = addr ttTable[clusterIndex]
+
+  for i in 0 ..< EntriesPerCluster:
+    let entry = cluster.entries[i]
+    if (entry.key xor entry.data) == key:
+      let regretIndex = clusterIndex * uint64(EntriesPerCluster) + uint64(i)
+      let riskSample = min(sample, MaxRegret)
+      var oldRegret = ttRegret[regretIndex].load(moRelaxed) and MaxRegret
+      while true:
+        let newRegret = uint8((3 * int(oldRegret) + int(riskSample)) div 4)
+        var expected = oldRegret
+        if ttRegret[regretIndex].compareExchange(expected, newRegret,
+            moRelaxed, moRelaxed):
+          let currentEntry = cluster.entries[i]
+          if (currentEntry.key xor currentEntry.data) != key:
+            var staleRegret = newRegret
+            discard ttRegret[regretIndex].compareExchange(staleRegret, 0'u8,
+                moRelaxed, moRelaxed)
+          break
+        oldRegret = expected and MaxRegret
+      return
 
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
               depth: var int, bound: var uint8, eval: var int16,
@@ -153,6 +204,11 @@ proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
     if replaceScore < minScore:
       minScore = replaceScore
       target = i
+
+  let oldEntry = cluster.entries[target]
+  if ttRegret != nil and (oldEntry.key xor oldEntry.data) != key:
+    let regretIndex = (key and ttMask) * uint64(EntriesPerCluster) + uint64(target)
+    ttRegret[regretIndex].store(0'u8, moRelaxed)
 
   cluster.entries[target].data = dataVal
   cluster.entries[target].key  = key xor dataVal
