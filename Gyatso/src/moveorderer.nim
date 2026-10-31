@@ -98,6 +98,8 @@ type MovePicker* = object
   prevToSq*:       int
   prev2Piece*:     int
   prev2ToSq*:      int
+  prev4Piece*:     int
+  prev4ToSq*:      int
   stage*:          MovePickerStage
   noisyMoves:      MoveList
   noisyScores:     array[256, int32]
@@ -154,7 +156,8 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
   int32(GoodCaptureBase + promoBonus + mvvlva)
 
 proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
-                 ply, prevPiece, prevToSq, prev2Piece, prev2ToSq: int) {.inline.} =
+                 ply, prevPiece, prevToSq, prev2Piece, prev2ToSq,
+                 prev4Piece, prev4ToSq: int) {.inline.} =
   ## Thread-local tables and continuation rows are resolved once per batch
   ## instead of once per move.
   let killer0 = killerMoves[ply][0]
@@ -164,6 +167,7 @@ proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
   let threats = b.threats
   let cont1 = if prevPiece >= 0: addr hist.continuationHistory[prevPiece][prevToSq] else: nil
   let cont2 = if prev2Piece >= 0: addr hist.continuationHistory2[prev2Piece][prev2ToSq] else: nil
+  let cont4 = if prev4Piece >= 0: addr hist.continuationHistory4[prev4Piece][prev4ToSq] else: nil
   for i in 0 ..< ml.len:
     let m = ml.moves[i]
     if m == killer0:
@@ -182,12 +186,15 @@ proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
       score += 2 * system.int(cont1[][curPiece][toSq])
     if cont2 != nil:
       score += system.int(cont2[][curPiece][toSq])
+    if cont4 != nil:
+      score += system.int(cont4[][curPiece][toSq])
     scores[i] = int32(score)
 
 proc initMovePicker*(picker: var MovePicker, b: ptr Board,
                      ttMove: Move,
                      ply, prevPiece, prevToSq,
-                     prev2Piece, prev2ToSq: int,
+                     prev2Piece, prev2ToSq,
+                     prev4Piece, prev4ToSq: int,
                      inCheck, isQSearch: bool) {.inline.} =
   # Search reads threats/pins for every move it gets from the picker.
   b[].ensureAttackState()
@@ -198,6 +205,8 @@ proc initMovePicker*(picker: var MovePicker, b: ptr Board,
   picker.prevToSq       = prevToSq
   picker.prev2Piece     = prev2Piece
   picker.prev2ToSq      = prev2ToSq
+  picker.prev4Piece     = prev4Piece
+  picker.prev4ToSq      = prev4ToSq
   picker.stage          = StageTTMove
   picker.noisyMoves.len = 0
   picker.noisyCur       = 0
@@ -258,7 +267,8 @@ proc next*(picker: var MovePicker): Move {.inline.} =
         generateQuiets(b[], picker.quietMoves)
         scoreQuiets(b[], picker.quietMoves, picker.quietScores, picker.ply,
                     picker.prevPiece, picker.prevToSq,
-                    picker.prev2Piece, picker.prev2ToSq)
+                    picker.prev2Piece, picker.prev2ToSq,
+                    picker.prev4Piece, picker.prev4ToSq)
         picker.quietCur = 0
         picker.stage    = StageQuiets
 

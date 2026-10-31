@@ -125,6 +125,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   initMovePicker(picker,
     addr b, NullMove, ply, prevPiece, prevToSq,
     -1, -1,
+    -1, -1,
     inCheck = inCheckQ, isQSearch = true)
 
   while true:
@@ -313,11 +314,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       2].piece) else: -1
   let prev2ToSq = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
       2].move.histToSq.int else: -1
+  let prev4Piece = if ply >= 4 and stack[ply - 4].move != NullMove: system.int(stack[ply -
+      4].piece) else: -1
+  let prev4ToSq = if ply >= 4 and stack[ply - 4].move != NullMove: stack[ply -
+      4].move.histToSq.int else: -1
 
   var picker {.noinit.}: MovePicker
   initMovePicker(picker,
     addr b, ttMove, ply, prevPiece, prevToSq,
     prev2Piece, prev2ToSq,
+    prev4Piece, prev4ToSq,
     inCheck = inCheck, isQSearch = false)
 
   var bestScore = -Infinity
@@ -488,6 +494,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           # 2-ply continuation history
           if prev2Piece >= 0:
             histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
+          # 4-ply continuation history
+          if prev4Piece >= 0:
+            histAdj += getContHistScore4(prev4Piece, prev4ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
         # TT-PV reduction
@@ -566,6 +575,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
                 if prev2Piece >= 0:
                   updateContHist2(prev2Piece, prev2ToSq, curPiece, curToSq, bonus)
+                if prev4Piece >= 0:
+                  updateContHist4(prev4Piece, prev4ToSq, curPiece, curToSq, bonus div 2)
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
                     updateHistory(b, triedQuiets[i], malus)
@@ -575,6 +586,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                     if prev2Piece >= 0:
                       updateContHist2(prev2Piece, prev2ToSq, tPiece,
                           triedQuiets[i].histToSq.int, malus)
+                    if prev4Piece >= 0:
+                      updateContHist4(prev4Piece, prev4ToSq, tPiece,
+                          triedQuiets[i].histToSq.int, malus div 2)
               else:
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
@@ -614,6 +628,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         updateContHist(prevPiece, prevToSq, bmPiece, bmToSq, bonus)
         if prev2Piece >= 0:
           updateContHist2(prev2Piece, prev2ToSq, bmPiece, bmToSq, bonus)
+        if prev4Piece >= 0:
+          updateContHist4(prev4Piece, prev4ToSq, bmPiece, bmToSq, bonus div 2)
         for i in 0 ..< triedQuietsLen:
           if triedQuiets[i] != bestMove:
             updateHistory(b, triedQuiets[i], malus)
@@ -622,6 +638,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             if prev2Piece >= 0:
               updateContHist2(prev2Piece, prev2ToSq, tPiece, triedQuiets[
                   i].histToSq.int, malus)
+            if prev4Piece >= 0:
+              updateContHist4(prev4Piece, prev4ToSq, tPiece, triedQuiets[
+                  i].histToSq.int, malus div 2)
       else:
         for i in 0 ..< triedQuietsLen:
           if triedQuiets[i] != bestMove:

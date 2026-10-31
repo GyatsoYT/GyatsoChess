@@ -21,6 +21,7 @@ type HistoryData* = object
   historyTable*: HistoryTable
   continuationHistory*: ContinuationHistory
   continuationHistory2*: ContinuationHistory
+  continuationHistory4*: ContinuationHistory
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
 
@@ -118,6 +119,15 @@ proc updateContHist2*(prevPiece, prevToSq, curPiece, curToSq,
 proc getContHistScore2*(prevPiece, prevToSq, curPiece,
     curToSq: int): int {.inline.} =
   system.int(gHistData.continuationHistory2[prevPiece][prevToSq][curPiece][curToSq])
+
+proc updateContHist4*(prevPiece, prevToSq, curPiece, curToSq,
+    change: int) {.inline.} =
+  updateHistoryStat(gHistData.continuationHistory4[prevPiece][prevToSq][
+      curPiece][curToSq], change)
+
+proc getContHistScore4*(prevPiece, prevToSq, curPiece,
+    curToSq: int): int {.inline.} =
+  system.int(gHistData.continuationHistory4[prevPiece][prevToSq][curPiece][curToSq])
 
 proc getPawnCorrection*(b: Board): int {.inline.} =
   if gHistData == nil: return 0
