@@ -485,9 +485,6 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           # 1-ply continuation history
           if prevPiece >= 0:
             histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
-          # 2-ply continuation history
-          if prev2Piece >= 0:
-            histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
         # TT-PV reduction
