@@ -90,14 +90,24 @@ template updateHistoryStat*(stat: var int16, bonus: int) =
   s += (32 * bonus) - (s * abs(bonus)) div gravityDiv
   stat = int16(clamp(s, -16384, 16384))
 
-proc updateHistory*(b: Board, m: Move, change: int) =
-  let stm = b.stm.ord
+proc updateHistory*(b: Board, m: Move, color: Color, change: int) {.inline.} =
+  if gHistData == nil: return
+  let c = color.ord
   let fromSq = m.fromSq.int
   let toSq = m.histToSq.int
-  let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
-  updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
+  let threats = if color == b.stm: b.threats
+                elif b.histLen > 0: b.history[b.histLen - 1].threats
+                else: b.threats
+  let fromAttacked = if threats.hasSq(m.fromSq): 1 else: 0
+  let toAttacked = if threats.hasSq(m.histToSq): 1 else: 0
+  updateHistoryStat(gHistData.historyTable[c][fromSq][toSq][fromAttacked][
       toAttacked], change)
+
+proc updateHistory*(b: Board, m: Move, change: int) {.inline.} =
+  updateHistory(b, m, b.stm, change)
+
+proc updateRefutationHistory*(b: Board, m: Move, color: Color, change: int) {.inline.} =
+  updateHistory(b, m, color, change)
 
 template historyTable*(): untyped = gHistData.historyTable
 

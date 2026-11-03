@@ -25,6 +25,7 @@ type
     piece*: uint8
     staticEval*: int
     rawEval*: int
+    nmpRefutationMove*: Move
 
   SearchStack* = array[MaxPly + 2, SearchStackEntry]
 
@@ -280,6 +281,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
     stack[ply].move = NullMove
+    stack[ply].nmpRefutationMove = NullMove
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
     nnuePushNull(nnue[])
@@ -306,6 +308,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           return beta
       else:
         return beta
+    else:
+      # Refutation
+      let nmpRefMove = stack[ply - 1].move
+      stack[ply].nmpRefutationMove = nmpRefMove
+      let isTactical = nmpRefMove.isPromotion or
+          (b.histLen > 0 and b.history[b.histLen - 1].captured != NoPiece)
+      if not isTactical:
+        let nmpDepth = max(0, depth - R)
+        let refutationBonus = NmpRefutationBase + NmpRefutationScale * nmpDepth
+        updateHistory(b, nmpRefMove, b.stm.opposite, refutationBonus)
 
   let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
@@ -688,6 +700,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
     stack[i].piece = 0'u8
     stack[i].staticEval = Unknown
     stack[i].rawEval = Unknown
+    stack[i].nmpRefutationMove = NullMove
 
   # aspirationScore seeds the windows for depth >= AspMinDepth
   var aspirationScore = bestScore
