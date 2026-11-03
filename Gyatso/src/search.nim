@@ -482,9 +482,6 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           let curToSq = histToSqInt
           var histAdj = system.int(historyTable[lmrStm][m.fromSq.int][
               histToSqInt][fromAttacked][toAttacked])
-          # 1-ply continuation history
-          if prevPiece >= 0:
-            histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
 
         # TT-PV reduction
