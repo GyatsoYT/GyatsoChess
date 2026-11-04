@@ -8,8 +8,9 @@ const
   NmpDepthDiv* = 4 # so R = 2 + depth div 4
   NmpVerificationDepth* = 14
   NMPEvalMargin* = 200
-  NmpRefutationBase* = 3
-  NmpRefutationScale* = 2
+  NmpRefutationBase* = 94
+  NmpRefutationMult* = 29953
+  NmpRefutationDiv* = 606
   RfpDepth* = 12
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15

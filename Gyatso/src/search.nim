@@ -316,8 +316,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           (b.histLen > 0 and b.history[b.histLen - 1].captured != NoPiece)
       if not isTactical:
         let nmpDepth = max(0, depth - R)
-        let refutationBonus = NmpRefutationBase + NmpRefutationScale * nmpDepth
-        updateHistory(b, nmpRefMove, b.stm.opposite, refutationBonus)
+        let refutationBonus = NmpRefutationBase +
+            (NmpRefutationMult * nmpDepth) div NmpRefutationDiv
+        updateRefutationHistory(b, nmpRefMove, refutationBonus)
 
   let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
