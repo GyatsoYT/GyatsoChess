@@ -204,7 +204,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval, ttPv)
   let wasPV = pvNode or (hasTT and ttPv)
 
-  if hasTT and ttDepth >= depth and ply > 0 and not isSingularSearch:
+  if hasTT and ttDepth >= depth and ply > 0 and not isSingularSearch and not pvNode:
     if ttBound == BoundExact:
       return ttScore
     elif ttBound == BoundAlpha and ttScore <= alpha:
