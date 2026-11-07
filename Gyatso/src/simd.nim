@@ -293,9 +293,11 @@ elif defined(avx2):
     mm256Cvtepi8Epi16Impl(mm_loadu_si128(cast[ptr M128i](p)))
 
 elif defined(neon) or defined(arm64) or defined(aarch64):
+  type
+    int8x8 {.importc: "int8x8_t", header: "arm_neon.h", bycopy.} = object
   {.push header: "arm_neon.h".}
-  func neonLoadS8x8(p: ptr int8): int16x4 {.importc: "vld1_s8".}
-  func neonMovlS8(a: int16x4): int16x8 {.importc: "vmovl_s8".}
+  func neonLoadS8x8(p: ptr int8): int8x8 {.importc: "vld1_s8".}
+  func neonMovlS8(a: int8x8): int16x8 {.importc: "vmovl_s8".}
   {.pop.}
   func vecLoadW8*(p: pointer): int16x8 {.inline.} =
     neonMovlS8(neonLoadS8x8(cast[ptr int8](p)))
