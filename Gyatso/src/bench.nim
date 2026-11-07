@@ -62,6 +62,9 @@ proc clearTT() =
   if ttTable != nil and ttMask > 0:
     zeroMem(ttTable, sizeof(TTCluster) * int(ttMask + 1))
 
+when defined(profileNNUE):
+  import nnue
+
 proc runBench*(depth: int = DefaultBenchDepth) =
   var totalNodes: uint64 = 0
   let totalStart = getMonoTime()
@@ -107,4 +110,14 @@ proc runBench*(depth: int = DefaultBenchDepth) =
   echo ""
   # OpenBench-compatible summary line
   echo &"{totalNodes} nodes {nps} nps"
+  when defined(profileNNUE):
+    echo "--- NNUE PROFILING ---"
+    if profComputeDeltaCalls > 0:
+      echo &"computeDelta: {profComputeDeltaCalls} calls, {profComputeDeltaCyc div 1000000}M cyc ({profComputeDeltaCyc div profComputeDeltaCalls} cyc/call)"
+    if profApplyDeltaCalls > 0:
+      echo &"applyDelta:   {profApplyDeltaCalls} calls, {profApplyDeltaCyc div 1000000}M cyc ({profApplyDeltaCyc div profApplyDeltaCalls} cyc/call)"
+    if profForwardCalls > 0:
+      echo &"forward:      {profForwardCalls} calls, {profForwardCyc div 1000000}M cyc ({profForwardCyc div profForwardCalls} cyc/call)"
+    if profRefreshCalls > 0:
+      echo &"refreshAcc:   {profRefreshCalls} calls, {profRefreshCyc div 1000000}M cyc ({profRefreshCyc div profRefreshCalls} cyc/call)"
   stdout.flushFile()

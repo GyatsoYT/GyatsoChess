@@ -5,6 +5,20 @@ import attacks
 when defined(nnueStats):
     import std/atomics
 
+when defined(profileNNUE):
+    var
+        profComputeDeltaCalls*: uint64
+        profComputeDeltaCyc*: uint64
+        profApplyDeltaCalls*: uint64
+        profApplyDeltaCyc*: uint64
+        profForwardCalls*: uint64
+        profForwardCyc*: uint64
+        profRefreshCalls*: uint64
+        profRefreshCyc*: uint64
+    {.push header: "x86intrin.h".}
+    proc rdtsc(): uint64 {.importc: "__rdtsc".}
+    {.pop.}
+
 const
     NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet384TIx16x32.bin")
     NNUE_PAIRWISE_PERM_TEXT = staticRead("../Net/GyatsoNet384TIx16x32.perm")
@@ -209,6 +223,12 @@ const
 
 proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
                          acc: var Accumulator, perspective: Color) =
+    when defined(profileNNUE):
+        let t0 = rdtsc()
+        defer:
+            let t1 = rdtsc()
+            profRefreshCalls += 1
+            profRefreshCyc += (t1 - t0)
     var thFeats {.noinit.}: array[128, int32]
     var psqtFeats {.noinit.}: array[32, uint16]
     var nTh, nPsqt: int
@@ -250,6 +270,12 @@ proc refreshState*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
 
 proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
                 prev, curr: var Accumulator) {.inline.} =
+    when defined(profileNNUE):
+        let t0 = rdtsc()
+        defer:
+            let t1 = rdtsc()
+            profApplyDeltaCalls += 1
+            profApplyDeltaCyc += (t1 - t0)
     if d.nPsqtAdds == 0 and d.nPsqtSubs == 0 and
        d.nThAdds == 0 and d.nThSubs == 0:
         curr = prev  # null move
@@ -300,6 +326,12 @@ proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
             base += AccTileSize
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
+    when defined(profileNNUE):
+        let t0 = rdtsc()
+        defer:
+            let t1 = rdtsc()
+            profForwardCalls += 1
+            profForwardCyc += (t1 - t0)
     var pairwise {.noinit.}: array[L1_IN, uint8]
     var l1Sums {.noinit.}: array[L2_SIZE, int32]
     when defined(avx512) or defined(avx2) or defined(neon) or defined(arm64) or defined(aarch64):
@@ -681,8 +713,14 @@ proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
     let us = b.stm
     let movingPt = b.mailbox[m.fromSq.int].pieceType
 
+    when defined(profileNNUE):
+        let t0 = rdtsc()
     var deltas {.noinit.}: array[Color, PerspDelta]
     computeDeltaBoth(b, m, deltas)
+    when defined(profileNNUE):
+        let t1 = rdtsc()
+        profComputeDeltaCalls += 1
+        profComputeDeltaCyc += (t1 - t0)
 
     for perspective in [White, Black]:
         if (state.accFlags[perspective][ply] and AccNeedsRefresh) != 0:
