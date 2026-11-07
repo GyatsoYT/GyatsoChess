@@ -405,28 +405,14 @@ proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.
 func packEdge(src, dst, attType: int, attColor: Color, tgtPt: int, tgtColor: Color): uint32 {.inline.} =
     uint32(src or (dst shl 6) or (attType shl 12) or (attColor.ord shl 15) or (tgtPt shl 16) or (tgtColor.ord shl 19))
 
-proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
-                 src: int, attType: int, attColor: Color,
-                 buf: var array[32, uint32], n: var int) {.inline.} =
-    let sq = Square(src)
-    var targets: Bitboard
-    case PieceType(attType)
-    of Pawn:   targets = getPawnAttacks(sq, attColor) and occ
-    of Knight: targets = getKnightAttacks(sq) and occ
-    of Bishop: targets = getBishopAttacks(sq, occ) and occ
-    of Rook:   targets = getRookAttacks(sq, occ) and occ
-    of Queen:  targets = getQueenAttacks(sq, occ) and occ
-    else: return
-
-    let targetMask = ValidThreatTargetMask[attType]
-    while not targets.isEmpty:
-        let dst = poplsb(targets)
-        let tp = mailbox[dst.int]
-        let ptOrd = tp.pieceType.ord
-        if (targetMask and (1'u8 shl ptOrd)) != 0:
-            if n < 32:
-                buf[n] = packEdge(src, dst.int, attType, attColor, ptOrd, tp.color)
-                inc n
+template getPieceAttacks(sq: Square, pt: PieceType, color: Color, occBB: Bitboard): Bitboard =
+    case pt
+    of Pawn:   getPawnAttacks(sq, color) and occBB
+    of Knight: getKnightAttacks(sq) and occBB
+    of Bishop: getBishopAttacks(sq, occBB) and occBB
+    of Rook:   getRookAttacks(sq, occBB) and occBB
+    of Queen:  getQueenAttacks(sq, occBB) and occBB
+    else: Bitboard(0)
 
 proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
     let us = b.stm
@@ -637,36 +623,32 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
                 alive = false
 
         if oldSq != newSq or not alive:
-            var localEdges {.noinit.}: array[32, uint32]
-            var nLocal = 0
-            addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, localEdges, nLocal)
-            for k in 0..<nLocal:
-                pushSubEdge(localEdges[k])
+            let sq = Square(oldSq)
+            var tgts = getPieceAttacks(sq, PieceType(oldType), oldColor, occ)
+            let targetMask = ValidThreatTargetMask[oldType]
+            while not tgts.isEmpty:
+                let dst = poplsb(tgts)
+                let tp = b.mailbox[dst.int]
+                let ptOrd = tp.pieceType.ord
+                if (targetMask and (1'u8 shl ptOrd)) != 0:
+                    pushSubEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
 
             if alive:
                 let newColor = if oldSq == fromSq.int: movingColor else: oldColor
-                nLocal = 0
-                addRawEdges(newMail, newOcc, newSq, newType, newColor, localEdges, nLocal)
-                for k in 0..<nLocal:
-                    pushAddEdge(localEdges[k])
+                let nsq = Square(newSq)
+                var newTgts = getPieceAttacks(nsq, PieceType(newType), newColor, newOcc)
+                let newTargetMask = ValidThreatTargetMask[newType]
+                while not newTgts.isEmpty:
+                    let dst = poplsb(newTgts)
+                    let tp = newMail[dst.int]
+                    let ptOrd = tp.pieceType.ord
+                    if (newTargetMask and (1'u8 shl ptOrd)) != 0:
+                        pushAddEdge(packEdge(newSq, dst.int, newType, newColor, ptOrd, tp.color))
         else:
             let pt = PieceType(oldType)
             let sq = Square(oldSq)
-            let oldTargets = case pt
-                of Pawn:   getPawnAttacks(sq, oldColor) and occ
-                of Knight: getKnightAttacks(sq) and occ
-                of Bishop: getBishopAttacks(sq, occ) and occ
-                of Rook:   getRookAttacks(sq, occ) and occ
-                of Queen:  getQueenAttacks(sq, occ) and occ
-                else: Bitboard(0)
-
-            let newTargets = case pt
-                of Pawn:   getPawnAttacks(sq, oldColor) and newOcc
-                of Knight: getKnightAttacks(sq) and newOcc
-                of Bishop: getBishopAttacks(sq, newOcc) and newOcc
-                of Rook:   getRookAttacks(sq, newOcc) and newOcc
-                of Queen:  getQueenAttacks(sq, newOcc) and newOcc
-                else: Bitboard(0)
+            let oldTargets = getPieceAttacks(sq, pt, oldColor, occ)
+            let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
 
             let common = oldTargets and newTargets and not changedMaskBB
             var subTgts = oldTargets and not common
