@@ -168,6 +168,10 @@ proc loadNetworkFromFile*(net: ptr NNUENetwork, path: string) =
 proc loadNetworkFromEmbedded*(net: ptr NNUENetwork) =
     loadNetworkInto(net, NNUE_EMBEDDED)
 
+const
+  AccTileRegs = when defined(avx512): 12 else: 8
+  AccTileSize = AccTileRegs * CHUNK_SIZE
+
 proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
                          acc: var Accumulator, perspective: Color) =
     var thFeats {.noinit.}: array[128, int32]
@@ -186,24 +190,22 @@ proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
             for o in 0..<HL:
                 acc.data[o] += int16(net.ftThreat[f][o])
     else:
-        const TileRegs = 8
-        const TileSize = TileRegs * CHUNK_SIZE
         var base = 0
         while base < HL:
-            var regs {.noinit.}: array[TileRegs, VEPI16]
-            for r in 0..<TileRegs:
+            var regs {.noinit.}: array[AccTileRegs, VEPI16]
+            for r in 0..<AccTileRegs:
                 regs[r] = vecLoad(addr net.ftBias[base + r * CHUNK_SIZE])
             for i in 0..<nPsqt:
                 let f = system.int(psqtFeats[i])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
             for i in 0..<nTh:
                 let f = system.int(thFeats[i])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
-            for r in 0..<TileRegs:
+            for r in 0..<AccTileRegs:
                 vecStore(addr acc.data[base + r * CHUNK_SIZE], regs[r])
-            base += TileSize
+            base += AccTileSize
 
 proc refreshState*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
     state.current = 0
@@ -237,32 +239,30 @@ proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
             for o in 0..<HL:
                 curr.data[o] += net.ftPsqt[f][o]
     else:
-        const TileRegs = 8
-        const TileSize = TileRegs * CHUNK_SIZE
         var base = 0
         while base < HL:
-            var regs {.noinit.}: array[TileRegs, VEPI16]
-            for r in 0..<TileRegs:
+            var regs {.noinit.}: array[AccTileRegs, VEPI16]
+            for r in 0..<AccTileRegs:
                 regs[r] = vecLoad(addr prev.data[base + r * CHUNK_SIZE])
             for k in 0..<d.nThSubs:
                 let f = system.int(d.thSubs[k])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecSub16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
             for k in 0..<d.nThAdds:
                 let f = system.int(d.thAdds[k])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
             for k in 0..<d.nPsqtSubs:
                 let f = system.int(d.psqtSubs[k])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecSub16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
             for k in 0..<d.nPsqtAdds:
                 let f = system.int(d.psqtAdds[k])
-                for r in 0..<TileRegs:
+                for r in 0..<AccTileRegs:
                     regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
-            for r in 0..<TileRegs:
+            for r in 0..<AccTileRegs:
                 vecStore(addr curr.data[base + r * CHUNK_SIZE], regs[r])
-            base += TileSize
+            base += AccTileSize
 
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
     var pairwise {.noinit.}: array[L1_IN, uint8]
