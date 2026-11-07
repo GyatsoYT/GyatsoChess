@@ -116,7 +116,7 @@ datagen-stats: check-deps
 
 clean:
 	@echo "[Makefile] Cleaning ..."
-	rm -f "$(EXE)" "$(EXE).exe"
+	rm -f "$(EXE)" "$(EXE).exe" "$(EXE).out"
 	rm -rf nimcache
 
 help:
