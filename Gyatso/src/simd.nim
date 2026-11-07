@@ -284,6 +284,11 @@ when defined(avx512):
   func vecLoadW8*(p: pointer): M512i {.inline.} =
     mm512Cvtepi8Epi16(mm256LoaduSi256Impl(p))
 
+  func vecLoadW8x2*(p: pointer): tuple[lo, hi: M512i] {.inline.} =
+    let lo = mm512Cvtepi8Epi16(mm256LoaduSi256Impl(p))
+    let hi = mm512Cvtepi8Epi16(mm256LoaduSi256Impl(cast[pointer](cast[uint](p) + 32)))
+    (lo, hi)
+
 elif defined(avx2):
   {.push header: "immintrin.h".}
   func mm256Cvtepi8Epi16Impl(a: M128i): M256i {.importc: "_mm256_cvtepi8_epi16".}
@@ -307,9 +312,17 @@ elif defined(neon) or defined(arm64) or defined(aarch64):
   func vecLoadW8*(p: pointer): int16x8 {.inline.} =
     neonMovlS8(neonLoadS8x8(cast[ptr int8](p)))
 
+  func vecLoadW8x2*(p: pointer): tuple[lo, hi: int16x8] {.inline.} =
+    let lo = neonMovlS8(neonLoadS8x8(cast[ptr int8](p)))
+    let hi = neonMovlS8(neonLoadS8x8(cast[ptr int8](cast[uint](p) + 8)))
+    (lo, hi)
+
 else:
   func vecLoadW8*(p: pointer): int16 {.inline.} =
     int16(cast[ptr int8](p)[])
+
+  func vecLoadW8x2*(p: pointer): tuple[lo, hi: int16] {.inline.} =
+    (int16(cast[ptr int8](p)[]), int16(cast[ptr int8](cast[uint](p) + 1)[]))
 
 type
   U8Array = UncheckedArray[uint8]
