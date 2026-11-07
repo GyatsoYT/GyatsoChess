@@ -381,6 +381,14 @@ func unpackEdge(e: uint32, src, dst, attType: var int, attColor: var Color, tgtP
     tgtPt = system.int((e shr 16) and 0x7)
     tgtColor = Color(system.int((e shr 19) and 0x1))
 
+const ValidThreatTargetMask: array[5, uint8] = [
+    (1'u8 shl Knight.ord) or (1'u8 shl Rook.ord), # Pawn: 10
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord), # Knight: 31
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Bishop: 15
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Rook: 15
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord)  # Queen: 31
+]
+
 proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
                  src: int, attType: int, attColor: Color,
                  buf: var array[128, uint32], n: var int) {.inline.} =
@@ -394,14 +402,15 @@ proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
     of Queen:  targets = getQueenAttacks(sq, occ) and occ
     else: return
 
+    let targetMask = ValidThreatTargetMask[attType]
     while not targets.isEmpty:
         let dst = poplsb(targets)
         let tp = mailbox[dst.int]
-        if tp == NoPiece: continue
-        if tp.pieceType == King: continue
-        if n < 128:
-            buf[n] = packEdge(src, dst.int, attType, attColor, tp.pieceType.ord, tp.color)
-            inc n
+        let ptOrd = tp.pieceType.ord
+        if (targetMask and (1'u8 shl ptOrd)) != 0:
+            if n < 128:
+                buf[n] = packEdge(src, dst.int, attType, attColor, ptOrd, tp.color)
+                inc n
 
 proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
     let us = b.stm
@@ -482,15 +491,26 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         changedSqs[nChanged] = rookFrom.int; inc nChanged
         changedSqs[nChanged] = rookTo.int; inc nChanged
 
+    let wPawns = b.byPiece[WhitePawn.ord]
+    let bPawns = b.byPiece[BlackPawn.ord]
+    let knights = b.byPiece[Knight.ord] or b.byPiece[Knight.ord + 6]
+    let diagSliders = b.byPiece[Bishop.ord] or b.byPiece[Bishop.ord + 6] or
+                      b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+    let hvSliders   = b.byPiece[Rook.ord]   or b.byPiece[Rook.ord + 6] or
+                      b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+
     var affMask: Bitboard = Bitboard(0)
-    let kingMask = b.byPiece[WhiteKing.ord] or b.byPiece[BlackKing.ord]
     for ci in 0..<nChanged:
         let c = changedSqs[ci]
         let cSq = Square(c)
         let standing = b.mailbox[c]
         if standing != NoPiece and standing.pieceType != King:
             affMask = affMask or cSq.bit
-        let attackers = b.attackersTo(cSq, occ) and not kingMask
+        let attackers = (getPawnAttacks(cSq, Black) and wPawns) or
+                        (getPawnAttacks(cSq, White) and bPawns) or
+                        (getKnightAttacks(cSq) and knights) or
+                        (getBishopAttacks(cSq, occ) and diagSliders) or
+                        (getRookAttacks(cSq, occ) and hvSliders)
         affMask = affMask or attackers
 
     var affSqs {.noinit.}: array[32, int]
