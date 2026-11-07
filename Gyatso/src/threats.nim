@@ -13,6 +13,7 @@ const ValidThreatTargetMask*: array[5, uint8] = [
 
 var
   thAtt: array[4, array[64, uint64]]
+  thRank: array[4, array[64, array[64, uint8]]]
   thBase: array[4, array[64, int32]]
   thCount: array[4, int32]
   thClassOff: array[4, int32]
@@ -43,6 +44,8 @@ proc initThreats*() =
         of 2: getRookAttacks(sq, Bitboard(0)).uint64
         else: getQueenAttacks(sq, Bitboard(0)).uint64
       thBase[t][s] = running
+      for d in 0 ..< 64:
+        thRank[t][s][d] = uint8(countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1)))
       running += int32(countSetBits(thAtt[t][s]))
     thCount[t] = running
 
@@ -83,8 +86,7 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
   let t = attType - 1
   if d > s and (relTgt mod 6) == attType: return -1
   let targetOff = thTargetOff[t][relTgt]
-  let below = countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1))
-  side + system.int(targetOff) + system.int(thBase[t][s]) + below
+  side + system.int(targetOff) + system.int(thBase[t][s]) + system.int(thRank[t][s][d])
 
 proc threatIndexDual*(e: uint32,
                       flipW, flipB: int,
@@ -96,49 +98,46 @@ proc threatIndexDual*(e: uint32,
   let attColor = uint8((e shr 15) and 0x1)
   let tgtPt = system.int((e shr 16) and 0x7)
   let tgtColor = uint8((e shr 19) and 0x1)
-  let isWhiteTgt = (tgtColor == 0)
+
+  let sideW = int32(attColor) * HALF_THREATS
+  let sideB = int32(1'u8 xor attColor) * HALF_THREATS
+  let relW = tgtPt + system.int(tgtColor) * 6
+  let relB = tgtPt + system.int(1'u8 xor tgtColor) * 6
+
   if attType == 0: # Pawn
+    let baseW = sideW + pawnTargetOff[relW]
+    let baseB = sideB + pawnTargetOff[relB]
     if doW:
       let sW = src xor flipW
       let dW = dst xor flipW
-      let sideW = if attColor == 0: 0'i32 else: HALF_THREATS
-      let relW = tgtPt + (if isWhiteTgt: 0 else: 6)
-      let pOffW = pawnTargetOff[relW]
       let identW = int32(ord((dW and 7) > (sW and 7)))
-      idxW = sideW + pOffW + pawnSqOffset[sW] + identW
+      idxW = baseW + pawnSqOffset[sW] + identW
     if doB:
       let sB = src xor flipB
       let dB = dst xor flipB
-      let sideB = if attColor == 1: 0'i32 else: HALF_THREATS
-      let relB = tgtPt + (if isWhiteTgt: 6 else: 0)
-      let pOffB = pawnTargetOff[relB]
       let identB = int32(ord((dB and 7) > (sB and 7)))
-      idxB = sideB + pOffB + pawnSqOffset[sB] + identB
+      idxB = baseB + pawnSqOffset[sB] + identB
   else:
     let t = attType - 1
     let isSamePt = (tgtPt == attType)
+    let baseW = sideW + thTargetOff[t][relW]
+    let baseB = sideB + thTargetOff[t][relB]
     if doW:
       let sW = src xor flipW
       let dW = dst xor flipW
       if isSamePt and dW > sW:
         idxW = -1
       else:
-        let sideW = if attColor == 0: 0'i32 else: HALF_THREATS
-        let relW = tgtPt + (if isWhiteTgt: 0 else: 6)
-        let targetOffW = thTargetOff[t][relW]
-        let belowW = int32(countSetBits(thAtt[t][sW] and ((1'u64 shl dW) - 1)))
-        idxW = sideW + targetOffW + thBase[t][sW] + belowW
+        let belowW = int32(thRank[t][sW][dW])
+        idxW = baseW + thBase[t][sW] + belowW
     if doB:
       let sB = src xor flipB
       let dB = dst xor flipB
       if isSamePt and dB > sB:
         idxB = -1
       else:
-        let sideB = if attColor == 1: 0'i32 else: HALF_THREATS
-        let relB = tgtPt + (if isWhiteTgt: 6 else: 0)
-        let targetOffB = thTargetOff[t][relB]
-        let belowB = int32(countSetBits(thAtt[t][sB] and ((1'u64 shl dB) - 1)))
-        idxB = sideB + targetOffB + thBase[t][sB] + belowB
+        let belowB = int32(thRank[t][sB][dB])
+        idxB = baseB + thBase[t][sB] + belowB
 
 proc computeFlip*(perspective: Color, kingSq: Square): int {.inline.} =
   result = if perspective == Black: 56 else: 0

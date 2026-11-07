@@ -218,7 +218,7 @@ proc loadNetworkFromEmbedded*(net: ptr NNUENetwork) =
     loadNetworkInto(net, NNUE_EMBEDDED)
 
 const
-  AccTileRegs = 6
+  AccTileRegs = 12
   AccTileSize = AccTileRegs * CHUNK_SIZE
 
 proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
@@ -256,8 +256,12 @@ proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
                     regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
             for i in 0..<nTh:
                 let f = system.int(thFeats[i])
-                for r in 0..<AccTileRegs:
-                    regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
+                var r = 0
+                while r < AccTileRegs:
+                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    regs[r] = vecAdd16(regs[r], w0)
+                    regs[r + 1] = vecAdd16(regs[r + 1], w1)
+                    r += 2
             for r in 0..<AccTileRegs:
                 vecStore(addr acc.data[base + r * CHUNK_SIZE], regs[r])
             base += AccTileSize
@@ -268,7 +272,7 @@ proc refreshState*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
         net.refreshAccumulator(b, state.acc[p][0], p)
         state.accFlags[p][0] = AccComputed
 
-proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
+proc applyDelta(net: ptr NNUENetwork, d: var PerspDelta,
                 prev, curr: var Accumulator) {.inline.} =
     when defined(profileNNUE):
         let t0 = rdtsc()
@@ -283,19 +287,19 @@ proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
 
     when not defined(simd):
         curr.data = prev.data
-        for k in 0..<d.nThSubs:
+        for k in 0..<system.int(d.nThSubs):
             let f = system.int(d.thSubs[k])
             for o in 0..<HL:
                 curr.data[o] -= int16(net.ftThreat[f][o])
-        for k in 0..<d.nThAdds:
+        for k in 0..<system.int(d.nThAdds):
             let f = system.int(d.thAdds[k])
             for o in 0..<HL:
                 curr.data[o] += int16(net.ftThreat[f][o])
-        for k in 0..<d.nPsqtSubs:
+        for k in 0..<system.int(d.nPsqtSubs):
             let f = system.int(d.psqtSubs[k])
             for o in 0..<HL:
                 curr.data[o] -= net.ftPsqt[f][o]
-        for k in 0..<d.nPsqtAdds:
+        for k in 0..<system.int(d.nPsqtAdds):
             let f = system.int(d.psqtAdds[k])
             for o in 0..<HL:
                 curr.data[o] += net.ftPsqt[f][o]
@@ -305,19 +309,27 @@ proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
             var regs {.noinit.}: array[AccTileRegs, VEPI16]
             for r in 0..<AccTileRegs:
                 regs[r] = vecLoad(addr prev.data[base + r * CHUNK_SIZE])
-            for k in 0..<d.nThSubs:
+            for k in 0..<system.int(d.nThSubs):
                 let f = system.int(d.thSubs[k])
-                for r in 0..<AccTileRegs:
-                    regs[r] = vecSub16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
-            for k in 0..<d.nThAdds:
+                var r = 0
+                while r < AccTileRegs:
+                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    regs[r] = vecSub16(regs[r], w0)
+                    regs[r + 1] = vecSub16(regs[r + 1], w1)
+                    r += 2
+            for k in 0..<system.int(d.nThAdds):
                 let f = system.int(d.thAdds[k])
-                for r in 0..<AccTileRegs:
-                    regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
-            for k in 0..<d.nPsqtSubs:
+                var r = 0
+                while r < AccTileRegs:
+                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    regs[r] = vecAdd16(regs[r], w0)
+                    regs[r + 1] = vecAdd16(regs[r + 1], w1)
+                    r += 2
+            for k in 0..<system.int(d.nPsqtSubs):
                 let f = system.int(d.psqtSubs[k])
                 for r in 0..<AccTileRegs:
                     regs[r] = vecSub16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
-            for k in 0..<d.nPsqtAdds:
+            for k in 0..<system.int(d.nPsqtAdds):
                 let f = system.int(d.psqtAdds[k])
                 for r in 0..<AccTileRegs:
                     regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
@@ -511,20 +523,6 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
     let hvSliders   = b.byPiece[Rook.ord]   or b.byPiece[Rook.ord + 6] or
                       b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
 
-    var affMask: Bitboard = Bitboard(0)
-    for ci in 0..<nChanged:
-        let c = changedSqs[ci]
-        let cSq = Square(c)
-        let standing = b.mailbox[c]
-        if standing != NoPiece and standing.pieceType != King:
-            affMask = affMask or cSq.bit
-        let attackers = (getPawnAttacks(cSq, Black) and wPawns) or
-                        (getPawnAttacks(cSq, White) and bPawns) or
-                        (getKnightAttacks(cSq) and knights) or
-                        (getBishopAttacks(cSq, occ) and diagSliders) or
-                        (getRookAttacks(cSq, occ) and hvSliders)
-        affMask = affMask or attackers
-
     var newMail: array[64, Piece] = b.mailbox
     var newOcc: Bitboard = occ
     if m.isCastling:
@@ -560,6 +558,23 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         newMail[toSq.int] = movingPiece
         newOcc = (newOcc and not fromSq.bit) or toSq.bit
 
+    var affMask: Bitboard = Bitboard(0)
+    for ci in 0..<nChanged:
+        let c = changedSqs[ci]
+        let cSq = Square(c)
+        let oldP = b.mailbox[c]
+        let newP = newMail[c]
+        let canPawnTarget = (oldP != NoPiece and (oldP.pieceType == Knight or oldP.pieceType == Rook)) or
+                            (newP != NoPiece and (newP.pieceType == Knight or newP.pieceType == Rook))
+
+        var attackers = (getKnightAttacks(cSq) and knights) or
+                        (getBishopAttacks(cSq, occ) and diagSliders) or
+                        (getRookAttacks(cSq, occ) and hvSliders)
+        if canPawnTarget:
+            attackers = attackers or (getPawnAttacks(cSq, Black) and wPawns) or
+                                     (getPawnAttacks(cSq, White) and bPawns)
+        affMask = affMask or attackers
+
     var subRaw {.noinit.}: array[64, uint32]
     var nSubRaw = 0
     var addRaw {.noinit.}: array[64, uint32]
@@ -583,85 +598,83 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
             deltas[Black].needsRefresh = true
             return
 
-    while not affMask.isEmpty:
-        let oldSq = poplsb(affMask).int
-        let piece = b.mailbox[oldSq]
-        let oldType = piece.pieceType.ord
-        let oldColor = piece.color
-        var newSq = oldSq
-        var newType = oldType
-        var alive = true
-
-        if oldSq == fromSq.int:
-            if m.isCastling and movingPt == King:
-                alive = false
-            else:
-                newSq = toSq.int
-                if m.isPromotion:
-                    newType = (case m.promoType
-                        of PromoKnight: Knight.ord
-                        of PromoBishop: Bishop.ord
-                        of PromoRook:   Rook.ord
-                        of PromoQueen:  Queen.ord)
-        elif m.isCastling and oldSq == toSq.int:
-            let rookTo = if fromSq.file < toSq.file: fromSq.withFile(5)
-                         else: fromSq.withFile(3)
-            newSq = rookTo.int
-        elif m.isEnPassant:
-            let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
-            if oldSq == capSq:
-                alive = false
-        else:
-            if oldSq == toSq.int and piece != NoPiece and piece.color != movingColor:
-                alive = false
-
-        if oldSq != newSq or not alive:
-            let sq = Square(oldSq)
-            var tgts = getPieceAttacks(sq, PieceType(oldType), oldColor, occ)
-            let targetMask = ValidThreatTargetMask[oldType]
+    template emitSubAttacks(sq: Square, pt: PieceType, pc: Color) =
+        if pt != King:
+            var tgts = getPieceAttacks(sq, pt, pc, occ)
+            let targetMask = ValidThreatTargetMask[pt.ord]
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
                 let tp = b.mailbox[dst.int]
                 let ptOrd = tp.pieceType.ord
                 if (targetMask and (1'u8 shl ptOrd)) != 0:
+                    pushSubEdge(packEdge(sq.int, dst.int, pt.ord, pc, ptOrd, tp.color))
+
+    template emitAddAttacks(sq: Square, pt: PieceType, pc: Color) =
+        if pt != King:
+            var tgts = getPieceAttacks(sq, pt, pc, newOcc)
+            let targetMask = ValidThreatTargetMask[pt.ord]
+            while not tgts.isEmpty:
+                let dst = poplsb(tgts)
+                let tp = newMail[dst.int]
+                let ptOrd = tp.pieceType.ord
+                if (targetMask and (1'u8 shl ptOrd)) != 0:
+                    pushAddEdge(packEdge(sq.int, dst.int, pt.ord, pc, ptOrd, tp.color))
+
+    if m.isCastling:
+        let rookFrom = toSq
+        let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
+                     else: fromSq.withFile(3)
+        emitSubAttacks(rookFrom, Rook, us)
+        emitAddAttacks(rookTo, Rook, us)
+    elif m.isEnPassant:
+        let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
+        emitSubAttacks(fromSq, Pawn, us)
+        emitAddAttacks(toSq, Pawn, us)
+        emitSubAttacks(Square(capSq), Pawn, them)
+    else:
+        emitSubAttacks(fromSq, movingPt, movingColor)
+        let dstPt = if m.isPromotion:
+                        (case m.promoType
+                         of PromoKnight: Knight
+                         of PromoBishop: Bishop
+                         of PromoRook:   Rook
+                         of PromoQueen:  Queen)
+                    else: movingPt
+        emitAddAttacks(toSq, dstPt, movingColor)
+        let capturedPiece = b.mailbox[toSq.int]
+        if capturedPiece != NoPiece:
+            emitSubAttacks(toSq, capturedPiece.pieceType, capturedPiece.color)
+
+    var stationaryMask = affMask and not changedMaskBB
+    while not stationaryMask.isEmpty:
+        let oldSq = poplsb(stationaryMask).int
+        let piece = b.mailbox[oldSq]
+        let oldType = piece.pieceType.ord
+        let oldColor = piece.color
+        let pt = PieceType(oldType)
+        let sq = Square(oldSq)
+        let oldTargets = getPieceAttacks(sq, pt, oldColor, occ)
+        let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
+
+        let common = oldTargets and newTargets and not changedMaskBB
+        var subTgts = oldTargets and not common
+        var addTgts = newTargets and not common
+
+        if not subTgts.isEmpty or not addTgts.isEmpty:
+            let targetMask = ValidThreatTargetMask[oldType]
+            while not subTgts.isEmpty:
+                let dst = poplsb(subTgts)
+                let tp = b.mailbox[dst.int]
+                let ptOrd = tp.pieceType.ord
+                if (targetMask and (1'u8 shl ptOrd)) != 0:
                     pushSubEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
 
-            if alive:
-                let newColor = if oldSq == fromSq.int: movingColor else: oldColor
-                let nsq = Square(newSq)
-                var newTgts = getPieceAttacks(nsq, PieceType(newType), newColor, newOcc)
-                let newTargetMask = ValidThreatTargetMask[newType]
-                while not newTgts.isEmpty:
-                    let dst = poplsb(newTgts)
-                    let tp = newMail[dst.int]
-                    let ptOrd = tp.pieceType.ord
-                    if (newTargetMask and (1'u8 shl ptOrd)) != 0:
-                        pushAddEdge(packEdge(newSq, dst.int, newType, newColor, ptOrd, tp.color))
-        else:
-            let pt = PieceType(oldType)
-            let sq = Square(oldSq)
-            let oldTargets = getPieceAttacks(sq, pt, oldColor, occ)
-            let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
-
-            let common = oldTargets and newTargets and not changedMaskBB
-            var subTgts = oldTargets and not common
-            var addTgts = newTargets and not common
-
-            if not subTgts.isEmpty or not addTgts.isEmpty:
-                let targetMask = ValidThreatTargetMask[oldType]
-                while not subTgts.isEmpty:
-                    let dst = poplsb(subTgts)
-                    let tp = b.mailbox[dst.int]
-                    let ptOrd = tp.pieceType.ord
-                    if (targetMask and (1'u8 shl ptOrd)) != 0:
-                        pushSubEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
-
-                while not addTgts.isEmpty:
-                    let dst = poplsb(addTgts)
-                    let tp = newMail[dst.int]
-                    let ptOrd = tp.pieceType.ord
-                    if (targetMask and (1'u8 shl ptOrd)) != 0:
-                        pushAddEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
+            while not addTgts.isEmpty:
+                let dst = poplsb(addTgts)
+                let tp = newMail[dst.int]
+                let ptOrd = tp.pieceType.ord
+                if (targetMask and (1'u8 shl ptOrd)) != 0:
+                    pushAddEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
 
     let kingSqW = b.kingSquare(White)
     let flipW = computeFlip(White, kingSqW)
@@ -686,7 +699,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                 deltas[White].needsRefresh = true
                 doW = false
             else:
-                deltas[White].thSubs[nSubsW] = uint32(idxW)
+                deltas[White].thSubs[nSubsW] = uint16(idxW)
                 inc nSubsW
 
         if doB and idxB >= 0:
@@ -694,7 +707,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                 deltas[Black].needsRefresh = true
                 doB = false
             else:
-                deltas[Black].thSubs[nSubsB] = uint32(idxB)
+                deltas[Black].thSubs[nSubsB] = uint16(idxB)
                 inc nSubsB
 
     for i in 0..<nAddRaw:
@@ -707,7 +720,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                 deltas[White].needsRefresh = true
                 doW = false
             else:
-                deltas[White].thAdds[nAddsW] = uint32(idxW)
+                deltas[White].thAdds[nAddsW] = uint16(idxW)
                 inc nAddsW
 
         if doB and idxB >= 0:
@@ -715,7 +728,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                 deltas[Black].needsRefresh = true
                 doB = false
             else:
-                deltas[Black].thAdds[nAddsB] = uint32(idxB)
+                deltas[Black].thAdds[nAddsB] = uint16(idxB)
                 inc nAddsB
 
     deltas[White].nThSubs = nSubsW

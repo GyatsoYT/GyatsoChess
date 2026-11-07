@@ -291,6 +291,12 @@ elif defined(avx2):
   func vecLoadW8*(p: pointer): M256i {.inline.} =
     mm256Cvtepi8Epi16Impl(mm_loadu_si128(cast[ptr M128i](p)))
 
+  func vecLoadW8x2*(p: pointer): tuple[lo, hi: M256i] {.inline.} =
+    let raw = mm256_loadu_si256(cast[ptr M256i](p))
+    let lo = mm256Cvtepi8Epi16Impl(mm256_castsi256_si128(raw))
+    let hi = mm256Cvtepi8Epi16Impl(mm256_extracti128_si256(raw, 1))
+    (lo, hi)
+
 elif defined(neon) or defined(arm64) or defined(aarch64):
   type
     int8x8 {.importc: "int8x8_t", header: "arm_neon.h", bycopy.} = object

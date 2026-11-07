@@ -52,8 +52,8 @@ type
     psqtSubs*: array[4, uint16]
     nPsqtAdds*: int
     nPsqtSubs*: int
-    thAdds*: array[MAX_THREAT_DELTA, uint32]
-    thSubs*: array[MAX_THREAT_DELTA, uint32]
+    thAdds*: array[MAX_THREAT_DELTA, uint16]
+    thSubs*: array[MAX_THREAT_DELTA, uint16]
     nThAdds*: int
     nThSubs*: int
     needsRefresh*: bool
