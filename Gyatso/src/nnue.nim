@@ -153,6 +153,28 @@ proc loadNetworkInto*(net: ptr NNUENetwork, data: string) =
 
     net.l3Bias = data.readI32(offset)
 
+    net.l2Int32Safe = true
+    for output in 0..<L3_SIZE:
+        var bound = int64(abs(net.l2Bias[output]))
+        for input in 0..<L2_SIZE:
+            var weight = int64(net.l2Weight[input][output])
+            if weight < 0: weight = -weight
+            bound += int64(QB * QB) * weight
+        if bound > int64(high(int32)):
+            net.l2Int32Safe = false
+
+    net.l2Int16Safe = net.l2Int32Safe
+    for output in 0..<L3_SIZE:
+        for input in 0..<L2_SIZE:
+            let w = net.l2Weight[input][output]
+            if w < int32(low(int16)) or w > int32(high(int16)):
+                net.l2Int16Safe = false
+    if net.l2Int16Safe:
+        for pair in 0..<(L2_SIZE div 2):
+            for output in 0..<L3_SIZE:
+                net.l2WeightPacked[pair][output][0] = int16(net.l2Weight[pair * 2][output])
+                net.l2WeightPacked[pair][output][1] = int16(net.l2Weight[pair * 2 + 1][output])
+
     doAssert offset == NNUE_RAW_BYTES
 
 proc loadNetworkFromStream*(net: ptr NNUENetwork, s: Stream) =
@@ -288,8 +310,18 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         l1Out[i] = clipped * clipped
 
     var l2Out {.noinit.}: array[L3_SIZE, int32]
-    simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
-        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB), 1'i32)
+    when defined(avx512) or defined(avx2):
+        if net.l2Int16Safe:
+            simd.gyatsoMultilayerL2Madd(addr l1Out[0], addr net.l2WeightPacked[0][0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
+        else:
+            simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+                int32(ord(net.l2Int32Safe)))
+    else:
+        simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+            addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
+            int32(ord(net.l2Int32Safe)))
 
     let output = simd.gyatsoMultilayerOutput(addr l2Out[0],
         addr net.l3Weight[0], net.l3Bias)

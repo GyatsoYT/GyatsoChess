@@ -41,6 +41,9 @@ type
     l2Bias*   {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Weight* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Bias*:  int32
+    l2Int32Safe*: bool
+    l2Int16Safe*: bool
+    l2WeightPacked* {.align(ALIGNMENT).}: array[L2_SIZE div 2, array[L3_SIZE, array[2, int16]]]
 
   EvalCacheEntry* = uint64  ## upper 48 hash bits | uint16(eval)
 
