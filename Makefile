@@ -1,10 +1,10 @@
 EXE      ?= Gyatso
-EVALFILE ?= Gyatso/Net/GyatsoNet1024x16x32.bin
+EVALFILE ?= Gyatso/Net/GyatsoNet384TIx16x32.bin
 SRC       = Gyatso/src/main.nim
 DATAGEN_SRC = Gyatso/src/datagen.nim
 NIM      ?= nim
 NIM_CC   ?= clang
-NETFILE   = Gyatso/Net/GyatsoNet1024x16x32.bin
+NETFILE   = Gyatso/Net/GyatsoNet384TIx16x32.bin
 DATAGEN  ?= GyatsoDatagen
 
 ifeq ($(OS),Windows_NT)
@@ -12,11 +12,13 @@ ifeq ($(OS),Windows_NT)
     EXE_SUFFIX  := .exe
     NO_PLT      :=
     LD_LLD      := -fuse-ld=lld
+    STACK_FLAG  := -Wl,--stack,8388608
 else
     DETECTED_OS := $(shell uname -s 2>/dev/null || echo Unix)
     EXE_SUFFIX  :=
     NO_PLT      := -fno-plt
     LD_LLD      := -fuse-ld=lld
+    STACK_FLAG  :=
 endif
 
 HOST_CPU_MACROS := $(shell echo | $(NIM_CC) -march=native -dM -E -x c - 2>&1)
@@ -65,7 +67,7 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
          -fomit-frame-pointer -flto -march=native \
          $(ISA_CFLAGS) $(NO_PLT)
 
-LDFLAGS = -O3 -flto $(LD_LLD) -Wl,--stack,8388608
+LDFLAGS = -O3 -flto $(LD_LLD) $(STACK_FLAG)
 
 PGO_DIR ?= pgo
 ifdef PGO_GEN

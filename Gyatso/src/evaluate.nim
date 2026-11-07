@@ -2,7 +2,6 @@ import coretypes
 import board
 import nnuetypes
 import nnue
-import threats
 
 var gNetwork* {.global.}: ptr NNUENetwork
 

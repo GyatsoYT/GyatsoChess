@@ -1,5 +1,5 @@
 import coretypes, bitboard, board, nnuetypes, threats
-import std/[streams, strutils, bitops]
+import std/[streams]
 import simd
 import attacks
 when defined(nnueStats):

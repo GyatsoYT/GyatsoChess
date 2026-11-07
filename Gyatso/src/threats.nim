@@ -1,5 +1,5 @@
 import std/bitops
-import coretypes, bitboard, attacks, board, nnuetypes
+import coretypes, bitboard, attacks, board
 
 const HALF_THREATS* = 29904
 
