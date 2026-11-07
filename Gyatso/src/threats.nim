@@ -20,6 +20,11 @@ var
   pawnTarget: array[12, int]
   thTargetOff: array[4, array[12, int32]]
   pawnTargetOff: array[12, int32]
+  pawnSqOffset: array[64, int32] = block:
+    var tbl: array[64, int32]
+    for s in 0 ..< 64:
+      tbl[s] = int32(((s shr 3) - 1) * 14 + 2 * (s and 7) - 1)
+    tbl
 
 proc makeTargets(valid: openArray[int]): array[12, int] =
   for i in 0 ..< 12: result[i] = -1
@@ -72,14 +77,12 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
 
   if attType == 0: # Pawn
     let pOff = pawnTargetOff[relTgt]
-    if pOff < 0: return -1
     let ident = if abs(d - s) == (if d > s: 7 else: 9): 0 else: 1
-    return side + system.int(pOff) + ((s shr 3) - 1) * 14 + 2 * (s and 7) + ident - 1
+    return side + system.int(pOff) + system.int(pawnSqOffset[s]) + ident
 
   let t = attType - 1
-  let targetOff = thTargetOff[t][relTgt]
-  if targetOff < 0: return -1
   if d > s and (relTgt mod 6) == attType: return -1
+  let targetOff = thTargetOff[t][relTgt]
   let below = countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1))
   side + system.int(targetOff) + system.int(thBase[t][s]) + below
 
