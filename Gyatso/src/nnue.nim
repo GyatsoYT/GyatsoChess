@@ -258,7 +258,8 @@ proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
                 let f = system.int(thFeats[i])
                 var r = 0
                 while r < AccTileRegs:
-                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    var w0 {.noinit.}, w1 {.noinit.}: VEPI16
+                    vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]), w0, w1)
                     regs[r] = vecAdd16(regs[r], w0)
                     regs[r + 1] = vecAdd16(regs[r + 1], w1)
                     r += 2
@@ -313,7 +314,8 @@ proc applyDelta(net: ptr NNUENetwork, d: var PerspDelta,
                 let f = system.int(d.thSubs[k])
                 var r = 0
                 while r < AccTileRegs:
-                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    var w0 {.noinit.}, w1 {.noinit.}: VEPI16
+                    vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]), w0, w1)
                     regs[r] = vecSub16(regs[r], w0)
                     regs[r + 1] = vecSub16(regs[r + 1], w1)
                     r += 2
@@ -321,7 +323,8 @@ proc applyDelta(net: ptr NNUENetwork, d: var PerspDelta,
                 let f = system.int(d.thAdds[k])
                 var r = 0
                 while r < AccTileRegs:
-                    let (w0, w1) = vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]))
+                    var w0 {.noinit.}, w1 {.noinit.}: VEPI16
+                    vecLoadW8x2(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE]), w0, w1)
                     regs[r] = vecAdd16(regs[r], w0)
                     regs[r + 1] = vecAdd16(regs[r + 1], w1)
                     r += 2
