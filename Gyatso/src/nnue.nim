@@ -1,5 +1,5 @@
 import coretypes, bitboard, board, nnuetypes, threats
-import std/[streams, strutils, bitops]
+import std/[streams, strutils]
 import simd
 import attacks
 when defined(nnueStats):
@@ -497,15 +497,19 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
     var nChanged = 0
     changedSqs[nChanged] = fromSq.int; inc nChanged
     changedSqs[nChanged] = toSq.int; inc nChanged
+    var changedMaskBB: Bitboard = fromSq.bit or toSq.bit
     if m.isEnPassant:
         let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
         changedSqs[nChanged] = capSq; inc nChanged
+        changedMaskBB = changedMaskBB or Square(capSq).bit
     elif m.isCastling:
         let rookFrom = toSq
+        let kingTo = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
         let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
                      else: fromSq.withFile(3)
         changedSqs[nChanged] = rookFrom.int; inc nChanged
         changedSqs[nChanged] = rookTo.int; inc nChanged
+        changedMaskBB = changedMaskBB or kingTo.bit or rookTo.bit
 
     let wPawns = b.byPiece[WhitePawn.ord]
     let bPawns = b.byPiece[BlackPawn.ord]
@@ -646,37 +650,43 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
                 for k in 0..<nLocal:
                     pushAddEdge(localEdges[k])
         else:
-            var pOld {.noinit.}: array[32, uint32]
-            var nPOld = 0
-            var pNew {.noinit.}: array[32, uint32]
-            var nPNew = 0
+            let pt = PieceType(oldType)
+            let sq = Square(oldSq)
+            let oldTargets = case pt
+                of Pawn:   getPawnAttacks(sq, oldColor) and occ
+                of Knight: getKnightAttacks(sq) and occ
+                of Bishop: getBishopAttacks(sq, occ) and occ
+                of Rook:   getRookAttacks(sq, occ) and occ
+                of Queen:  getQueenAttacks(sq, occ) and occ
+                else: Bitboard(0)
 
-            addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, pOld, nPOld)
-            addRawEdges(newMail, newOcc, newSq, newType, oldColor, pNew, nPNew)
+            let newTargets = case pt
+                of Pawn:   getPawnAttacks(sq, oldColor) and newOcc
+                of Knight: getKnightAttacks(sq) and newOcc
+                of Bishop: getBishopAttacks(sq, newOcc) and newOcc
+                of Rook:   getRookAttacks(sq, newOcc) and newOcc
+                of Queen:  getQueenAttacks(sq, newOcc) and newOcc
+                else: Bitboard(0)
 
-            var newUsed: uint32 = 0
-            var oldUsed: uint32 = 0
-            for i in 0..<nPOld:
-                let o = pOld[i]
-                var bit: uint32 = 1'u32
-                for j in 0..<nPNew:
-                    if ((newUsed and bit) == 0) and o == pNew[j]:
-                        oldUsed = oldUsed or (1'u32 shl i)
-                        newUsed = newUsed or bit
-                        break
-                    bit = bit shl 1
+            let common = oldTargets and newTargets and not changedMaskBB
+            var subTgts = oldTargets and not common
+            var addTgts = newTargets and not common
 
-            var maskOld = (not oldUsed) and (if nPOld == 32: 0xFFFFFFFF'u32 else: ((1'u32 shl nPOld) - 1))
-            while maskOld != 0:
-                let i = countTrailingZeroBits(maskOld)
-                maskOld = maskOld and (maskOld - 1)
-                pushSubEdge(pOld[i])
+            if not subTgts.isEmpty or not addTgts.isEmpty:
+                let targetMask = ValidThreatTargetMask[oldType]
+                while not subTgts.isEmpty:
+                    let dst = poplsb(subTgts)
+                    let tp = b.mailbox[dst.int]
+                    let ptOrd = tp.pieceType.ord
+                    if (targetMask and (1'u8 shl ptOrd)) != 0:
+                        pushSubEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
 
-            var maskNew = (not newUsed) and (if nPNew == 32: 0xFFFFFFFF'u32 else: ((1'u32 shl nPNew) - 1))
-            while maskNew != 0:
-                let j = countTrailingZeroBits(maskNew)
-                maskNew = maskNew and (maskNew - 1)
-                pushAddEdge(pNew[j])
+                while not addTgts.isEmpty:
+                    let dst = poplsb(addTgts)
+                    let tp = newMail[dst.int]
+                    let ptOrd = tp.pieceType.ord
+                    if (targetMask and (1'u8 shl ptOrd)) != 0:
+                        pushAddEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
 
     let kingSqW = b.kingSquare(White)
     let flipW = computeFlip(White, kingSqW)
