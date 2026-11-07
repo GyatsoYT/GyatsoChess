@@ -325,10 +325,20 @@ proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
-proc addEdges(b: Board, mailbox: array[64, Piece], occ: Bitboard,
-              perspective: Color, flip: int, src: int, attType: int,
-              attColor: Color, buf: var array[MAX_THREAT_DELTA * 2, int32],
-              n: var int) {.inline.} =
+func packEdge(src, dst, attType: int, attColor: Color, tgtPt: int, tgtColor: Color): uint32 {.inline.} =
+    uint32(src or (dst shl 6) or (attType shl 12) or (attColor.ord shl 15) or (tgtPt shl 16) or (tgtColor.ord shl 19))
+
+func unpackEdge(e: uint32, src, dst, attType: var int, attColor: var Color, tgtPt: var int, tgtColor: var Color) {.inline.} =
+    src = system.int(e and 0x3F)
+    dst = system.int((e shr 6) and 0x3F)
+    attType = system.int((e shr 12) and 0x7)
+    attColor = Color(system.int((e shr 15) and 0x1))
+    tgtPt = system.int((e shr 16) and 0x7)
+    tgtColor = Color(system.int((e shr 19) and 0x1))
+
+proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
+                 src: int, attType: int, attColor: Color,
+                 buf: var array[128, uint32], n: var int) {.inline.} =
     let sq = Square(src)
     var targets: Bitboard
     case PieceType(attType)
@@ -344,11 +354,8 @@ proc addEdges(b: Board, mailbox: array[64, Piece], occ: Bitboard,
         let tp = mailbox[dst.int]
         if tp == NoPiece: continue
         if tp.pieceType == King: continue
-        let rel = tp.pieceType.ord + (if tp.color == perspective: 0 else: 6)
-        let idx = threatIndex(attType, attColor == perspective, flip,
-                              src, dst.int, rel)
-        if idx >= 0:
-            buf[n] = int32(idx)
+        if n < 128:
+            buf[n] = packEdge(src, dst.int, attType, attColor, tp.pieceType.ord, tp.color)
             inc n
 
 proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
@@ -430,35 +437,28 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         changedSqs[nChanged] = rookFrom.int; inc nChanged
         changedSqs[nChanged] = rookTo.int; inc nChanged
 
-    var affSqs {.noinit.}: array[32, int]
-    var affTypes {.noinit.}: array[32, int]
-    var affColors {.noinit.}: array[32, Color]
-    var nAff = 0
-
-    template addAff(sq: int, pt: int, col: Color) =
-        var found = false
-        for i in 0..<nAff:
-            if affSqs[i] == sq:
-                found = true
-                break
-        if not found and nAff < 32:
-            affSqs[nAff] = sq
-            affTypes[nAff] = pt
-            affColors[nAff] = col
-            inc nAff
-
+    var affMask: Bitboard = Bitboard(0)
+    let kingMask = b.byPiece[WhiteKing.ord] or b.byPiece[BlackKing.ord]
     for ci in 0..<nChanged:
         let c = changedSqs[ci]
         let cSq = Square(c)
         let standing = b.mailbox[c]
         if standing != NoPiece and standing.pieceType != King:
-            addAff(c, standing.pieceType.ord, standing.color)
-        var attackers = b.attackersTo(cSq, occ)
-        while not attackers.isEmpty:
-            let aSq = poplsb(attackers)
-            let aPiece = b.mailbox[aSq.int]
-            if aPiece != NoPiece and aPiece.pieceType != King:
-                addAff(aSq.int, aPiece.pieceType.ord, aPiece.color)
+            affMask = affMask or cSq.bit
+        let attackers = b.attackersTo(cSq, occ) and not kingMask
+        affMask = affMask or attackers
+
+    var affSqs {.noinit.}: array[32, int]
+    var affTypes {.noinit.}: array[32, int]
+    var affColors {.noinit.}: array[32, Color]
+    var nAff = 0
+    while not affMask.isEmpty and nAff < 32:
+        let sq = poplsb(affMask)
+        let pc = b.mailbox[sq.int]
+        affSqs[nAff] = sq.int
+        affTypes[nAff] = pc.pieceType.ord
+        affColors[nAff] = pc.color
+        inc nAff
 
     var newMail: array[64, Piece] = b.mailbox
     var newOcc: Bitboard = occ
@@ -495,87 +495,115 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         newMail[toSq.int] = movingPiece
         newOcc = (newOcc and not fromSq.bit) or toSq.bit
 
+    var oldRaw {.noinit.}: array[128, uint32]
+    var nOld = 0
+    var newRaw {.noinit.}: array[128, uint32]
+    var nNew = 0
+
+    for ai in 0..<nAff:
+        let oldSq = affSqs[ai]
+        let oldType = affTypes[ai]
+        let oldColor = affColors[ai]
+
+        addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, oldRaw, nOld)
+
+        let piece = b.mailbox[oldSq]
+        var newSq = oldSq
+        var newType = oldType
+        var alive = true
+
+        if oldSq == fromSq.int:
+            if m.isCastling and movingPt == King:
+                alive = false
+            else:
+                newSq = toSq.int
+                if m.isPromotion:
+                    newType = (case m.promoType
+                        of PromoKnight: Knight.ord
+                        of PromoBishop: Bishop.ord
+                        of PromoRook:   Rook.ord
+                        of PromoQueen:  Queen.ord)
+        elif m.isCastling and oldSq == toSq.int:
+            let rookTo = if fromSq.file < toSq.file: fromSq.withFile(5)
+                         else: fromSq.withFile(3)
+            newSq = rookTo.int
+        elif m.isEnPassant:
+            let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
+            if oldSq == capSq:
+                alive = false
+        else:
+            if oldSq == toSq.int and piece != NoPiece and piece.color != movingColor:
+                alive = false
+
+        if alive:
+            let newColor = if oldSq == fromSq.int: movingColor else: oldColor
+            addRawEdges(newMail, newOcc, newSq, newType, newColor, newRaw, nNew)
+
+    var oldUsed {.noinit.}: array[128, bool]
+    var newUsed {.noinit.}: array[128, bool]
+    for i in 0..<nOld: oldUsed[i] = false
+    for i in 0..<nNew: newUsed[i] = false
+
+    for i in 0..<nOld:
+        let o = oldRaw[i]
+        for j in 0..<nNew:
+            if not newUsed[j] and o == newRaw[j]:
+                oldUsed[i] = true
+                newUsed[j] = true
+                break
+
+    var subRaw {.noinit.}: array[64, uint32]
+    var nSubRaw = 0
+    for i in 0..<nOld:
+        if not oldUsed[i]:
+            if nSubRaw < 64:
+                subRaw[nSubRaw] = oldRaw[i]
+                inc nSubRaw
+
+    var addRaw {.noinit.}: array[64, uint32]
+    var nAddRaw = 0
+    for i in 0..<nNew:
+        if not newUsed[i]:
+            if nAddRaw < 64:
+                addRaw[nAddRaw] = newRaw[i]
+                inc nAddRaw
+
     for p in [White, Black]:
         if deltas[p].needsRefresh: continue
 
         let kingSq = b.kingSquare(p)
         let flip = computeFlip(p, kingSq)
 
-        var oldEdges {.noinit.}: array[MAX_THREAT_DELTA * 2, int32]
-        var nOld = 0
-        var newEdges {.noinit.}: array[MAX_THREAT_DELTA * 2, int32]
-        var nNew = 0
-
-        for ai in 0..<nAff:
-            let oldSq = affSqs[ai]
-            let oldType = affTypes[ai]
-            let oldColor = affColors[ai]
-
-            addEdges(b, b.mailbox, occ, p, flip, oldSq, oldType, oldColor,
-                     oldEdges, nOld)
-
-            let piece = b.mailbox[oldSq]
-            var newSq = oldSq
-            var newType = oldType
-            var alive = true
-
-            if oldSq == fromSq.int:
-                if m.isCastling and movingPt == King:
-                    alive = false
-                else:
-                    newSq = toSq.int
-                    if m.isPromotion:
-                        newType = (case m.promoType
-                            of PromoKnight: Knight.ord
-                            of PromoBishop: Bishop.ord
-                            of PromoRook:   Rook.ord
-                            of PromoQueen:  Queen.ord)
-            elif m.isCastling and oldSq == toSq.int:
-                let rookTo = if fromSq.file < toSq.file: fromSq.withFile(5)
-                             else: fromSq.withFile(3)
-                newSq = rookTo.int
-            elif m.isEnPassant:
-                let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
-                if oldSq == capSq:
-                    alive = false
-            else:
-                if oldSq == toSq.int and piece != NoPiece and piece.color != movingColor:
-                    alive = false
-
-            if alive:
-                let newColor = if oldSq == fromSq.int: movingColor else: oldColor
-                addEdges(b, newMail, newOcc, p, flip, newSq, newType, newColor,
-                         newEdges, nNew)
-
-        var oldUsed {.noinit.}: array[MAX_THREAT_DELTA * 2, bool]
-        var newUsed {.noinit.}: array[MAX_THREAT_DELTA * 2, bool]
-        for i in 0..<nOld: oldUsed[i] = false
-        for i in 0..<nNew: newUsed[i] = false
-
-        for i in 0..<nOld:
-            for j in 0..<nNew:
-                if not newUsed[j] and oldEdges[i] == newEdges[j]:
-                    oldUsed[i] = true
-                    newUsed[j] = true
-                    break
-
         var nSubs = 0
         var nAdds = 0
-        for i in 0..<nOld:
-            if not oldUsed[i]:
+
+        for i in 0..<nSubRaw:
+            var src, dst, attType, tgtPt: int
+            var attColor, tgtColor: Color
+            unpackEdge(subRaw[i], src, dst, attType, attColor, tgtPt, tgtColor)
+            let rel = tgtPt + (if tgtColor == p: 0 else: 6)
+            let idx = threatIndex(attType, attColor == p, flip, src, dst, rel)
+            if idx >= 0:
                 if nSubs >= MAX_THREAT_DELTA:
                     deltas[p].needsRefresh = true
                     break
-                deltas[p].thSubs[nSubs] = uint32(oldEdges[i])
+                deltas[p].thSubs[nSubs] = uint32(idx)
                 inc nSubs
+
         if not deltas[p].needsRefresh:
-            for i in 0..<nNew:
-                if not newUsed[i]:
+            for i in 0..<nAddRaw:
+                var src, dst, attType, tgtPt: int
+                var attColor, tgtColor: Color
+                unpackEdge(addRaw[i], src, dst, attType, attColor, tgtPt, tgtColor)
+                let rel = tgtPt + (if tgtColor == p: 0 else: 6)
+                let idx = threatIndex(attType, attColor == p, flip, src, dst, rel)
+                if idx >= 0:
                     if nAdds >= MAX_THREAT_DELTA:
                         deltas[p].needsRefresh = true
                         break
-                    deltas[p].thAdds[nAdds] = uint32(newEdges[i])
+                    deltas[p].thAdds[nAdds] = uint32(idx)
                     inc nAdds
+
         deltas[p].nThSubs = nSubs
         deltas[p].nThAdds = nAdds
 
