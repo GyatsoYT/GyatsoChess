@@ -65,7 +65,7 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
          -fomit-frame-pointer -flto -march=native \
          $(ISA_CFLAGS) $(NO_PLT)
 
-LDFLAGS = -O3 -flto $(LD_LLD)
+LDFLAGS = -O3 -flto $(LD_LLD) -Wl,--stack,8388608
 
 PGO_DIR ?= pgo
 ifdef PGO_GEN
