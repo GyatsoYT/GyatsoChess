@@ -77,7 +77,7 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
 
   if attType == 0: # Pawn
     let pOff = pawnTargetOff[relTgt]
-    let ident = if abs(d - s) == (if d > s: 7 else: 9): 0 else: 1
+    let ident = ord((d and 7) > (s and 7))
     return side + system.int(pOff) + system.int(pawnSqOffset[s]) + ident
 
   let t = attType - 1
@@ -104,7 +104,7 @@ proc threatIndexDual*(e: uint32,
       let sideW = if attColor == 0: 0'i32 else: HALF_THREATS
       let relW = tgtPt + (if isWhiteTgt: 0 else: 6)
       let pOffW = pawnTargetOff[relW]
-      let identW = if abs(dW - sW) == (if dW > sW: 7 else: 9): 0'i32 else: 1'i32
+      let identW = int32(ord((dW and 7) > (sW and 7)))
       idxW = sideW + pOffW + pawnSqOffset[sW] + identW
     if doB:
       let sB = src xor flipB
@@ -112,7 +112,7 @@ proc threatIndexDual*(e: uint32,
       let sideB = if attColor == 1: 0'i32 else: HALF_THREATS
       let relB = tgtPt + (if isWhiteTgt: 6 else: 0)
       let pOffB = pawnTargetOff[relB]
-      let identB = if abs(dB - sB) == (if dB > sB: 7 else: 9): 0'i32 else: 1'i32
+      let identB = int32(ord((dB and 7) > (sB and 7)))
       idxB = sideB + pOffB + pawnSqOffset[sB] + identB
   else:
     let t = attType - 1
