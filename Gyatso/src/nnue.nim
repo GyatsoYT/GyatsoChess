@@ -414,7 +414,8 @@ template getPieceAttacks(sq: Square, pt: PieceType, color: Color, occBB: Bitboar
     of Queen:  getQueenAttacks(sq, occBB) and occBB
     else: Bitboard(0)
 
-proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
+proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
+                      refreshPersp: Color, refreshActive: bool) =
     let us = b.stm
     let them = us.opposite()
     let fromSq = m.fromSq
@@ -428,9 +429,14 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         deltas[p].nPsqtSubs = 0
         deltas[p].nThAdds = 0
         deltas[p].nThSubs = 0
-        deltas[p].needsRefresh = false
+        if refreshActive and p == refreshPersp:
+            deltas[p].needsRefresh = true
+        else:
+            deltas[p].needsRefresh = false
 
     for p in [White, Black]:
+        if deltas[p].needsRefresh:
+            continue
         let kingSq = b.kingSquare(p)
         let flip = computeFlip(p, kingSq)
 
@@ -722,11 +728,15 @@ proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
     let ply = state.current
     let us = b.stm
     let movingPt = b.mailbox[m.fromSq.int].pieceType
+    let kingToFile = if m.isCastling:
+                       (if m.fromSq.file < m.toSq.file: 6 else: 2)
+                     else: m.toSq.file
+    let kingCross = movingPt == King and ((m.fromSq.file > 3) != (kingToFile > 3))
 
     when defined(profileNNUE):
         let t0 = rdtsc()
     var deltas {.noinit.}: array[Color, PerspDelta]
-    computeDeltaBoth(b, m, deltas)
+    computeDeltaBoth(b, m, deltas, us, kingCross)
     when defined(profileNNUE):
         let t1 = rdtsc()
         profComputeDeltaCalls += 1
@@ -737,15 +747,7 @@ proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
             net.refreshAccumulator(b, state.acc[perspective][ply], perspective)
             state.accFlags[perspective][ply] = AccComputed
 
-        state.accFlags[perspective][ply + 1] = 0
-
-        let kingToFile = if m.isCastling:
-                           (if m.fromSq.file < m.toSq.file: 6 else: 2)
-                         else: m.toSq.file
-        if perspective == us and movingPt == King and
-                (m.fromSq.file > 3) != (kingToFile > 3):
-            state.accFlags[perspective][ply + 1] = AccNeedsRefresh
-        elif deltas[perspective].needsRefresh:
+        if deltas[perspective].needsRefresh:
             state.accFlags[perspective][ply + 1] = AccNeedsRefresh
         else:
             state.accFlags[perspective][ply + 1] = 0
