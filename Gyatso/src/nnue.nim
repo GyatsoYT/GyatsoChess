@@ -373,13 +373,22 @@ proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.
 func packEdge(src, dst, attType: int, attColor: Color, tgtPt: int, tgtColor: Color): uint32 {.inline.} =
     uint32(src or (dst shl 6) or (attType shl 12) or (attColor.ord shl 15) or (tgtPt shl 16) or (tgtColor.ord shl 19))
 
-func unpackEdge(e: uint32, src, dst, attType: var int, attColor: var Color, tgtPt: var int, tgtColor: var Color) {.inline.} =
-    src = system.int(e and 0x3F)
-    dst = system.int((e shr 6) and 0x3F)
-    attType = system.int((e shr 12) and 0x7)
-    attColor = Color(system.int((e shr 15) and 0x1))
-    tgtPt = system.int((e shr 16) and 0x7)
-    tgtColor = Color(system.int((e shr 19) and 0x1))
+type
+  RawEdge = object
+    src: uint8
+    dst: uint8
+    attType: uint8
+    attColor: uint8
+    tgtPt: uint8
+    tgtColor: uint8
+
+func unpackEdgeTo(e: uint32, edge: var RawEdge) {.inline.} =
+    edge.src = uint8(e and 0x3F)
+    edge.dst = uint8((e shr 6) and 0x3F)
+    edge.attType = uint8((e shr 12) and 0x7)
+    edge.attColor = uint8((e shr 15) and 0x1)
+    edge.tgtPt = uint8((e shr 16) and 0x7)
+    edge.tgtColor = uint8((e shr 19) and 0x1)
 
 const ValidThreatTargetMask: array[5, uint8] = [
     (1'u8 shl Knight.ord) or (1'u8 shl Rook.ord), # Pawn: 10
@@ -604,9 +613,9 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
             let newColor = if oldSq == fromSq.int: movingColor else: oldColor
             addRawEdges(newMail, newOcc, newSq, newType, newColor, newRaw, nNew)
 
-    var subRaw {.noinit.}: array[64, uint32]
+    var subRaw {.noinit.}: array[64, RawEdge]
     var nSubRaw = 0
-    var addRaw {.noinit.}: array[64, uint32]
+    var addRaw {.noinit.}: array[64, RawEdge]
     var nAddRaw = 0
 
     if nOld <= 64 and nNew <= 64:
@@ -614,19 +623,25 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         var oldUsedMask: uint64 = 0
         for i in 0..<nOld:
             let o = oldRaw[i]
+            var bit: uint64 = 1'u64
             for j in 0..<nNew:
-                if ((newUsedMask and (1'u64 shl j)) == 0) and o == newRaw[j]:
+                if ((newUsedMask and bit) == 0) and o == newRaw[j]:
                     oldUsedMask = oldUsedMask or (1'u64 shl i)
-                    newUsedMask = newUsedMask or (1'u64 shl j)
+                    newUsedMask = newUsedMask or bit
                     break
-        for i in 0..<nOld:
-            if (oldUsedMask and (1'u64 shl i)) == 0:
-                subRaw[nSubRaw] = oldRaw[i]
-                inc nSubRaw
-        for j in 0..<nNew:
-            if (newUsedMask and (1'u64 shl j)) == 0:
-                addRaw[nAddRaw] = newRaw[j]
-                inc nAddRaw
+                bit = bit shl 1
+
+        var unmatchOld = Bitboard(not oldUsedMask and (if nOld == 64: not 0'u64 else: ((1'u64 shl nOld) - 1)))
+        while not unmatchOld.isEmpty:
+            let i = poplsb(unmatchOld).int
+            unpackEdgeTo(oldRaw[i], subRaw[nSubRaw])
+            inc nSubRaw
+
+        var unmatchNew = Bitboard(not newUsedMask and (if nNew == 64: not 0'u64 else: ((1'u64 shl nNew) - 1)))
+        while not unmatchNew.isEmpty:
+            let j = poplsb(unmatchNew).int
+            unpackEdgeTo(newRaw[j], addRaw[nAddRaw])
+            inc nAddRaw
     else:
         deltas[White].needsRefresh = true
         deltas[Black].needsRefresh = true
@@ -641,12 +656,11 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         var nSubs = 0
         var nAdds = 0
 
+        let pOrd = uint8(p.ord)
         for i in 0..<nSubRaw:
-            var src, dst, attType, tgtPt: int
-            var attColor, tgtColor: Color
-            unpackEdge(subRaw[i], src, dst, attType, attColor, tgtPt, tgtColor)
-            let rel = tgtPt + (if tgtColor == p: 0 else: 6)
-            let idx = threatIndex(attType, attColor == p, flip, src, dst, rel)
+            let e = subRaw[i]
+            let rel = system.int(e.tgtPt) + (if e.tgtColor == pOrd: 0 else: 6)
+            let idx = threatIndex(system.int(e.attType), e.attColor == pOrd, flip, system.int(e.src), system.int(e.dst), rel)
             if idx >= 0:
                 if nSubs >= MAX_THREAT_DELTA:
                     deltas[p].needsRefresh = true
@@ -656,11 +670,9 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
 
         if not deltas[p].needsRefresh:
             for i in 0..<nAddRaw:
-                var src, dst, attType, tgtPt: int
-                var attColor, tgtColor: Color
-                unpackEdge(addRaw[i], src, dst, attType, attColor, tgtPt, tgtColor)
-                let rel = tgtPt + (if tgtColor == p: 0 else: 6)
-                let idx = threatIndex(attType, attColor == p, flip, src, dst, rel)
+                let e = addRaw[i]
+                let rel = system.int(e.tgtPt) + (if e.tgtColor == pOrd: 0 else: 6)
+                let idx = threatIndex(system.int(e.attType), e.attColor == pOrd, flip, system.int(e.src), system.int(e.dst), rel)
                 if idx >= 0:
                     if nAdds >= MAX_THREAT_DELTA:
                         deltas[p].needsRefresh = true
