@@ -390,14 +390,6 @@ func unpackEdgeTo(e: uint32, edge: var RawEdge) {.inline.} =
     edge.tgtPt = uint8((e shr 16) and 0x7)
     edge.tgtColor = uint8((e shr 19) and 0x1)
 
-const ValidThreatTargetMask: array[5, uint8] = [
-    (1'u8 shl Knight.ord) or (1'u8 shl Rook.ord), # Pawn: 10
-    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord), # Knight: 31
-    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Bishop: 15
-    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Rook: 15
-    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord)  # Queen: 31
-]
-
 proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
                  src: int, attType: int, attColor: Color,
                  buf: var array[128, uint32], n: var int) {.inline.} =

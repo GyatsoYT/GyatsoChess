@@ -3,6 +3,14 @@ import coretypes, bitboard, attacks, board
 
 const HALF_THREATS* = 29904
 
+const ValidThreatTargetMask*: array[5, uint8] = [
+    (1'u8 shl Knight.ord) or (1'u8 shl Rook.ord), # Pawn: 10
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord), # Knight: 31
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Bishop: 15
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord), # Rook: 15
+    (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord)  # Queen: 31
+]
+
 var
   thAtt: array[4, array[64, uint64]]
   thBase: array[4, array[64, int32]]
@@ -123,13 +131,13 @@ proc computeThreatFeatures*(b: Board, perspective: Color,
       of Queen:  tgts = getQueenAttacks(src, occ) and occ
       else: continue
 
+      let targetMask = ValidThreatTargetMask[attType]
       while not tgts.isEmpty:
         let dst = poplsb(tgts)
         let tgtPiece = b.mailbox[dst.int]
-        if tgtPiece == NoPiece: continue
-        if tgtPiece.pieceType == King: continue
-        let relTgt = tgtPiece.pieceType.ord +
-                     (if tgtPiece.color == perspective: 0 else: 6)
+        let tgtPtOrd = tgtPiece.pieceType.ord
+        if (targetMask and (1'u8 shl tgtPtOrd)) == 0: continue
+        let relTgt = tgtPtOrd + (if tgtPiece.color == perspective: 0 else: 6)
         let attFriendly = (attColor == perspective)
         let idx = threatIndex(attType, attFriendly, flip, src.int, dst.int, relTgt)
         if idx >= 0:
