@@ -598,9 +598,18 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
             deltas[Black].needsRefresh = true
             return
 
+    let kings = b.byPiece[King.ord] or b.byPiece[King.ord + 6]
+    let newKings = if movingPt == King:
+                       (if m.isCastling:
+                            let kTo = if fromSq.file < toSq.file: fromSq.withFile(6) else: fromSq.withFile(2)
+                            (kings and not fromSq.bit) or kTo.bit
+                        else:
+                            (kings and not fromSq.bit) or toSq.bit)
+                   else: kings
+
     template emitSubAttacks(sq: Square, pt: PieceType, pc: Color) =
         if pt != King:
-            var tgts = getPieceAttacks(sq, pt, pc, occ)
+            var tgts = getPieceAttacks(sq, pt, pc, occ) and not kings
             let targetMask = ValidThreatTargetMask[pt.ord]
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
@@ -611,7 +620,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
 
     template emitAddAttacks(sq: Square, pt: PieceType, pc: Color) =
         if pt != King:
-            var tgts = getPieceAttacks(sq, pt, pc, newOcc)
+            var tgts = getPieceAttacks(sq, pt, pc, newOcc) and not newKings
             let targetMask = ValidThreatTargetMask[pt.ord]
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
@@ -657,8 +666,8 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
 
         let common = oldTargets and newTargets and not changedMaskBB
-        var subTgts = oldTargets and not common
-        var addTgts = newTargets and not common
+        var subTgts = (oldTargets and not common) and not kings
+        var addTgts = (newTargets and not common) and not newKings
 
         if not subTgts.isEmpty or not addTgts.isEmpty:
             let targetMask = ValidThreatTargetMask[oldType]
