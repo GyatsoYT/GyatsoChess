@@ -584,34 +584,33 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
             let newColor = if oldSq == fromSq.int: movingColor else: oldColor
             addRawEdges(newMail, newOcc, newSq, newType, newColor, newRaw, nNew)
 
-    var oldUsed {.noinit.}: array[128, bool]
-    var newUsed {.noinit.}: array[128, bool]
-    for i in 0..<nOld: oldUsed[i] = false
-    for i in 0..<nNew: newUsed[i] = false
-
-    for i in 0..<nOld:
-        let o = oldRaw[i]
-        for j in 0..<nNew:
-            if not newUsed[j] and o == newRaw[j]:
-                oldUsed[i] = true
-                newUsed[j] = true
-                break
-
     var subRaw {.noinit.}: array[64, uint32]
     var nSubRaw = 0
-    for i in 0..<nOld:
-        if not oldUsed[i]:
-            if nSubRaw < 64:
-                subRaw[nSubRaw] = oldRaw[i]
-                inc nSubRaw
-
     var addRaw {.noinit.}: array[64, uint32]
     var nAddRaw = 0
-    for i in 0..<nNew:
-        if not newUsed[i]:
-            if nAddRaw < 64:
-                addRaw[nAddRaw] = newRaw[i]
+
+    if nOld <= 64 and nNew <= 64:
+        var newUsedMask: uint64 = 0
+        var oldUsedMask: uint64 = 0
+        for i in 0..<nOld:
+            let o = oldRaw[i]
+            for j in 0..<nNew:
+                if ((newUsedMask and (1'u64 shl j)) == 0) and o == newRaw[j]:
+                    oldUsedMask = oldUsedMask or (1'u64 shl i)
+                    newUsedMask = newUsedMask or (1'u64 shl j)
+                    break
+        for i in 0..<nOld:
+            if (oldUsedMask and (1'u64 shl i)) == 0:
+                subRaw[nSubRaw] = oldRaw[i]
+                inc nSubRaw
+        for j in 0..<nNew:
+            if (newUsedMask and (1'u64 shl j)) == 0:
+                addRaw[nAddRaw] = newRaw[j]
                 inc nAddRaw
+    else:
+        deltas[White].needsRefresh = true
+        deltas[Black].needsRefresh = true
+        return
 
     for p in [White, Black]:
         if deltas[p].needsRefresh: continue
