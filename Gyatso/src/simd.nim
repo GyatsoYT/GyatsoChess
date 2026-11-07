@@ -22,8 +22,8 @@ when defined(avx512):
 
     {.push header: "immintrin.h".}
     func mm512_add_epi32*(a, b: M512i): M512i {.importc: "_mm512_add_epi32".}
-    func mm512_load_si512_impl(p: ptr M512i): M512i {.importc: "_mm512_load_si512".}
-    func mm512_store_si512*(a: pointer, b: M512i) {.importc: "_mm512_store_si512".}
+    func mm512_loadu_si512_impl(p: pointer): M512i {.importc: "_mm512_loadu_si512".}
+    func mm512_storeu_si512*(a: pointer, b: M512i) {.importc: "_mm512_storeu_si512".}
     func mm512_add_epi16*(a, b: M512i): M512i {.importc: "_mm512_add_epi16".}
     func mm512_sub_epi16*(a, b: M512i): M512i {.importc: "_mm512_sub_epi16".}
     func mm512_madd_epi16*(a, b: M512i): M512i {.importc: "_mm512_madd_epi16".}
@@ -36,7 +36,7 @@ when defined(avx512):
     {.pop.}
 
     template mm512_load_si512*(p: pointer): M512i =
-        mm512_load_si512_impl(cast[ptr M512i](p))
+        mm512_loadu_si512_impl(p)
 
     type
         VEPI16* = M512i
@@ -47,9 +47,9 @@ when defined(avx512):
     func vecZero16*(): VEPI16 {.inline.} = mm512_setzero_si512()
     func vecZero32*(): VEPI32 {.inline.} = mm512_setzero_si512()
     func vecSetOne16*(n: int16): VEPI16 {.inline.} = mm512_set1_epi16(n)
-    func vecStore*(dst: pointer, vec: VEPI16) {.inline.} = mm512_store_si512(
+    func vecStore*(dst: pointer, vec: VEPI16) {.inline.} = mm512_storeu_si512(
             dst, vec)
-    func vecLoad*(src: pointer): VEPI16 {.inline.} = mm512_load_si512(src)
+    func vecLoad*(src: pointer): VEPI16 {.inline.} = mm512_loadu_si512_impl(src)
     func vecMax16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_max_epi16(a, b)
     func vecMin16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_min_epi16(a, b)
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = mm512_mullo_epi16(a, b)
@@ -74,9 +74,9 @@ elif defined(avx2):
     func vecZero16*(): VEPI16 {.inline.} = mm256_setzero_si256()
     func vecZero32*(): VEPI32 {.inline.} = mm256_setzero_si256()
     func vecSetOne16*(n: int16): VEPI16 {.inline.} = mm256_set1_epi16(n)
-    func vecStore*(dst: pointer, vec: VEPI16) {.inline.} = mm256_store_si256(
-            dst, vec)
-    func vecLoad*(src: pointer): VEPI16 {.inline.} = mm256_load_si256(src)
+    func vecStore*(dst: pointer, vec: VEPI16) {.inline.} = mm256_storeu_si256(
+            cast[ptr M256i](dst), vec)
+    func vecLoad*(src: pointer): VEPI16 {.inline.} = mm256_loadu_si256(cast[ptr M256i](src))
     func vecMax16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_max_epi16(a, b)
     func vecMin16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_min_epi16(a, b)
     func vecMullo16*(a, b: VEPI16): VEPI16 {.inline.} = mm256_mullo_epi16(a, b)
@@ -280,10 +280,10 @@ when defined(neon) or defined(arm64) or defined(aarch64):
 
 when defined(avx512):
   {.push header: "immintrin.h".}
-  func mm256LoadSi256Impl(p: pointer): M256i {.importc: "_mm256_load_si256".}
+  func mm256LoaduSi256Impl(p: pointer): M256i {.importc: "_mm256_loadu_si256".}
   {.pop.}
   func vecLoadW8*(p: pointer): M512i {.inline.} =
-    mm512Cvtepi8Epi16(mm256LoadSi256Impl(p))
+    mm512Cvtepi8Epi16(mm256LoaduSi256Impl(p))
 
 elif defined(avx2):
   {.push header: "immintrin.h".}

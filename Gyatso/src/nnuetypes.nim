@@ -60,7 +60,7 @@ type
 
   NNUEState* = object
     current*: int
-    acc*: array[Color, array[MaxPly + 1, Accumulator]]
+    acc* {.align(ALIGNMENT).}: array[Color, array[MaxPly + 1, Accumulator]]
     accFlags*: array[Color, array[MaxPly + 1, uint8]]
     delta*: array[Color, array[MaxPly + 1, PerspDelta]]
     evalCache*: array[EvalCacheSize, EvalCacheEntry]

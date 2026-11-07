@@ -5,8 +5,25 @@ import nnue
 
 var gNetwork* {.global.}: ptr NNUENetwork
 
+proc alignedAlloc0(size: int, alignment: int): pointer =
+  when defined(windows):
+    proc c_aligned_malloc(size: csize_t, alignment: csize_t): pointer {.importc: "_aligned_malloc", header: "<malloc.h>".}
+    result = c_aligned_malloc(csize_t(size), csize_t(alignment))
+  elif defined(posix):
+    proc posix_memalign(memptr: ptr pointer, alignment: csize_t, size: csize_t): cint {.importc: "posix_memalign", header: "<stdlib.h>".}
+    var p: pointer = nil
+    if posix_memalign(addr p, csize_t(alignment), csize_t(size)) == 0:
+      result = p
+    else:
+      result = nil
+  else:
+    result = allocShared0(size)
+  if result != nil:
+    zeroMem(result, size)
+
 proc initNNUE*() =
-  gNetwork = cast[ptr NNUENetwork](allocShared0(sizeof(NNUENetwork)))
+  gNetwork = cast[ptr NNUENetwork](alignedAlloc0(sizeof(NNUENetwork), ALIGNMENT))
+  doAssert gNetwork != nil, "Failed to allocate memory for NNUE network"
   loadNetworkFromEmbedded(gNetwork)
 
 proc evaluate*(b: Board, state: var NNUEState): int {.inline.} =
