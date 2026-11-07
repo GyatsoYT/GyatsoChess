@@ -218,7 +218,7 @@ proc loadNetworkFromEmbedded*(net: ptr NNUENetwork) =
     loadNetworkInto(net, NNUE_EMBEDDED)
 
 const
-  AccTileRegs = when defined(avx512): 12 else: 8
+  AccTileRegs = 6
   AccTileSize = AccTileRegs * CHUNK_SIZE
 
 proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
