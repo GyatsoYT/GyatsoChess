@@ -11,6 +11,9 @@ import bench
 import threads
 import searchparams
 import genfens
+import evaluate
+import nnuetypes
+import nnue
 
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
@@ -338,3 +341,10 @@ proc runUciLoop*() =
       elif line.startsWith("genfens"):
         stopSearch()
         runGenfens(line)
+
+      elif line == "eval":
+        var state: NNUEState
+        state.current = 0
+        refreshNNUE(currentBoard, state)
+        let v = nnueEvaluate(gNetwork, currentBoard, state)
+        reply "eval cp " & $v

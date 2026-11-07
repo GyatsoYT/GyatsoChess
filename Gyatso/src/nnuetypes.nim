@@ -2,13 +2,16 @@ import coretypes
 
 const
   ALIGNMENT* = 64
-  FT_IN*     = 768   
-  HL*        = 1024  
+  PSQT_IN*   = 768
+  THREAT_IN* = 59808
+  HL*        = 384
+  PAIR_COUNT* = HL div 2
+  L1_IN*     = 2 * PAIR_COUNT
   L2_SIZE*   = 16
   L3_SIZE*   = 32
-  PAIR_COUNT* = HL div 2
-  QA*        = 255   
-  QB*        = 64    
+  MAX_THREAT_DELTA* = 32
+  QA*        = 255
+  QB*        = 64
   EVAL_SCALE* = 400
   EvalCacheSize* = 131072
 
@@ -29,40 +32,32 @@ type
     data* {.align(ALIGNMENT).}: array[HL, int16]
 
   NNUENetwork* = object
-    ftWeight* {.align(ALIGNMENT).}: array[FT_IN, array[HL, int16]]
+    ftPsqt*   {.align(ALIGNMENT).}: array[PSQT_IN, array[HL, int16]]
+    ftThreat* {.align(ALIGNMENT).}: array[THREAT_IN, array[HL, int8]]
     ftBias*   {.align(ALIGNMENT).}: array[HL, int16]
-    l1Weight* {.align(ALIGNMENT).}: array[HL div 4, array[L2_SIZE, array[4, int8]]]
-    l1Bias* {.align(ALIGNMENT).}: array[L2_SIZE, int32]
+    l1Weight* {.align(ALIGNMENT).}: array[L1_IN div 4, array[L2_SIZE, array[4, int8]]]
+    l1Bias*   {.align(ALIGNMENT).}: array[L2_SIZE, int32]
     l2Weight* {.align(ALIGNMENT).}: array[L2_SIZE, array[L3_SIZE, int32]]
-    l2Bias* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
+    l2Bias*   {.align(ALIGNMENT).}: array[L3_SIZE, int32]
     l3Weight* {.align(ALIGNMENT).}: array[L3_SIZE, int32]
-    l3Bias*: int32
-    l2Int32Safe*: bool
-    l2Int16Safe*: bool
-    l2WeightPacked* {.align(ALIGNMENT).}: array[L2_SIZE div 2, array[L3_SIZE, array[2, int16]]]
+    l3Bias*:  int32
 
   EvalCacheEntry* = uint64  ## upper 48 hash bits | uint16(eval)
 
-  AccumulatorDelta* = object
-    ## Feature changes a move applies to one perspective's accumulator.
-    ## addCount == subCount == 0 means the accumulator is copied unchanged
-    ## (null move).
-    adds*: array[2, uint16]
-    subs*: array[2, uint16]
-    addCount*: uint8
-    subCount*: uint8
+  PerspDelta* = object
+    psqtAdds*: array[4, uint16]
+    psqtSubs*: array[4, uint16]
+    nPsqtAdds*: int
+    nPsqtSubs*: int
+    thAdds*: array[MAX_THREAT_DELTA, uint32]
+    thSubs*: array[MAX_THREAT_DELTA, uint32]
+    nThAdds*: int
+    nThSubs*: int
+    needsRefresh*: bool
 
   NNUEState* = object
     current*: int
     acc*: array[Color, array[MaxPly + 1, Accumulator]]
-    ## Accumulator at [persp][ply] holds valid values. Updates are applied
-    ## lazily: a push only records the delta, and evaluation walks back to
-    ## the nearest computed ancestor and replays the pending deltas.
-    ## packed: bit0 = computed, bit1 = needsRefresh (a pending king-mirror
-    ## refresh; resolved no later than the next push from that ply).
     accFlags*: array[Color, array[MaxPly + 1, uint8]]
-    delta*: array[Color, array[MaxPly + 1, AccumulatorDelta]]
-    ## Per-thread cache of final evaluations keyed by full Zobrist hash.
-    ## NNUE output depends only on piece placement and side to move, both
-    ## covered by the hash, so a key match reproduces the exact same score.
+    delta*: array[Color, array[MaxPly + 1, PerspDelta]]
     evalCache*: array[EvalCacheSize, EvalCacheEntry]

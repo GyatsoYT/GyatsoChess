@@ -1,23 +1,18 @@
-import coretypes, bitboard, board, nnuetypes
-import std/[streams, strutils]
+import coretypes, bitboard, board, nnuetypes, threats
+import std/[streams, strutils, bitops]
 import simd
+import attacks
 when defined(nnueStats):
     import std/atomics
 
-func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, perspectiveKingSq: Square): int {.inline.} =
-    let colorIdx = if perspective == pieceColor: 0 else: 1
-    let ptIdx = pt.ord  # Pawn=0..King=5
-    var sqIdx = if perspective == White: sq.int else: (sq.int xor 56)
-    # Horizontal mirror: flip file when perspective king is on files e-h
-    if (perspectiveKingSq.int mod 8) > 3:
-        sqIdx = sqIdx xor 7
-    result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
-
 const
-    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
-    NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1024x16x32.perm")
-    NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
-                     L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
+    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet384TIx16x32.bin")
+    NNUE_PAIRWISE_PERMUTATION = block:
+      var p: array[PAIR_COUNT, int]
+      for i in 0 ..< PAIR_COUNT: p[i] = i
+      p
+    NNUE_RAW_BYTES* = THREAT_IN * HL + PSQT_IN * HL * 2 + HL * 2 +
+                     HL * L2_SIZE + L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
                      L3_SIZE * 4 + L3_SIZE * 4 + 4
     NNUE_PADDING_BYTES* = (64 - NNUE_RAW_BYTES mod 64) mod 64
     NNUE_FILE_BYTES* = NNUE_RAW_BYTES + NNUE_PADDING_BYTES
@@ -40,23 +35,6 @@ const
             table[mask] = uint8(count)
         table
 
-proc readPairwisePermutation(): array[PAIR_COUNT, int] =
-    let values = NNUE_PAIRWISE_PERMUTATION.splitWhitespace()
-    if values.len != PAIR_COUNT:
-        raise newException(IOError, "NNUE permutation must contain exactly " & $PAIR_COUNT & " indices")
-
-    var seen: array[PAIR_COUNT, bool]
-    for newIndex, token in values:
-        var oldIndex: int
-        try:
-            oldIndex = parseInt(token)
-        except ValueError:
-            raise newException(IOError, "Invalid integer in NNUE permutation: " & token)
-        if oldIndex < 0 or oldIndex >= PAIR_COUNT or seen[oldIndex]:
-            raise newException(IOError, "NNUE permutation indices must be unique values in 0.." & $(PAIR_COUNT - 1))
-        result[newIndex] = oldIndex
-        seen[oldIndex] = true
-
 when defined(nnueStats):
     const NNUE_STATS_SAMPLE_MASK = 4095'u64
     var nnueStatsEvalCounter {.global.}: Atomic[system.uint64]
@@ -74,7 +52,7 @@ when defined(nnueStats):
                     discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
                 if values[PAIR_COUNT + pairIndex] != 0:
                     discard nnueStatsActivationCounts[pairIndex].fetchAdd(1'u64, moRelaxed)
-            for blockIdx in 0..<(HL div 4):
+            for blockIdx in 0..<(L1_IN div 4):
                 if values[blockIdx * 4] != 0 or values[blockIdx * 4 + 1] != 0 or
                    values[blockIdx * 4 + 2] != 0 or values[blockIdx * 4 + 3] != 0:
                     inc activeBlocks
@@ -112,188 +90,101 @@ proc readI32(data: string, offset: var int): int32 {.inline.} =
     let b3 = uint32(data.readU8(offset))
     result = cast[int32](b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24))
 
-proc loadNetworkFromBytes(data: string): NNUENetwork =
+proc loadNetworkInto*(net: ptr NNUENetwork, data: string) =
     if data.len != NNUE_FILE_BYTES:
         raise newException(IOError,
-            "Invalid multilayer NNUE length: got " & $data.len &
+            "Invalid NNUE length: got " & $data.len &
             " bytes; expected " & $NNUE_FILE_BYTES & " (raw tensors plus Bullet padding)")
 
     const PaddingMarker = "bullet"
     for i in 0..<NNUE_PADDING_BYTES:
         if data[NNUE_RAW_BYTES + i] != PaddingMarker[i mod PaddingMarker.len]:
-            raise newException(IOError, "Invalid multilayer NNUE padding marker")
+            raise newException(IOError, "Invalid NNUE padding marker")
 
     var offset = 0
-    let permutation = readPairwisePermutation()
+    let perm = NNUE_PAIRWISE_PERMUTATION
     var newIndexByOld: array[PAIR_COUNT, int]
-    for newIndex, oldIndex in permutation:
+    for newIndex, oldIndex in perm:
         newIndexByOld[oldIndex] = newIndex
 
-    for hidden in 0..<HL:
-        let side = hidden div PAIR_COUNT
-        let pair = hidden mod PAIR_COUNT
-        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
-        for feature in 0..<FT_IN:
-            result.ftWeight[feature][permutedHidden] = data.readI16(offset)
+    for feature in 0..<PSQT_IN:
+        for hidden in 0..<HL:
+            net.ftPsqt[feature][hidden] = data.readI16(offset)
+
+    for feature in 0..<THREAT_IN:
+        for hidden in 0..<HL:
+            net.ftThreat[feature][hidden] = data.readI8(offset)
 
     for hidden in 0..<HL:
-        let side = hidden div PAIR_COUNT
-        let pair = hidden mod PAIR_COUNT
-        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
-        result.ftBias[permutedHidden] = data.readI16(offset)
+        net.ftBias[hidden] = data.readI16(offset)
 
-    for output in 0..<L2_SIZE:
-        for oldInput in 0..<HL:
-            let side = oldInput div PAIR_COUNT
-            let pair = oldInput mod PAIR_COUNT
-            let input = side * PAIR_COUNT + newIndexByOld[pair]
-            result.l1Weight[input div 4][output][input mod 4] = data.readI8(offset)
+    var rawL1: array[L1_IN div 4, array[L2_SIZE, array[4, int8]]]
+    for chunk in 0..<(L1_IN div 4):
+        for o in 0..<L2_SIZE:
+            for j in 0..<4:
+                rawL1[chunk][o][j] = data.readI8(offset)
 
-    for output in 0..<L2_SIZE:
-        result.l1Bias[output] = data.readI32(offset)
+    for c in 0..<(L1_IN div 4):
+        for o in 0..<L2_SIZE:
+            for j in 0..<4:
+                net.l1Weight[c][o][j] = 0
+
+    for chunk in 0..<(L1_IN div 4):
+        for o in 0..<L2_SIZE:
+            for j in 0..<4:
+                let src = chunk * 4 + j
+                let half = src div PAIR_COUNT
+                let dstIn = half * PAIR_COUNT + newIndexByOld[src mod PAIR_COUNT]
+                net.l1Weight[dstIn div 4][o][dstIn mod 4] = rawL1[chunk][o][j]
+
+    for o in 0..<L2_SIZE:
+        let raw = data.readI32(offset)
+        net.l1Bias[o] = cast[int32]((int64(raw) + 1) shr 1)
+
+    for input in 0..<L2_SIZE:
+        for output in 0..<L3_SIZE:
+            net.l2Weight[input][output] = data.readI32(offset)
 
     for output in 0..<L3_SIZE:
-        for input in 0..<L2_SIZE:
-            result.l2Weight[input][output] = data.readI32(offset)
-
-    for output in 0..<L3_SIZE:
-        result.l2Bias[output] = data.readI32(offset)
+        net.l2Bias[output] = data.readI32(offset)
 
     for input in 0..<L3_SIZE:
-        result.l3Weight[input] = data.readI32(offset)
-    result.l3Bias = data.readI32(offset)
+        net.l3Weight[input] = data.readI32(offset)
+
+    net.l3Bias = data.readI32(offset)
 
     doAssert offset == NNUE_RAW_BYTES
 
-    result.l2Int32Safe = true
-    for output in 0..<L3_SIZE:
-        var bound = int64(result.l2Bias[output])
-        if bound < 0: bound = -bound
-        for input in 0..<L2_SIZE:
-            var weight = int64(result.l2Weight[input][output])
-            if weight < 0: weight = -weight
-            bound += int64(QB * QB) * weight
-        if bound > int64(high(int32)):
-            result.l2Int32Safe = false
+proc loadNetworkFromStream*(net: ptr NNUENetwork, s: Stream) =
+    loadNetworkInto(net, s.readAll())
 
-    result.l2Int16Safe = result.l2Int32Safe
-    for output in 0..<L3_SIZE:
-        for input in 0..<L2_SIZE:
-            let w = result.l2Weight[input][output]
-            if w < int32(low(int16)) or w > int32(high(int16)):
-                result.l2Int16Safe = false
-    if result.l2Int16Safe:
-        for pair in 0..<(L2_SIZE div 2):
-            for output in 0..<L3_SIZE:
-                result.l2WeightPacked[pair][output][0] = int16(result.l2Weight[pair * 2][output])
-                result.l2WeightPacked[pair][output][1] = int16(result.l2Weight[pair * 2 + 1][output])
-
-proc loadNetworkFromStream*(s: Stream): NNUENetwork =
-    return loadNetworkFromBytes(s.readAll())
-
-proc loadNetwork*(path: string): NNUENetwork =
+proc loadNetworkFromFile*(net: ptr NNUENetwork, path: string) =
     let s = newFileStream(path, fmRead)
     if s == nil:
         raise newException(IOError, "Cannot open NNUE network file: " & path)
     defer: s.close()
-    return loadNetworkFromStream(s)
+    loadNetworkFromStream(net, s)
 
-proc loadNetworkFromEmbedded*(): NNUENetwork =
-    let s = newStringStream(NNUE_EMBEDDED)
-    return loadNetworkFromStream(s)
+proc loadNetworkFromEmbedded*(net: ptr NNUENetwork) =
+    loadNetworkInto(net, NNUE_EMBEDDED)
 
-proc addSub*(net: ptr NNUENetwork, addIdx, subIdx: int,
-             prev: var Accumulator, curr: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx][i]
-    else:
-        var i = 0
-        while i < HL:
-            let a0 = vecLoad(addr net.ftWeight[addIdx][i])
-            let b0 = vecLoad(addr net.ftWeight[subIdx][i])
-            let p0 = vecLoad(addr prev.data[i])
-            let a1 = vecLoad(addr net.ftWeight[addIdx][i + CHUNK_SIZE])
-            let b1 = vecLoad(addr net.ftWeight[subIdx][i + CHUNK_SIZE])
-            let p1 = vecLoad(addr prev.data[i + CHUNK_SIZE])
-            vecStore(addr curr.data[i], vecSub16(vecAdd16(p0, a0), b0))
-            vecStore(addr curr.data[i + CHUNK_SIZE], vecSub16(vecAdd16(p1, a1), b1))
-            i += CHUNK_SIZE * 2
+proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
+                         acc: var Accumulator, perspective: Color) =
+    var thFeats {.noinit.}: array[128, int32]
+    var psqtFeats {.noinit.}: array[32, uint16]
+    var nTh, nPsqt: int
+    computeThreatFeatures(b, perspective, thFeats, nTh, psqtFeats, nPsqt)
 
-proc addSubSub*(net: ptr NNUENetwork, addIdx, subIdx1, subIdx2: int,
-                prev: var Accumulator, curr: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx][i] - net.ftWeight[subIdx1][i] - net.ftWeight[subIdx2][i]
-    else:
-        var i = 0
-        while i < HL:
-            let a0 = vecLoad(addr net.ftWeight[addIdx][i])
-            let b0 = vecLoad(addr net.ftWeight[subIdx1][i])
-            let c0 = vecLoad(addr net.ftWeight[subIdx2][i])
-            let p0 = vecLoad(addr prev.data[i])
-            let a1 = vecLoad(addr net.ftWeight[addIdx][i + CHUNK_SIZE])
-            let b1 = vecLoad(addr net.ftWeight[subIdx1][i + CHUNK_SIZE])
-            let c1 = vecLoad(addr net.ftWeight[subIdx2][i + CHUNK_SIZE])
-            let p1 = vecLoad(addr prev.data[i + CHUNK_SIZE])
-            vecStore(addr curr.data[i], vecSub16(vecSub16(vecAdd16(p0, a0), b0), c0))
-            vecStore(addr curr.data[i + CHUNK_SIZE], vecSub16(vecSub16(vecAdd16(p1, a1), b1), c1))
-            i += CHUNK_SIZE * 2
-
-proc addSubAddSub*(net: ptr NNUENetwork, addIdx1, subIdx1, addIdx2, subIdx2: int,
-                   prev: var Accumulator, curr: var Accumulator) {.inline.} =
-    when not defined(simd):
-        for i in 0..<HL:
-            curr.data[i] = prev.data[i] + net.ftWeight[addIdx1][i] - net.ftWeight[subIdx1][i] +
-                           net.ftWeight[addIdx2][i] - net.ftWeight[subIdx2][i]
-    else:
-        var i = 0
-        while i < HL:
-            let d0_a = vecSub16(vecLoad(addr net.ftWeight[addIdx1][i]),
-                                vecLoad(addr net.ftWeight[subIdx1][i]))
-            let d0_b = vecSub16(vecLoad(addr net.ftWeight[addIdx2][i]),
-                                vecLoad(addr net.ftWeight[subIdx2][i]))
-            let d1_a = vecSub16(vecLoad(addr net.ftWeight[addIdx1][i + CHUNK_SIZE]),
-                                vecLoad(addr net.ftWeight[subIdx1][i + CHUNK_SIZE]))
-            let d1_b = vecSub16(vecLoad(addr net.ftWeight[addIdx2][i + CHUNK_SIZE]),
-                                vecLoad(addr net.ftWeight[subIdx2][i + CHUNK_SIZE]))
-            vecStore(addr curr.data[i],
-                     vecAdd16(vecLoad(addr prev.data[i]), vecAdd16(d0_a, d0_b)))
-            vecStore(addr curr.data[i + CHUNK_SIZE],
-                     vecAdd16(vecLoad(addr prev.data[i + CHUNK_SIZE]), vecAdd16(d1_a, d1_b)))
-            i += CHUNK_SIZE * 2
-
-proc applyDelta(net: ptr NNUENetwork, d: AccumulatorDelta,
-                prev, curr: var Accumulator) {.inline.} =
-    template f(x: uint16): system.int = system.int(x)
-    if d.addCount == 1:
-        if d.subCount == 1:
-            net.addSub(f(d.adds[0]), f(d.subs[0]), prev, curr)
-        else:
-            net.addSubSub(f(d.adds[0]), f(d.subs[0]), f(d.subs[1]), prev, curr)
-    elif d.addCount == 2:
-        net.addSubAddSub(f(d.adds[0]), f(d.subs[0]), f(d.adds[1]), f(d.subs[1]), prev, curr)
-    else:
-        curr = prev
-
-proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulator, perspective: Color) =
-    ## Full recompute of accumulator from board state. Features are summed
-    ## tile by tile in registers so the accumulator is written once.
-    let perspKingSq = board.kingSquare(perspective)
-    var features {.noinit.}: array[32, uint16]
-    var count = 0
-    var occ = board.occupied
-    while occ != Bitboard(0):
-        let sq = poplsb(occ)
-        let piece = board.mailbox[sq.int]
-        features[count] = uint16(featureIndex(perspective, piece.color, piece.pieceType, sq, perspKingSq))
-        inc count
     when not defined(simd):
         acc.data = net.ftBias
-        for i in 0..<count:
-            let f = system.int(features[i])
+        for i in 0..<nPsqt:
+            let f = system.int(psqtFeats[i])
             for o in 0..<HL:
-                acc.data[o] += net.ftWeight[f][o]
+                acc.data[o] += net.ftPsqt[f][o]
+        for i in 0..<nTh:
+            let f = system.int(thFeats[i])
+            for o in 0..<HL:
+                acc.data[o] += int16(net.ftThreat[f][o])
     else:
         const TileRegs = 8
         const TileSize = TileRegs * CHUNK_SIZE
@@ -302,25 +193,82 @@ proc refreshAccumulator*(net: ptr NNUENetwork, board: Board, acc: var Accumulato
             var regs {.noinit.}: array[TileRegs, VEPI16]
             for r in 0..<TileRegs:
                 regs[r] = vecLoad(addr net.ftBias[base + r * CHUNK_SIZE])
-            for i in 0..<count:
-                let f = system.int(features[i])
+            for i in 0..<nPsqt:
+                let f = system.int(psqtFeats[i])
                 for r in 0..<TileRegs:
-                    regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftWeight[f][base + r * CHUNK_SIZE]))
+                    regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
+            for i in 0..<nTh:
+                let f = system.int(thFeats[i])
+                for r in 0..<TileRegs:
+                    regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
             for r in 0..<TileRegs:
                 vecStore(addr acc.data[base + r * CHUNK_SIZE], regs[r])
             base += TileSize
 
-proc refreshState*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
+proc refreshState*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
     state.current = 0
     for p in [White, Black]:
-        net.refreshAccumulator(board, state.acc[p][0], p)
+        net.refreshAccumulator(b, state.acc[p][0], p)
         state.accFlags[p][0] = AccComputed
 
+proc applyDelta(net: ptr NNUENetwork, d: PerspDelta,
+                prev, curr: var Accumulator) {.inline.} =
+    if d.nPsqtAdds == 0 and d.nPsqtSubs == 0 and
+       d.nThAdds == 0 and d.nThSubs == 0:
+        curr = prev  # null move
+        return
+
+    when not defined(simd):
+        curr.data = prev.data
+        for k in 0..<d.nThSubs:
+            let f = system.int(d.thSubs[k])
+            for o in 0..<HL:
+                curr.data[o] -= int16(net.ftThreat[f][o])
+        for k in 0..<d.nThAdds:
+            let f = system.int(d.thAdds[k])
+            for o in 0..<HL:
+                curr.data[o] += int16(net.ftThreat[f][o])
+        for k in 0..<d.nPsqtSubs:
+            let f = system.int(d.psqtSubs[k])
+            for o in 0..<HL:
+                curr.data[o] -= net.ftPsqt[f][o]
+        for k in 0..<d.nPsqtAdds:
+            let f = system.int(d.psqtAdds[k])
+            for o in 0..<HL:
+                curr.data[o] += net.ftPsqt[f][o]
+    else:
+        const TileRegs = 8
+        const TileSize = TileRegs * CHUNK_SIZE
+        var base = 0
+        while base < HL:
+            var regs {.noinit.}: array[TileRegs, VEPI16]
+            for r in 0..<TileRegs:
+                regs[r] = vecLoad(addr prev.data[base + r * CHUNK_SIZE])
+            for k in 0..<d.nThSubs:
+                let f = system.int(d.thSubs[k])
+                for r in 0..<TileRegs:
+                    regs[r] = vecSub16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
+            for k in 0..<d.nThAdds:
+                let f = system.int(d.thAdds[k])
+                for r in 0..<TileRegs:
+                    regs[r] = vecAdd16(regs[r], vecLoadW8(cast[pointer](addr net.ftThreat[f][base + r * CHUNK_SIZE])))
+            for k in 0..<d.nPsqtSubs:
+                let f = system.int(d.psqtSubs[k])
+                for r in 0..<TileRegs:
+                    regs[r] = vecSub16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
+            for k in 0..<d.nPsqtAdds:
+                let f = system.int(d.psqtAdds[k])
+                for r in 0..<TileRegs:
+                    regs[r] = vecAdd16(regs[r], vecLoad(addr net.ftPsqt[f][base + r * CHUNK_SIZE]))
+            for r in 0..<TileRegs:
+                vecStore(addr curr.data[base + r * CHUNK_SIZE], regs[r])
+            base += TileSize
+
 proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inline.} =
-    var pairwise {.noinit.}: array[HL, uint8]
+    var pairwise {.noinit.}: array[L1_IN, uint8]
     var l1Sums {.noinit.}: array[L2_SIZE, int32]
     when defined(avx512) or defined(avx2) or defined(neon) or defined(arm64) or defined(aarch64):
-        var blocks {.noinit.}: array[256, uint16]
+        var blocks {.noinit.}: array[L1_IN div 4, uint16]
         let nnzCount = simd.gyatsoPairwiseNnz(addr stmAcc.data[0], addr nstmAcc.data[0],
             addr pairwise[0], addr blocks[0],
             addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])
@@ -340,35 +288,21 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
         l1Out[i] = clipped * clipped
 
     var l2Out {.noinit.}: array[L3_SIZE, int32]
-    when defined(avx512) or defined(avx2):
-        if net.l2Int16Safe:
-            simd.gyatsoMultilayerL2Madd(addr l1Out[0], addr net.l2WeightPacked[0][0][0],
-                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB))
-        else:
-            simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
-                addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
-                int32(ord(net.l2Int32Safe)))
-    else:
-        simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
-            addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB),
-            int32(ord(net.l2Int32Safe)))
+    simd.gyatsoMultilayerL2(addr l1Out[0], addr net.l2Weight[0][0],
+        addr net.l2Bias[0], addr l2Out[0], int32(QB * QB * QB), 1'i32)
 
     let output = simd.gyatsoMultilayerOutput(addr l2Out[0],
         addr net.l3Weight[0], net.l3Bias)
 
     return system.int(output * int64(EVAL_SCALE) div int64(QB * QB * QB * QB))
 
-proc updateAccumulator(net: ptr NNUENetwork, board: Board, state: var NNUEState,
+proc updateAccumulator(net: ptr NNUENetwork, b: Board, state: var NNUEState,
                        p: Color) {.inline.} =
-    ## Bring acc[p][current] up to date. Plies below `current` never have an
-    ## unresolved refresh behind an uncomputed entry (pushes resolve it), and
-    ## the root is always computed, so the backward walk terminates on a
-    ## valid accumulator.
     let n = state.current
     if (state.accFlags[p][n] and AccComputed) != 0:
         return
     if (state.accFlags[p][n] and AccNeedsRefresh) != 0:
-        net.refreshAccumulator(board, state.acc[p][n], p)
+        net.refreshAccumulator(b, state.acc[p][n], p)
         state.accFlags[p][n] = AccComputed
         return
     var j = n - 1
@@ -379,219 +313,295 @@ proc updateAccumulator(net: ptr NNUENetwork, board: Board, state: var NNUEState,
         inc j
         state.accFlags[p][j] = AccComputed
 
-proc nnueEvaluate*(net: ptr NNUENetwork, board: Board, state: var NNUEState): int {.inline.} =
+proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.inline.} =
     let ply = state.current
-    let us = board.stm
+    let us = b.stm
     let them = us.opposite()
-    net.updateAccumulator(board, state, us)
-    net.updateAccumulator(board, state, them)
+    net.updateAccumulator(b, state, us)
+    net.updateAccumulator(b, state, them)
     result = forward(net, state.acc[us][ply], state.acc[them][ply])
 
-    # Clamp to safe range
     const MaxEval = MateValue - MaxPly - 100
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
-func computeDelta(board: Board, m: Move, perspective: Color): AccumulatorDelta {.inline.} =
-    let us = board.stm
+proc addEdges(b: Board, mailbox: array[64, Piece], occ: Bitboard,
+              perspective: Color, flip: int, src: int, attType: int,
+              attColor: Color, buf: var array[MAX_THREAT_DELTA * 2, int32],
+              n: var int) {.inline.} =
+    let sq = Square(src)
+    var targets: Bitboard
+    case PieceType(attType)
+    of Pawn:   targets = getPawnAttacks(sq, attColor) and occ
+    of Knight: targets = getKnightAttacks(sq) and occ
+    of Bishop: targets = getBishopAttacks(sq, occ) and occ
+    of Rook:   targets = getRookAttacks(sq, occ) and occ
+    of Queen:  targets = getQueenAttacks(sq, occ) and occ
+    else: return
+
+    while not targets.isEmpty:
+        let dst = poplsb(targets)
+        let tp = mailbox[dst.int]
+        if tp == NoPiece: continue
+        if tp.pieceType == King: continue
+        let rel = tp.pieceType.ord + (if tp.color == perspective: 0 else: 6)
+        let idx = threatIndex(attType, attColor == perspective, flip,
+                              src, dst.int, rel)
+        if idx >= 0:
+            buf[n] = int32(idx)
+            inc n
+
+proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
+    let us = b.stm
     let them = us.opposite()
     let fromSq = m.fromSq
     let toSq = m.toSq
-    let movingPiece = board.mailbox[fromSq.int]
+    let movingPiece = b.mailbox[fromSq.int]
     let movingPt = movingPiece.pieceType
     let movingColor = movingPiece.color
-
-    # Get perspective king square for horizontal mirroring
-    let perspKingSq = board.kingSquare(perspective)
-
-    template addSub(a, s: int) =
-        result.adds[result.addCount] = uint16(a)
-        inc result.addCount
-        result.subs[result.subCount] = uint16(s)
-        inc result.subCount
-    template addSubSub(a, s1, s2: int) =
-        addSub(a, s1)
-        result.subs[result.subCount] = uint16(s2)
-        inc result.subCount
-
-    if m.isCastling:
-        let kingFrom = fromSq
-        let rookFrom = toSq
-        let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
-        let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
-
-        let kingAddIdx = featureIndex(perspective, us, King, kingTo,   perspKingSq)
-        let kingSubIdx = featureIndex(perspective, us, King, kingFrom, perspKingSq)
-        let rookAddIdx = featureIndex(perspective, us, Rook, rookTo,   perspKingSq)
-        let rookSubIdx = featureIndex(perspective, us, Rook, rookFrom, perspKingSq)
-
-        addSub(kingAddIdx, kingSubIdx)
-        addSub(rookAddIdx, rookSubIdx)
-
-    elif m.isEnPassant:
-        let capSq = if us == White: (toSq.int - 8).Square else: (toSq.int + 8).Square
-        let addIdx = featureIndex(perspective, us, Pawn, toSq, perspKingSq)
-        let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-        let subIdx2 = featureIndex(perspective, them, Pawn, capSq, perspKingSq)
-        addSubSub(addIdx, subIdx1, subIdx2)
-
-    elif m.isPromotion:
-        let promoPt = case m.promoType
-            of PromoKnight: Knight
-            of PromoBishop: Bishop
-            of PromoRook:   Rook
-            of PromoQueen:  Queen
-        let capturedPiece = board.mailbox[toSq.int]
-        if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
-            let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
-            let subIdx1 = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
-            addSubSub(addIdx, subIdx1, subIdx2)
-        else:
-            let addIdx = featureIndex(perspective, us, promoPt, toSq, perspKingSq)
-            let subIdx = featureIndex(perspective, us, Pawn, fromSq, perspKingSq)
-            addSub(addIdx, subIdx)
-
-    else:
-        let capturedPiece = board.mailbox[toSq.int]
-        if capturedPiece != NoPiece:
-            let capturedPt    = capturedPiece.pieceType
-            let capturedColor = capturedPiece.color
-            let addIdx  = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx1 = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
-            let subIdx2 = featureIndex(perspective, capturedColor, capturedPt, toSq, perspKingSq)
-            addSubSub(addIdx, subIdx1, subIdx2)
-        else:
-            let addIdx = featureIndex(perspective, movingColor, movingPt, toSq, perspKingSq)
-            let subIdx = featureIndex(perspective, movingColor, movingPt, fromSq, perspKingSq)
-            addSub(addIdx, subIdx)
-
-proc computeDeltaBoth(board: Board, m: Move,
-                      deltas: var array[Color, AccumulatorDelta]) {.inline.} =
-    ## Computes both perspectives' deltas in one pass: the move is decoded
-    ## once, and each feature event fans out to White and Black indices.
-    let us = board.stm
-    let them = us.opposite()
-    let fromSq = m.fromSq
-    let toSq = m.toSq
-    let movingPiece = board.mailbox[fromSq.int]
-    let movingPt = movingPiece.pieceType
-    let movingColor = movingPiece.color
-
-    template addSub2(p: Color, pcA, ptA, pcS, ptS: untyped, sqA, sqS: Square) =
-        let k = if p == White: board.kingSquare(White)
-                else: board.kingSquare(Black)
-        deltas[p].adds[deltas[p].addCount] =
-          uint16(featureIndex(p, pcA, ptA, sqA, k))
-        inc deltas[p].addCount
-        deltas[p].subs[deltas[p].subCount] =
-          uint16(featureIndex(p, pcS, ptS, sqS, k))
-        inc deltas[p].subCount
 
     for p in [White, Black]:
+        deltas[p].nPsqtAdds = 0
+        deltas[p].nPsqtSubs = 0
+        deltas[p].nThAdds = 0
+        deltas[p].nThSubs = 0
+        deltas[p].needsRefresh = false
+
+    for p in [White, Black]:
+        let kingSq = b.kingSquare(p)
+        let flip = computeFlip(p, kingSq)
+
+        template psqtAdd(pc: Color, pt: PieceType, sq: Square) =
+            deltas[p].psqtAdds[deltas[p].nPsqtAdds] = uint16(psqtIndex(p, pc, pt, sq, flip))
+            inc deltas[p].nPsqtAdds
+        template psqtSub(pc: Color, pt: PieceType, sq: Square) =
+            deltas[p].psqtSubs[deltas[p].nPsqtSubs] = uint16(psqtIndex(p, pc, pt, sq, flip))
+            inc deltas[p].nPsqtSubs
+
         if m.isCastling:
             let kingFrom = fromSq
             let rookFrom = toSq
-            let kingTo   = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
-            let rookTo   = if fromSq.file < rookFrom.file: fromSq.withFile(5) else: fromSq.withFile(3)
-            addSub2(p, us, King, us, King, kingTo, kingFrom)
-            addSub2(p, us, Rook, us, Rook, rookTo, rookFrom)
-
+            let kingTo = if fromSq.file < rookFrom.file: fromSq.withFile(6)
+                         else: fromSq.withFile(2)
+            let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
+                         else: fromSq.withFile(3)
+            psqtAdd(us, King, kingTo)
+            psqtSub(us, King, kingFrom)
+            psqtAdd(us, Rook, rookTo)
+            psqtSub(us, Rook, rookFrom)
         elif m.isEnPassant:
             let capSq = if us == White: (toSq.int - 8).Square
                         else: (toSq.int + 8).Square
-            let k = if p == White: board.kingSquare(White)
-                    else: board.kingSquare(Black)
-            deltas[p].adds[deltas[p].addCount] =
-              uint16(featureIndex(p, us, Pawn, toSq, k))
-            inc deltas[p].addCount
-            deltas[p].subs[deltas[p].subCount] =
-              uint16(featureIndex(p, us, Pawn, fromSq, k))
-            inc deltas[p].subCount
-            deltas[p].subs[deltas[p].subCount] =
-              uint16(featureIndex(p, them, Pawn, capSq, k))
-            inc deltas[p].subCount
-
-
+            psqtAdd(us, Pawn, toSq)
+            psqtSub(us, Pawn, fromSq)
+            psqtSub(them, Pawn, capSq)
         elif m.isPromotion:
             let promoPt = case m.promoType
                 of PromoKnight: Knight
                 of PromoBishop: Bishop
                 of PromoRook:   Rook
                 of PromoQueen:  Queen
-            let capturedPiece = board.mailbox[toSq.int]
+            let capturedPiece = b.mailbox[toSq.int]
+            psqtAdd(us, promoPt, toSq)
+            psqtSub(us, Pawn, fromSq)
             if capturedPiece != NoPiece:
-                let capturedPt    = capturedPiece.pieceType
-                let capturedColor = capturedPiece.color
-                # add: promoPt at toSq; sub: pawn at fromSq; sub: captured at toSq
-                let k = if p == White: board.kingSquare(White)
-                        else: board.kingSquare(Black)
-                deltas[p].adds[deltas[p].addCount] =
-                  uint16(featureIndex(p, us, promoPt, toSq, k))
-                inc deltas[p].addCount
-                deltas[p].subs[deltas[p].subCount] =
-                  uint16(featureIndex(p, us, Pawn, fromSq, k))
-                inc deltas[p].subCount
-                deltas[p].subs[deltas[p].subCount] =
-                  uint16(featureIndex(p, capturedColor, capturedPt, toSq, k))
-                inc deltas[p].subCount
-            else:
-                addSub2(p, us, promoPt, us, Pawn, toSq, fromSq)
-
+                psqtSub(capturedPiece.color, capturedPiece.pieceType, toSq)
         else:
-            let capturedPiece = board.mailbox[toSq.int]
+            let capturedPiece = b.mailbox[toSq.int]
+            psqtAdd(movingColor, movingPt, toSq)
+            psqtSub(movingColor, movingPt, fromSq)
             if capturedPiece != NoPiece:
-                let capturedPt    = capturedPiece.pieceType
-                let capturedColor = capturedPiece.color
-                # add: mover at toSq; sub: mover at fromSq; sub: captured at toSq
-                let k = if p == White: board.kingSquare(White)
-                        else: board.kingSquare(Black)
-                deltas[p].adds[deltas[p].addCount] =
-                  uint16(featureIndex(p, movingColor, movingPt, toSq, k))
-                inc deltas[p].addCount
-                deltas[p].subs[deltas[p].subCount] =
-                  uint16(featureIndex(p, movingColor, movingPt, fromSq, k))
-                inc deltas[p].subCount
-                deltas[p].subs[deltas[p].subCount] =
-                  uint16(featureIndex(p, capturedColor, capturedPt, toSq, k))
-                inc deltas[p].subCount
-            else:
-                addSub2(p, movingColor, movingPt, movingColor, movingPt,
-                        toSq, fromSq)
+                psqtSub(capturedPiece.color, capturedPiece.pieceType, toSq)
 
-proc pushAccumulator*(net: ptr NNUENetwork, board: Board, m: Move,
-                      state: var NNUEState) =
-    ## Record the move's feature delta; it is applied only if a descendant
-    ## position is evaluated.
-    let ply = state.current
-    let us = board.stm
-    let movingPt = board.mailbox[m.fromSq.int].pieceType
+    # Threat deltas
+    let occ = b.occupied
 
-    # Compute both perspectives' deltas in one pass (the move is decoded
-    # once); each is stored only if the child ply doesn't need a refresh.
-    var deltas {.noinit.}: array[Color, AccumulatorDelta]
+    var changedSqs {.noinit.}: array[6, int]
+    var nChanged = 0
+    changedSqs[nChanged] = fromSq.int; inc nChanged
+    changedSqs[nChanged] = toSq.int; inc nChanged
+    if m.isEnPassant:
+        let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
+        changedSqs[nChanged] = capSq; inc nChanged
+    elif m.isCastling:
+        let rookFrom = toSq
+        let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
+                     else: fromSq.withFile(3)
+        changedSqs[nChanged] = rookFrom.int; inc nChanged
+        changedSqs[nChanged] = rookTo.int; inc nChanged
+
+    var affSqs {.noinit.}: array[32, int]
+    var affTypes {.noinit.}: array[32, int]
+    var affColors {.noinit.}: array[32, Color]
+    var nAff = 0
+
+    template addAff(sq: int, pt: int, col: Color) =
+        var found = false
+        for i in 0..<nAff:
+            if affSqs[i] == sq:
+                found = true
+                break
+        if not found and nAff < 32:
+            affSqs[nAff] = sq
+            affTypes[nAff] = pt
+            affColors[nAff] = col
+            inc nAff
+
+    for ci in 0..<nChanged:
+        let c = changedSqs[ci]
+        let cSq = Square(c)
+        let standing = b.mailbox[c]
+        if standing != NoPiece and standing.pieceType != King:
+            addAff(c, standing.pieceType.ord, standing.color)
+        var attackers = b.attackersTo(cSq, occ)
+        while not attackers.isEmpty:
+            let aSq = poplsb(attackers)
+            let aPiece = b.mailbox[aSq.int]
+            if aPiece != NoPiece and aPiece.pieceType != King:
+                addAff(aSq.int, aPiece.pieceType.ord, aPiece.color)
+
+    var newMail: array[64, Piece] = b.mailbox
+    var newOcc: Bitboard = occ
+    if m.isCastling:
+        let kingFrom = fromSq
+        let rookFrom = toSq
+        let kingTo = if fromSq.file < rookFrom.file: fromSq.withFile(6)
+                     else: fromSq.withFile(2)
+        let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
+                     else: fromSq.withFile(3)
+        newMail[kingFrom.int] = NoPiece
+        newMail[rookFrom.int] = NoPiece
+        newMail[kingTo.int] = makePiece(us, King)
+        newMail[rookTo.int] = makePiece(us, Rook)
+        newOcc = (newOcc and not kingFrom.bit and not rookFrom.bit) or
+                 kingTo.bit or rookTo.bit
+    elif m.isEnPassant:
+        let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
+        newMail[fromSq.int] = NoPiece
+        newMail[toSq.int] = movingPiece
+        newMail[capSq] = NoPiece
+        newOcc = (newOcc and not fromSq.bit and not Square(capSq).bit) or toSq.bit
+    elif m.isPromotion:
+        let promoPt = case m.promoType
+            of PromoKnight: Knight
+            of PromoBishop: Bishop
+            of PromoRook:   Rook
+            of PromoQueen:  Queen
+        newMail[fromSq.int] = NoPiece
+        newMail[toSq.int] = makePiece(us, promoPt)
+        newOcc = (newOcc and not fromSq.bit) or toSq.bit
+    else:
+        newMail[fromSq.int] = NoPiece
+        newMail[toSq.int] = movingPiece
+        newOcc = (newOcc and not fromSq.bit) or toSq.bit
+
     for p in [White, Black]:
-        deltas[p].addCount = 0
-        deltas[p].subCount = 0
-    computeDeltaBoth(board, m, deltas)
+        if deltas[p].needsRefresh: continue
 
+        let kingSq = b.kingSquare(p)
+        let flip = computeFlip(p, kingSq)
+
+        var oldEdges {.noinit.}: array[MAX_THREAT_DELTA * 2, int32]
+        var nOld = 0
+        var newEdges {.noinit.}: array[MAX_THREAT_DELTA * 2, int32]
+        var nNew = 0
+
+        for ai in 0..<nAff:
+            let oldSq = affSqs[ai]
+            let oldType = affTypes[ai]
+            let oldColor = affColors[ai]
+
+            addEdges(b, b.mailbox, occ, p, flip, oldSq, oldType, oldColor,
+                     oldEdges, nOld)
+
+            let piece = b.mailbox[oldSq]
+            var newSq = oldSq
+            var newType = oldType
+            var alive = true
+
+            if oldSq == fromSq.int:
+                if m.isCastling and movingPt == King:
+                    alive = false
+                else:
+                    newSq = toSq.int
+                    if m.isPromotion:
+                        newType = (case m.promoType
+                            of PromoKnight: Knight.ord
+                            of PromoBishop: Bishop.ord
+                            of PromoRook:   Rook.ord
+                            of PromoQueen:  Queen.ord)
+            elif m.isCastling and oldSq == toSq.int:
+                let rookTo = if fromSq.file < toSq.file: fromSq.withFile(5)
+                             else: fromSq.withFile(3)
+                newSq = rookTo.int
+            elif m.isEnPassant:
+                let capSq = if us == White: toSq.int - 8 else: toSq.int + 8
+                if oldSq == capSq:
+                    alive = false
+            else:
+                if oldSq == toSq.int and piece != NoPiece and piece.color != movingColor:
+                    alive = false
+
+            if alive:
+                let newColor = if oldSq == fromSq.int: movingColor else: oldColor
+                addEdges(b, newMail, newOcc, p, flip, newSq, newType, newColor,
+                         newEdges, nNew)
+
+        var oldUsed {.noinit.}: array[MAX_THREAT_DELTA * 2, bool]
+        var newUsed {.noinit.}: array[MAX_THREAT_DELTA * 2, bool]
+        for i in 0..<nOld: oldUsed[i] = false
+        for i in 0..<nNew: newUsed[i] = false
+
+        for i in 0..<nOld:
+            for j in 0..<nNew:
+                if not newUsed[j] and oldEdges[i] == newEdges[j]:
+                    oldUsed[i] = true
+                    newUsed[j] = true
+                    break
+
+        var nSubs = 0
+        var nAdds = 0
+        for i in 0..<nOld:
+            if not oldUsed[i]:
+                if nSubs >= MAX_THREAT_DELTA:
+                    deltas[p].needsRefresh = true
+                    break
+                deltas[p].thSubs[nSubs] = uint32(oldEdges[i])
+                inc nSubs
+        if not deltas[p].needsRefresh:
+            for i in 0..<nNew:
+                if not newUsed[i]:
+                    if nAdds >= MAX_THREAT_DELTA:
+                        deltas[p].needsRefresh = true
+                        break
+                    deltas[p].thAdds[nAdds] = uint32(newEdges[i])
+                    inc nAdds
+        deltas[p].nThSubs = nSubs
+        deltas[p].nThAdds = nAdds
+
+proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
+                      state: var NNUEState) =
+    let ply = state.current
+    let us = b.stm
+    let movingPt = b.mailbox[m.fromSq.int].pieceType
+
+    var deltas {.noinit.}: array[Color, PerspDelta]
+    computeDeltaBoth(b, m, deltas)
 
     for perspective in [White, Black]:
-        # The board is at this ply only now, so a pending refresh must be
-        # resolved before the next ply can depend on it.
         if (state.accFlags[perspective][ply] and AccNeedsRefresh) != 0:
-            net.refreshAccumulator(board, state.acc[perspective][ply], perspective)
+            net.refreshAccumulator(b, state.acc[perspective][ply], perspective)
             state.accFlags[perspective][ply] = AccComputed
 
         state.accFlags[perspective][ply + 1] = 0
-        # Castling is encoded king->rook, so the king's real destination is
-        # the g- or c-file, not toSq.
-        let kingToFile = if m.isCastling: (if m.fromSq.file < m.toSq.file: 6 else: 2)
+
+        let kingToFile = if m.isCastling:
+                           (if m.fromSq.file < m.toSq.file: 6 else: 2)
                          else: m.toSq.file
         if perspective == us and movingPt == King and
                 (m.fromSq.file > 3) != (kingToFile > 3):
+            state.accFlags[perspective][ply + 1] = AccNeedsRefresh
+        elif deltas[perspective].needsRefresh:
             state.accFlags[perspective][ply + 1] = AccNeedsRefresh
         else:
             state.accFlags[perspective][ply + 1] = 0
@@ -603,23 +613,21 @@ proc popAccumulator*(state: var NNUEState) {.inline.} =
     dec state.current
 
 proc pushNullMove*(state: var NNUEState) =
-    ## Pieces are unchanged: the child reuses the parent through an empty
-    ## delta, or inherits a pending refresh (the board has the same pieces).
     let ply = state.current
     for p in [White, Black]:
         state.accFlags[p][ply + 1] = state.accFlags[p][ply] and AccNeedsRefresh
-        state.delta[p][ply + 1] = AccumulatorDelta()
+        state.delta[p][ply + 1] = PerspDelta()
     inc state.current
 
 proc popNullMove*(state: var NNUEState) {.inline.} =
     dec state.current
 
-proc verifyNNUE*(net: ptr NNUENetwork, board: Board, state: var NNUEState) =
+proc verifyNNUE*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
     let ply = state.current
     for p in [White, Black]:
-        net.updateAccumulator(board, state, p)
+        net.updateAccumulator(b, state, p)
         var reference: Accumulator
-        net.refreshAccumulator(board, reference, p)
+        net.refreshAccumulator(b, reference, p)
         for i in 0..<HL:
             doAssert state.acc[p][ply].data[i] == reference.data[i],
                 $p & " accumulator mismatch at index " & $i &

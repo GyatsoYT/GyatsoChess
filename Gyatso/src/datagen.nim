@@ -1,5 +1,5 @@
 import coretypes, bitboard, board, movegen, search, attacks, evaluate,
-       tt, searchparams, history, nnue, viriformat
+       tt, searchparams, history, nnue, viriformat, threats
 import std/[os, strutils, random, monotimes, times, atomics, cpuinfo,
             parseopt, json]
 
@@ -260,6 +260,7 @@ when isMainModule:
     softNodes = hardNodes
 
   initAttacks()
+  initThreats()
   initTT(ttSizeMb)
   initTables()
   initNNUE()

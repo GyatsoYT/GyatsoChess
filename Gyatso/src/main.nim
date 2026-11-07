@@ -8,9 +8,11 @@ import history
 import bench
 import threads
 import genfens
+import threats
 
 when isMainModule:
   initAttacks()
+  initThreats()
   initTT(16)
   initTables()
   initNNUE()

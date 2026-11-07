@@ -224,6 +224,7 @@ when defined(avx512):
   func mm512SrliEpi64(a: M512i, shift: int32): M512i {.importc: "_mm512_srli_epi64".}
   func mm512MaxEpi32(a, b: M512i): M512i {.importc: "_mm512_max_epi32".}
   func mm512MinEpi32(a, b: M512i): M512i {.importc: "_mm512_min_epi32".}
+  func mm512Cvtepi8Epi16(a: M256i): M512i {.importc: "_mm512_cvtepi8_epi16".}
   {.pop.}
 
 when defined(avxvnni):
@@ -276,6 +277,33 @@ when defined(neon) or defined(arm64) or defined(aarch64):
     func neonStoreS32(p: ptr int32, v: MLInt32x4) {.importc: "vst1q_s32".}
   {.pop.}
 
+
+when defined(avx512):
+  {.push header: "immintrin.h".}
+  func mm256LoadSi256Impl(p: pointer): M256i {.importc: "_mm256_load_si256".}
+  {.pop.}
+  func vecLoadW8*(p: pointer): M512i {.inline.} =
+    mm512Cvtepi8Epi16(mm256LoadSi256Impl(p))
+
+elif defined(avx2):
+  {.push header: "immintrin.h".}
+  func mm256Cvtepi8Epi16Impl(a: M128i): M256i {.importc: "_mm256_cvtepi8_epi16".}
+  {.pop.}
+  func vecLoadW8*(p: pointer): M256i {.inline.} =
+    mm256Cvtepi8Epi16Impl(mm_loadu_si128(cast[ptr M128i](p)))
+
+elif defined(neon) or defined(arm64) or defined(aarch64):
+  {.push header: "arm_neon.h".}
+  func neonLoadS8x8(p: ptr int8): int16x4 {.importc: "vld1_s8".}
+  func neonMovlS8(a: int16x4): int16x8 {.importc: "vmovl_s8".}
+  {.pop.}
+  func vecLoadW8*(p: pointer): int16x8 {.inline.} =
+    neonMovlS8(neonLoadS8x8(cast[ptr int8](p)))
+
+else:
+  func vecLoadW8*(p: pointer): int16 {.inline.} =
+    int16(cast[ptr int8](p)[])
+
 type
   U8Array = UncheckedArray[uint8]
   I8Array = UncheckedArray[int8]
@@ -286,12 +314,14 @@ type
 func packFourBytes(inputs: ptr U8Array, offset: int): uint32 {.inline.} =
   copyMem(addr result, addr inputs[offset], sizeof(result))
 
-proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[256, uint16],
+import nnuetypes
+
+proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[L1_IN div 4, uint16],
                           indexLut: ptr U16Array, countLut: ptr U8Array): int =
   var count = 0
   when defined(avx2) or defined(avx512):
     let zero = mm256_setzero_si256()
-    for base in countup(0, 248, 8):
+    for base in countup(0, L1_IN div 4 - 8, 8):
       let values = mm256_loadu_si256(cast[ptr M256i](addr inputs[base * 4]))
       let equalZero = mm256_cmpeq_epi32(values, zero)
       let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
@@ -302,7 +332,7 @@ proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[256, uint16],
         mm_add_epi16(indexes, baseVector))
       count += int(countLut[mask])
   else:
-    for group in 0..<256:
+    for group in 0..<(L1_IN div 4):
       let offset = group * 4
       if inputs[offset] != 0 or inputs[offset + 1] != 0 or
          inputs[offset + 2] != 0 or inputs[offset + 3] != 0:
@@ -465,7 +495,7 @@ proc gyatsoMultilayerL1Blocks*(rawInputs: ptr uint8, rawWeights: ptr int8,
 proc gyatsoMultilayerL1*(rawInputs: ptr uint8, rawWeights: ptr int8,
                          rawSums: ptr int32, rawIndexLut: ptr uint16,
                          rawCountLut: ptr uint8) =
-  var blocks {.noinit.}: array[256, uint16]
+  var blocks {.noinit.}: array[L1_IN div 4, uint16]
   let count = collectNonzeroBlocks(cast[ptr U8Array](rawInputs), blocks,
     cast[ptr U16Array](rawIndexLut), cast[ptr U8Array](rawCountLut))
   gyatsoMultilayerL1Blocks(rawInputs, rawWeights, rawSums, addr blocks[0], count)
@@ -691,10 +721,10 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
     let maxVec = mm512Set1Epi16(255)
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in countup(0, 480, 32):
+      let outBase = perspective * PAIR_COUNT
+      for i in countup(0, PAIR_COUNT - 32, 32):
         var a = mm512LoaduSi512(addr acc[i])
-        var b = mm512LoaduSi512(addr acc[512 + i])
+        var b = mm512LoaduSi512(addr acc[PAIR_COUNT + i])
         a = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, a))
         b = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, b))
         let p = mm512MulhiEpi16(mm512SlliEpi16(a, 7), b)
@@ -705,12 +735,12 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
     let maxVec = mm256_set1_epi16(255)
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in countup(0, 480, 32):
+      let outBase = perspective * PAIR_COUNT
+      for i in countup(0, PAIR_COUNT - 32, 32):
         var a0 = mm256_loadu_si256(cast[ptr M256i](addr acc[i]))
-        var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i]))
+        var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[PAIR_COUNT + i]))
         var a1 = mm256_loadu_si256(cast[ptr M256i](addr acc[i + 16]))
-        var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i + 16]))
+        var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[PAIR_COUNT + i + 16]))
         a0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a0))
         b0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, b0))
         a1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a1))
@@ -723,10 +753,10 @@ proc gyatsoPairwise*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8) =
   else:
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in 0..<512:
+      let outBase = perspective * PAIR_COUNT
+      for i in 0..<PAIR_COUNT:
         let a = clamp(int(acc[i]), 0, 255)
-        let b = clamp(int(acc[512 + i]), 0, 255)
+        let b = clamp(int(acc[PAIR_COUNT + i]), 0, 255)
         outputs[outBase + i] = uint8((a * b) shr 9)
 
 when defined(neon) or defined(arm64) or defined(aarch64):
@@ -735,7 +765,6 @@ when defined(neon) or defined(arm64) or defined(aarch64):
   proc gyatsoPairwiseNnz*(rawStm, rawNstm: ptr int16, rawOutputs: ptr uint8,
                           rawBlocks, rawIndexLut: ptr uint16,
                           rawCountLut: ptr uint8): int =
-    ## Pairwise activation fused with collection of nonzero 4-byte groups.
     let stm = cast[ptr I16Array](rawStm)
     let nstm = cast[ptr I16Array](rawNstm)
     let outputs = cast[ptr U8Array](rawOutputs)
@@ -748,13 +777,13 @@ when defined(neon) or defined(arm64) or defined(aarch64):
     var count = 0
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in countup(0, 480, 32):
+      let outBase = perspective * PAIR_COUNT
+      for i in countup(0, PAIR_COUNT - 32, 32):
         template pairBytes(off: int): MLUint8x16 =
           let a0 = neonMaxS16(zero, neonMinS16(maxVec, neonLoadS16(addr acc[i + off])))
-          let b0 = neonMinS16(maxVec, neonLoadS16(addr acc[512 + i + off]))
+          let b0 = neonMinS16(maxVec, neonLoadS16(addr acc[PAIR_COUNT + i + off]))
           let a1 = neonMaxS16(zero, neonMinS16(maxVec, neonLoadS16(addr acc[i + off + 8])))
-          let b1 = neonMinS16(maxVec, neonLoadS16(addr acc[512 + i + off + 8]))
+          let b1 = neonMinS16(maxVec, neonLoadS16(addr acc[PAIR_COUNT + i + off + 8]))
           let p0 = neonDoublingMulHighS16(neonShiftLeftS16(a0, 6), b0)
           let p1 = neonDoublingMulHighS16(neonShiftLeftS16(a1, 6), b1)
           neonNarrowUnsignedHighS16(neonNarrowUnsignedS16(p0), p1)
@@ -793,20 +822,20 @@ when defined(avx512) or defined(avx2):
       let maxVec = mm256_set1_epi16(255)
     for perspective in 0..<2:
       let acc = if perspective == 0: stm else: nstm
-      let outBase = perspective * 512
-      for i in countup(0, 480, 32):
+      let outBase = perspective * PAIR_COUNT
+      for i in countup(0, PAIR_COUNT - 32, 32):
         var bytes: M256i
         when defined(avx512):
           var a = mm512LoaduSi512(addr acc[i])
-          var b = mm512LoaduSi512(addr acc[512 + i])
+          var b = mm512LoaduSi512(addr acc[PAIR_COUNT + i])
           a = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, a))
           b = mm512MaxEpi16(zero, mm512MinEpi16(maxVec, b))
           bytes = mm512Cvtepi16Epi8(mm512MulhiEpi16(mm512SlliEpi16(a, 7), b))
         else:
           var a0 = mm256_loadu_si256(cast[ptr M256i](addr acc[i]))
-          var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i]))
+          var b0 = mm256_loadu_si256(cast[ptr M256i](addr acc[PAIR_COUNT + i]))
           var a1 = mm256_loadu_si256(cast[ptr M256i](addr acc[i + 16]))
-          var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[512 + i + 16]))
+          var b1 = mm256_loadu_si256(cast[ptr M256i](addr acc[PAIR_COUNT + i + 16]))
           a0 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a0))
           b0 = mm256_min_epi16(maxVec, b0)
           a1 = mm256_max_epi16(zero, mm256_min_epi16(maxVec, a1))
