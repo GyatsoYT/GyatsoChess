@@ -116,8 +116,13 @@ datagen-stats: check-deps
 
 clean:
 	@echo "[Makefile] Cleaning ..."
+ifeq ($(OS),Windows_NT)
+	-@del /f /q "$(EXE).exe" "$(EXE).out" 2>nul || exit 0
+	-@if exist nimcache rmdir /s /q nimcache 2>nul || exit 0
+else
 	rm -f "$(EXE)" "$(EXE).exe" "$(EXE).out"
 	rm -rf nimcache
+endif
 
 help:
 	@echo "Usage:"
