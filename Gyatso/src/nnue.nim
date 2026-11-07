@@ -519,18 +519,6 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
                         (getRookAttacks(cSq, occ) and hvSliders)
         affMask = affMask or attackers
 
-    var affSqs {.noinit.}: array[32, int]
-    var affTypes {.noinit.}: array[32, int]
-    var affColors {.noinit.}: array[32, Color]
-    var nAff = 0
-    while not affMask.isEmpty and nAff < 32:
-        let sq = poplsb(affMask)
-        let pc = b.mailbox[sq.int]
-        affSqs[nAff] = sq.int
-        affTypes[nAff] = pc.pieceType.ord
-        affColors[nAff] = pc.color
-        inc nAff
-
     var newMail: array[64, Piece] = b.mailbox
     var newOcc: Bitboard = occ
     if m.isCastling:
@@ -589,12 +577,11 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
             deltas[Black].needsRefresh = true
             return
 
-    for ai in 0..<nAff:
-        let oldSq = affSqs[ai]
-        let oldType = affTypes[ai]
-        let oldColor = affColors[ai]
-
+    while not affMask.isEmpty:
+        let oldSq = poplsb(affMask).int
         let piece = b.mailbox[oldSq]
+        let oldType = piece.pieceType.ord
+        let oldColor = piece.color
         var newSq = oldSq
         var newType = oldType
         var alive = true
