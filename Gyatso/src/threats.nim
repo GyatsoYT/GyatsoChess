@@ -10,6 +10,8 @@ var
   thClassOff: array[4, int32]
   thTarget: array[4, array[12, int]]
   pawnTarget: array[12, int]
+  thTargetOff: array[4, array[12, int32]]
+  pawnTargetOff: array[12, int32]
 
 proc makeTargets(valid: openArray[int]): array[12, int] =
   for i in 0 ..< 12: result[i] = -1
@@ -45,6 +47,15 @@ proc initThreats*() =
     off += classes[t] * thCount[t]
   doAssert off == HALF_THREATS, "Threat offset mismatch: " & $off & " != " & $HALF_THREATS
 
+  for t in 0 ..< 4:
+    for rel in 0 ..< 12:
+      let cls = thTarget[t][rel]
+      thTargetOff[t][rel] = if cls < 0: -1'i32 else: thClassOff[t] + int32(cls) * thCount[t]
+
+  for rel in 0 ..< 12:
+    let cls = pawnTarget[rel]
+    pawnTargetOff[rel] = if cls < 0: -1'i32 else: int32(cls * 84)
+
 proc threatIndex*(attType: int, attFriendly: bool, flip: int,
                   src, dst: int, relTgt: int): int {.inline.} =
   let s = src xor flip
@@ -52,17 +63,17 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
   let side = if attFriendly: 0 else: HALF_THREATS
 
   if attType == 0: # Pawn
-    let cls = pawnTarget[relTgt]
-    if cls < 0: return -1
+    let pOff = pawnTargetOff[relTgt]
+    if pOff < 0: return -1
     let ident = if abs(d - s) == (if d > s: 7 else: 9): 0 else: 1
-    return side + cls * 84 + ((s shr 3) - 1) * 14 + 2 * (s and 7) + ident - 1
+    return side + system.int(pOff) + ((s shr 3) - 1) * 14 + 2 * (s and 7) + ident - 1
 
   let t = attType - 1
-  let cls = thTarget[t][relTgt]
-  if cls < 0: return -1
+  let targetOff = thTargetOff[t][relTgt]
+  if targetOff < 0: return -1
   if d > s and (relTgt mod 6) == attType: return -1
   let below = countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1))
-  side + system.int(thClassOff[t]) + cls * system.int(thCount[t]) + system.int(thBase[t][s]) + below
+  side + system.int(targetOff) + system.int(thBase[t][s]) + below
 
 proc computeFlip*(perspective: Color, kingSq: Square): int {.inline.} =
   result = if perspective == Black: 56 else: 0
