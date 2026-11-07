@@ -212,7 +212,6 @@ when defined(avx512):
   {.push header: "immintrin.h".}
   func mm512AddEpi64(a, b: M512i): M512i {.importc: "_mm512_add_epi64".}
   func mm512LoaduSi512(p: pointer): M512i {.importc: "_mm512_loadu_si512".}
-  func mm512StoreuSi512(p: pointer, a: M512i) {.importc: "_mm512_storeu_si512".}
   func mm512Set1Epi32(a: int32): M512i {.importc: "_mm512_set1_epi32".}
   func mm512SlliEpi16(a: M512i, shift: int32): M512i {.importc: "_mm512_slli_epi16".}
   func mm512MulhiEpi16(a, b: M512i): M512i {.importc: "_mm512_mulhi_epi16".}
