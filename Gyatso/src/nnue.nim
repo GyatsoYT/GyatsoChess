@@ -1,5 +1,5 @@
 import coretypes, bitboard, board, nnuetypes, threats
-import std/[streams]
+import std/[streams, strutils]
 import simd
 import attacks
 when defined(nnueStats):
@@ -7,9 +7,13 @@ when defined(nnueStats):
 
 const
     NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet384TIx16x32.bin")
-    NNUE_PAIRWISE_PERMUTATION = block:
+    NNUE_PAIRWISE_PERM_TEXT = staticRead("../Net/GyatsoNet384TIx16x32.perm")
+    NNUE_PAIRWISE_PERMUTATION: array[PAIR_COUNT, int] = block:
       var p: array[PAIR_COUNT, int]
-      for i in 0 ..< PAIR_COUNT: p[i] = i
+      let tokens = NNUE_PAIRWISE_PERM_TEXT.splitWhitespace()
+      doAssert tokens.len == PAIR_COUNT, "Permutation file must have " & $PAIR_COUNT & " integers"
+      for i in 0 ..< PAIR_COUNT:
+        p[i] = parseInt(tokens[i])
       p
     NNUE_RAW_BYTES* = THREAT_IN * HL + PSQT_IN * HL * 2 + HL * 2 +
                      HL * L2_SIZE + L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
@@ -109,14 +113,23 @@ proc loadNetworkInto*(net: ptr NNUENetwork, data: string) =
 
     for feature in 0..<PSQT_IN:
         for hidden in 0..<HL:
-            net.ftPsqt[feature][hidden] = data.readI16(offset)
+            let side = hidden div PAIR_COUNT
+            let pair = hidden mod PAIR_COUNT
+            let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+            net.ftPsqt[feature][permutedHidden] = data.readI16(offset)
 
     for feature in 0..<THREAT_IN:
         for hidden in 0..<HL:
-            net.ftThreat[feature][hidden] = data.readI8(offset)
+            let side = hidden div PAIR_COUNT
+            let pair = hidden mod PAIR_COUNT
+            let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+            net.ftThreat[feature][permutedHidden] = data.readI8(offset)
 
     for hidden in 0..<HL:
-        net.ftBias[hidden] = data.readI16(offset)
+        let side = hidden div PAIR_COUNT
+        let pair = hidden mod PAIR_COUNT
+        let permutedHidden = side * PAIR_COUNT + newIndexByOld[pair]
+        net.ftBias[permutedHidden] = data.readI16(offset)
 
     var rawL1: array[L1_IN div 4, array[L2_SIZE, array[4, int8]]]
     for chunk in 0..<(L1_IN div 4):
