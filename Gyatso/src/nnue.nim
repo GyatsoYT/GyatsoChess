@@ -1,5 +1,5 @@
 import coretypes, bitboard, board, nnuetypes, threats
-import std/[streams, strutils]
+import std/[streams, strutils, bitops]
 import simd
 import attacks
 when defined(nnueStats):
@@ -424,7 +424,7 @@ func unpackEdgeTo(e: uint32, edge: var RawEdge) {.inline.} =
 
 proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
                  src: int, attType: int, attColor: Color,
-                 buf: var array[128, uint32], n: var int) {.inline.} =
+                 buf: var array[32, uint32], n: var int) {.inline.} =
     let sq = Square(src)
     var targets: Bitboard
     case PieceType(attType)
@@ -441,7 +441,7 @@ proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
         let tp = mailbox[dst.int]
         let ptOrd = tp.pieceType.ord
         if (targetMask and (1'u8 shl ptOrd)) != 0:
-            if n < 128:
+            if n < 32:
                 buf[n] = packEdge(src, dst.int, attType, attColor, ptOrd, tp.color)
                 inc n
 
@@ -593,17 +593,33 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         newMail[toSq.int] = movingPiece
         newOcc = (newOcc and not fromSq.bit) or toSq.bit
 
-    var oldRaw {.noinit.}: array[128, uint32]
-    var nOld = 0
-    var newRaw {.noinit.}: array[128, uint32]
-    var nNew = 0
+    var subRaw {.noinit.}: array[64, RawEdge]
+    var nSubRaw = 0
+    var addRaw {.noinit.}: array[64, RawEdge]
+    var nAddRaw = 0
+
+    template pushSubEdge(e: uint32) =
+        if nSubRaw < 64:
+            unpackEdgeTo(e, subRaw[nSubRaw])
+            inc nSubRaw
+        else:
+            deltas[White].needsRefresh = true
+            deltas[Black].needsRefresh = true
+            return
+
+    template pushAddEdge(e: uint32) =
+        if nAddRaw < 64:
+            unpackEdgeTo(e, addRaw[nAddRaw])
+            inc nAddRaw
+        else:
+            deltas[White].needsRefresh = true
+            deltas[Black].needsRefresh = true
+            return
 
     for ai in 0..<nAff:
         let oldSq = affSqs[ai]
         let oldType = affTypes[ai]
         let oldColor = affColors[ai]
-
-        addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, oldRaw, nOld)
 
         let piece = b.mailbox[oldSq]
         var newSq = oldSq
@@ -633,43 +649,51 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
             if oldSq == toSq.int and piece != NoPiece and piece.color != movingColor:
                 alive = false
 
-        if alive:
-            let newColor = if oldSq == fromSq.int: movingColor else: oldColor
-            addRawEdges(newMail, newOcc, newSq, newType, newColor, newRaw, nNew)
+        if oldSq != newSq or not alive:
+            var localEdges {.noinit.}: array[32, uint32]
+            var nLocal = 0
+            addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, localEdges, nLocal)
+            for k in 0..<nLocal:
+                pushSubEdge(localEdges[k])
 
-    var subRaw {.noinit.}: array[64, RawEdge]
-    var nSubRaw = 0
-    var addRaw {.noinit.}: array[64, RawEdge]
-    var nAddRaw = 0
+            if alive:
+                let newColor = if oldSq == fromSq.int: movingColor else: oldColor
+                nLocal = 0
+                addRawEdges(newMail, newOcc, newSq, newType, newColor, localEdges, nLocal)
+                for k in 0..<nLocal:
+                    pushAddEdge(localEdges[k])
+        else:
+            var pOld {.noinit.}: array[32, uint32]
+            var nPOld = 0
+            var pNew {.noinit.}: array[32, uint32]
+            var nPNew = 0
 
-    if nOld <= 64 and nNew <= 64:
-        var newUsedMask: uint64 = 0
-        var oldUsedMask: uint64 = 0
-        for i in 0..<nOld:
-            let o = oldRaw[i]
-            var bit: uint64 = 1'u64
-            for j in 0..<nNew:
-                if ((newUsedMask and bit) == 0) and o == newRaw[j]:
-                    oldUsedMask = oldUsedMask or (1'u64 shl i)
-                    newUsedMask = newUsedMask or bit
-                    break
-                bit = bit shl 1
+            addRawEdges(b.mailbox, occ, oldSq, oldType, oldColor, pOld, nPOld)
+            addRawEdges(newMail, newOcc, newSq, newType, oldColor, pNew, nPNew)
 
-        var unmatchOld = Bitboard(not oldUsedMask and (if nOld == 64: not 0'u64 else: ((1'u64 shl nOld) - 1)))
-        while not unmatchOld.isEmpty:
-            let i = poplsb(unmatchOld).int
-            unpackEdgeTo(oldRaw[i], subRaw[nSubRaw])
-            inc nSubRaw
+            var newUsed: uint32 = 0
+            var oldUsed: uint32 = 0
+            for i in 0..<nPOld:
+                let o = pOld[i]
+                var bit: uint32 = 1'u32
+                for j in 0..<nPNew:
+                    if ((newUsed and bit) == 0) and o == pNew[j]:
+                        oldUsed = oldUsed or (1'u32 shl i)
+                        newUsed = newUsed or bit
+                        break
+                    bit = bit shl 1
 
-        var unmatchNew = Bitboard(not newUsedMask and (if nNew == 64: not 0'u64 else: ((1'u64 shl nNew) - 1)))
-        while not unmatchNew.isEmpty:
-            let j = poplsb(unmatchNew).int
-            unpackEdgeTo(newRaw[j], addRaw[nAddRaw])
-            inc nAddRaw
-    else:
-        deltas[White].needsRefresh = true
-        deltas[Black].needsRefresh = true
-        return
+            var maskOld = (not oldUsed) and (if nPOld == 32: 0xFFFFFFFF'u32 else: ((1'u32 shl nPOld) - 1))
+            while maskOld != 0:
+                let i = countTrailingZeroBits(maskOld)
+                maskOld = maskOld and (maskOld - 1)
+                pushSubEdge(pOld[i])
+
+            var maskNew = (not newUsed) and (if nPNew == 32: 0xFFFFFFFF'u32 else: ((1'u32 shl nPNew) - 1))
+            while maskNew != 0:
+                let j = countTrailingZeroBits(maskNew)
+                maskNew = maskNew and (maskNew - 1)
+                pushAddEdge(pNew[j])
 
     for p in [White, Black]:
         if deltas[p].needsRefresh: continue
