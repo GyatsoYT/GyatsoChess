@@ -86,6 +86,60 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
   let below = countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1))
   side + system.int(targetOff) + system.int(thBase[t][s]) + below
 
+proc threatIndexDual*(e: uint32,
+                      flipW, flipB: int,
+                      doW, doB: bool,
+                      idxW, idxB: var int32) {.inline.} =
+  let src = system.int(e and 0x3F)
+  let dst = system.int((e shr 6) and 0x3F)
+  let attType = system.int((e shr 12) and 0x7)
+  let attColor = uint8((e shr 15) and 0x1)
+  let tgtPt = system.int((e shr 16) and 0x7)
+  let tgtColor = uint8((e shr 19) and 0x1)
+  let isWhiteTgt = (tgtColor == 0)
+  if attType == 0: # Pawn
+    if doW:
+      let sW = src xor flipW
+      let dW = dst xor flipW
+      let sideW = if attColor == 0: 0'i32 else: HALF_THREATS
+      let relW = tgtPt + (if isWhiteTgt: 0 else: 6)
+      let pOffW = pawnTargetOff[relW]
+      let identW = if abs(dW - sW) == (if dW > sW: 7 else: 9): 0'i32 else: 1'i32
+      idxW = sideW + pOffW + pawnSqOffset[sW] + identW
+    if doB:
+      let sB = src xor flipB
+      let dB = dst xor flipB
+      let sideB = if attColor == 1: 0'i32 else: HALF_THREATS
+      let relB = tgtPt + (if isWhiteTgt: 6 else: 0)
+      let pOffB = pawnTargetOff[relB]
+      let identB = if abs(dB - sB) == (if dB > sB: 7 else: 9): 0'i32 else: 1'i32
+      idxB = sideB + pOffB + pawnSqOffset[sB] + identB
+  else:
+    let t = attType - 1
+    let isSamePt = (tgtPt == attType)
+    if doW:
+      let sW = src xor flipW
+      let dW = dst xor flipW
+      if isSamePt and dW > sW:
+        idxW = -1
+      else:
+        let sideW = if attColor == 0: 0'i32 else: HALF_THREATS
+        let relW = tgtPt + (if isWhiteTgt: 0 else: 6)
+        let targetOffW = thTargetOff[t][relW]
+        let belowW = int32(countSetBits(thAtt[t][sW] and ((1'u64 shl dW) - 1)))
+        idxW = sideW + targetOffW + thBase[t][sW] + belowW
+    if doB:
+      let sB = src xor flipB
+      let dB = dst xor flipB
+      if isSamePt and dB > sB:
+        idxB = -1
+      else:
+        let sideB = if attColor == 1: 0'i32 else: HALF_THREATS
+        let relB = tgtPt + (if isWhiteTgt: 6 else: 0)
+        let targetOffB = thTargetOff[t][relB]
+        let belowB = int32(countSetBits(thAtt[t][sB] and ((1'u64 shl dB) - 1)))
+        idxB = sideB + targetOffB + thBase[t][sB] + belowB
+
 proc computeFlip*(perspective: Color, kingSq: Square): int {.inline.} =
   result = if perspective == Black: 56 else: 0
   if kingSq.file > 3:

@@ -405,23 +405,6 @@ proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.
 func packEdge(src, dst, attType: int, attColor: Color, tgtPt: int, tgtColor: Color): uint32 {.inline.} =
     uint32(src or (dst shl 6) or (attType shl 12) or (attColor.ord shl 15) or (tgtPt shl 16) or (tgtColor.ord shl 19))
 
-type
-  RawEdge = object
-    src: uint8
-    dst: uint8
-    attType: uint8
-    attColor: uint8
-    tgtPt: uint8
-    tgtColor: uint8
-
-func unpackEdgeTo(e: uint32, edge: var RawEdge) {.inline.} =
-    edge.src = uint8(e and 0x3F)
-    edge.dst = uint8((e shr 6) and 0x3F)
-    edge.attType = uint8((e shr 12) and 0x7)
-    edge.attColor = uint8((e shr 15) and 0x1)
-    edge.tgtPt = uint8((e shr 16) and 0x7)
-    edge.tgtColor = uint8((e shr 19) and 0x1)
-
 proc addRawEdges(mailbox: array[64, Piece], occ: Bitboard,
                  src: int, attType: int, attColor: Color,
                  buf: var array[32, uint32], n: var int) {.inline.} =
@@ -593,14 +576,14 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
         newMail[toSq.int] = movingPiece
         newOcc = (newOcc and not fromSq.bit) or toSq.bit
 
-    var subRaw {.noinit.}: array[64, RawEdge]
+    var subRaw {.noinit.}: array[64, uint32]
     var nSubRaw = 0
-    var addRaw {.noinit.}: array[64, RawEdge]
+    var addRaw {.noinit.}: array[64, uint32]
     var nAddRaw = 0
 
     template pushSubEdge(e: uint32) =
         if nSubRaw < 64:
-            unpackEdgeTo(e, subRaw[nSubRaw])
+            subRaw[nSubRaw] = e
             inc nSubRaw
         else:
             deltas[White].needsRefresh = true
@@ -609,7 +592,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
 
     template pushAddEdge(e: uint32) =
         if nAddRaw < 64:
-            unpackEdgeTo(e, addRaw[nAddRaw])
+            addRaw[nAddRaw] = e
             inc nAddRaw
         else:
             deltas[White].needsRefresh = true
@@ -695,41 +678,65 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta]) =
                 maskNew = maskNew and (maskNew - 1)
                 pushAddEdge(pNew[j])
 
-    for p in [White, Black]:
-        if deltas[p].needsRefresh: continue
+    let kingSqW = b.kingSquare(White)
+    let flipW = computeFlip(White, kingSqW)
+    let kingSqB = b.kingSquare(Black)
+    let flipB = computeFlip(Black, kingSqB)
 
-        let kingSq = b.kingSquare(p)
-        let flip = computeFlip(p, kingSq)
+    var nSubsW = 0
+    var nAddsW = 0
+    var nSubsB = 0
+    var nAddsB = 0
 
-        var nSubs = 0
-        var nAdds = 0
+    var doW = not deltas[White].needsRefresh
+    var doB = not deltas[Black].needsRefresh
 
-        let pOrd = uint8(p.ord)
-        for i in 0..<nSubRaw:
-            let e = subRaw[i]
-            let rel = system.int(e.tgtPt) + (if e.tgtColor == pOrd: 0 else: 6)
-            let idx = threatIndex(system.int(e.attType), e.attColor == pOrd, flip, system.int(e.src), system.int(e.dst), rel)
-            if idx >= 0:
-                if nSubs >= MAX_THREAT_DELTA:
-                    deltas[p].needsRefresh = true
-                    break
-                deltas[p].thSubs[nSubs] = uint32(idx)
-                inc nSubs
+    for i in 0..<nSubRaw:
+        if not (doW or doB): break
+        let e = subRaw[i]
+        var idxW, idxB: int32
+        threatIndexDual(e, flipW, flipB, doW, doB, idxW, idxB)
+        if doW and idxW >= 0:
+            if nSubsW >= MAX_THREAT_DELTA:
+                deltas[White].needsRefresh = true
+                doW = false
+            else:
+                deltas[White].thSubs[nSubsW] = uint32(idxW)
+                inc nSubsW
 
-        if not deltas[p].needsRefresh:
-            for i in 0..<nAddRaw:
-                let e = addRaw[i]
-                let rel = system.int(e.tgtPt) + (if e.tgtColor == pOrd: 0 else: 6)
-                let idx = threatIndex(system.int(e.attType), e.attColor == pOrd, flip, system.int(e.src), system.int(e.dst), rel)
-                if idx >= 0:
-                    if nAdds >= MAX_THREAT_DELTA:
-                        deltas[p].needsRefresh = true
-                        break
-                    deltas[p].thAdds[nAdds] = uint32(idx)
-                    inc nAdds
+        if doB and idxB >= 0:
+            if nSubsB >= MAX_THREAT_DELTA:
+                deltas[Black].needsRefresh = true
+                doB = false
+            else:
+                deltas[Black].thSubs[nSubsB] = uint32(idxB)
+                inc nSubsB
 
-        deltas[p].nThSubs = nSubs
-        deltas[p].nThAdds = nAdds
+    for i in 0..<nAddRaw:
+        if not (doW or doB): break
+        let e = addRaw[i]
+        var idxW, idxB: int32
+        threatIndexDual(e, flipW, flipB, doW, doB, idxW, idxB)
+        if doW and idxW >= 0:
+            if nAddsW >= MAX_THREAT_DELTA:
+                deltas[White].needsRefresh = true
+                doW = false
+            else:
+                deltas[White].thAdds[nAddsW] = uint32(idxW)
+                inc nAddsW
+
+        if doB and idxB >= 0:
+            if nAddsB >= MAX_THREAT_DELTA:
+                deltas[Black].needsRefresh = true
+                doB = false
+            else:
+                deltas[Black].thAdds[nAddsB] = uint32(idxB)
+                inc nAddsB
+
+    deltas[White].nThSubs = nSubsW
+    deltas[White].nThAdds = nAddsW
+    deltas[Black].nThSubs = nSubsB
+    deltas[Black].nThAdds = nAddsB
 
 proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
                       state: var NNUEState) =
