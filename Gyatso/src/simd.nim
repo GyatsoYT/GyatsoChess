@@ -344,6 +344,9 @@ type
 func packFourBytes(inputs: ptr U8Array, offset: int): uint32 {.inline.} =
   copyMem(addr result, addr inputs[offset], sizeof(result))
 
+when defined(avx512vbmi2):
+  import std/bitops
+
 import nnuetypes
 
 proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[L1_IN div 4, uint16],
@@ -358,10 +361,7 @@ proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[L1_IN div 4, ui
       if mask != 0:
         let baseIndexes = mm512_add_epi16(indexes, mm512_set1_epi16(int16(base)))
         mm512_mask_compressstoreu_epi16(addr blocks[count], uint32(mask), baseIndexes)
-        var active = uint32(mask)
-        while active != 0:
-          inc count
-          active = active and (active - 1)
+        count += countSetBits(mask)
   elif defined(avx2) or defined(avx512):
     let zero = mm256_setzero_si256()
     for base in countup(0, L1_IN div 4 - 8, 8):
@@ -899,10 +899,7 @@ when defined(avx512) or defined(avx2):
             let groupBase = mm512_add_epi16(indexes,
               mm512_set1_epi16(int16((outBase + i) div 4)))
             mm512_mask_compressstoreu_epi16(addr blocks[count], activeMask, groupBase)
-            var active = activeMask
-            while active != 0:
-              inc count
-              active = active and (active - 1)
+            count += countSetBits(activeMask)
         else:
           let equalZero = mm256_cmpeq_epi32(bytes, zero256)
           let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
