@@ -680,6 +680,9 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         let oldTargets = getPieceAttacks(sq, pt, oldColor, occ)
         let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
 
+        if oldTargets == newTargets and (oldTargets and changedMaskBB).isEmpty:
+            continue
+
         let common = oldTargets and newTargets and not changedMaskBB
         var subTgts = (oldTargets and not common) and not kings
         case pt
