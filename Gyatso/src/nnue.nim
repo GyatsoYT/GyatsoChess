@@ -514,7 +514,6 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         let kingTo = if fromSq.file < rookFrom.file: fromSq.withFile(6) else: fromSq.withFile(2)
         let rookTo = if fromSq.file < rookFrom.file: fromSq.withFile(5)
                      else: fromSq.withFile(3)
-        changedSqs[nChanged] = rookFrom.int; inc nChanged
         changedSqs[nChanged] = rookTo.int; inc nChanged
         changedMaskBB = changedMaskBB or kingTo.bit or rookTo.bit
 
