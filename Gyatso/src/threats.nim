@@ -11,6 +11,16 @@ const ValidThreatTargetMask*: array[5, uint8] = [
     (1'u8 shl Pawn.ord) or (1'u8 shl Knight.ord) or (1'u8 shl Bishop.ord) or (1'u8 shl Rook.ord) or (1'u8 shl Queen.ord)  # Queen: 31
 ]
 
+type
+  ThreatEdge* = object
+    src*: uint8
+    dst*: uint8
+    attacker*: uint8
+    victim*: uint8
+
+func makeEdge*(src, dst: int, attacker, victim: Piece): ThreatEdge {.inline.} =
+  ThreatEdge(src: uint8(src), dst: uint8(dst), attacker: uint8(attacker.ord), victim: uint8(victim.ord))
+
 var
   thAtt: array[4, array[64, uint64]]
   thRankBase: array[4, array[64, array[64, uint16]]]
@@ -20,6 +30,10 @@ var
   pawnTarget: array[12, int]
   thTargetOff: array[4, array[12, int32]]
   pawnTargetOff: array[12, int32]
+  thBaseW*: array[12, array[12, int32]]
+  thBaseB*: array[12, array[12, int32]]
+  thIsSamePt*: array[12, array[12, bool]]
+  thAttType*: array[12, uint8]
   pawnSqOffset: array[64, int32] = block:
     var tbl: array[64, int32]
     for s in 0 ..< 64:
@@ -71,6 +85,34 @@ proc initThreats*() =
     let cls = pawnTarget[rel]
     pawnTargetOff[rel] = if cls < 0: -1'i32 else: int32(cls * 84)
 
+  for a in 0 ..< 12:
+    let attColor = if a < 6: White else: Black
+    let attPt = a mod 6
+    thAttType[a] = uint8(attPt)
+    let sideW = if attColor == White: 0'i32 else: HALF_THREATS
+    let sideB = if attColor == Black: 0'i32 else: HALF_THREATS
+
+    for v in 0 ..< 12:
+      let relW = v
+      let relB = if v < 6: v + 6 else: v - 6
+      let tgtPt = v mod 6
+      thIsSamePt[a][v] = (tgtPt == attPt)
+
+      if attPt == 0: # Pawn
+        let offW = pawnTargetOff[relW]
+        let offB = pawnTargetOff[relB]
+        thBaseW[a][v] = if offW < 0: -1'i32 else: sideW + offW
+        thBaseB[a][v] = if offB < 0: -1'i32 else: sideB + offB
+      elif attPt < 5: # Knight, Bishop, Rook, Queen
+        let t = attPt - 1
+        let offW = thTargetOff[t][relW]
+        let offB = thTargetOff[t][relB]
+        thBaseW[a][v] = if offW < 0: -1'i32 else: sideW + offW
+        thBaseB[a][v] = if offB < 0: -1'i32 else: sideB + offB
+      else: # King
+        thBaseW[a][v] = -1'i32
+        thBaseB[a][v] = -1'i32
+
 proc threatIndex*(attType: int, attFriendly: bool, flip: int,
                   src, dst: int, relTgt: int): int {.inline.} =
   let s = src xor flip
@@ -87,54 +129,40 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
   let targetOff = thTargetOff[t][relTgt]
   side + system.int(targetOff) + system.int(thRankBase[t][s][d])
 
-proc threatIndexDual*(e: uint32,
+proc threatIndexDual*(e: ThreatEdge,
                       flipW, flipB: int,
                       doW, doB: bool,
                       idxW, idxB: var int32) {.inline.} =
-  let src = system.int(e and 0x3F)
-  let dst = system.int((e shr 6) and 0x3F)
-  let attType = system.int((e shr 12) and 0x7)
-  let attColor = uint8((e shr 15) and 0x1)
-  let tgtPt = system.int((e shr 16) and 0x7)
-  let tgtColor = uint8((e shr 19) and 0x1)
-
-  let sideW = int32(attColor) * HALF_THREATS
-  let sideB = int32(1'u8 xor attColor) * HALF_THREATS
-  let relW = tgtPt + system.int(tgtColor) * 6
-  let relB = tgtPt + system.int(1'u8 xor tgtColor) * 6
+  let a = system.int(e.attacker)
+  let v = system.int(e.victim)
+  let src = system.int(e.src)
+  let dst = system.int(e.dst)
+  let baseW = thBaseW[a][v]
+  let baseB = thBaseB[a][v]
+  let attType = thAttType[a]
 
   if attType == 0: # Pawn
-    let baseW = sideW + pawnTargetOff[relW]
-    let baseB = sideB + pawnTargetOff[relB]
     if doW:
       let sW = src xor flipW
       let dW = dst xor flipW
-      let identW = int32(ord((dW and 7) > (sW and 7)))
-      idxW = baseW + pawnSqOffset[sW] + identW
+      idxW = baseW + pawnSqOffset[sW] + int32(ord((dW and 7) > (sW and 7)))
     if doB:
       let sB = src xor flipB
       let dB = dst xor flipB
-      let identB = int32(ord((dB and 7) > (sB and 7)))
-      idxB = baseB + pawnSqOffset[sB] + identB
+      idxB = baseB + pawnSqOffset[sB] + int32(ord((dB and 7) > (sB and 7)))
   else:
-    let t = attType - 1
-    let isSamePt = (tgtPt == attType)
-    let baseW = sideW + thTargetOff[t][relW]
-    let baseB = sideB + thTargetOff[t][relB]
+    let t = system.int(attType - 1)
+    let isSamePt = thIsSamePt[a][v]
     if doW:
       let sW = src xor flipW
       let dW = dst xor flipW
-      if isSamePt and dW > sW:
-        idxW = -1
-      else:
-        idxW = baseW + int32(thRankBase[t][sW][dW])
+      if isSamePt and dW > sW: idxW = -1
+      else: idxW = baseW + int32(thRankBase[t][sW][dW])
     if doB:
       let sB = src xor flipB
       let dB = dst xor flipB
-      if isSamePt and dB > sB:
-        idxB = -1
-      else:
-        idxB = baseB + int32(thRankBase[t][sB][dB])
+      if isSamePt and dB > sB: idxB = -1
+      else: idxB = baseB + int32(thRankBase[t][sB][dB])
 
 proc computeFlip*(perspective: Color, kingSq: Square): int {.inline.} =
   result = if perspective == Black: 56 else: 0

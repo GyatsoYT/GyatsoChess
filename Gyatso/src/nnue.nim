@@ -417,9 +417,6 @@ proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.
     if result > MaxEval: result = MaxEval
     elif result < -MaxEval: result = -MaxEval
 
-func packEdge(src, dst, attType: int, attColor: Color, tgtPt: int, tgtColor: Color): uint32 {.inline.} =
-    uint32(src or (dst shl 6) or (attType shl 12) or (attColor.ord shl 15) or (tgtPt shl 16) or (tgtColor.ord shl 19))
-
 template getPieceAttacks(sq: Square, pt: PieceType, color: Color, occBB: Bitboard): Bitboard =
     case pt
     of Pawn:   getPawnAttacks(sq, color) and occBB
@@ -579,12 +576,12 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                                      (getPawnAttacks(cSq, White) and bPawns)
         affMask = affMask or attackers
 
-    var subRaw {.noinit.}: array[64, uint32]
+    var subRaw {.noinit.}: array[64, ThreatEdge]
     var nSubRaw = 0
-    var addRaw {.noinit.}: array[64, uint32]
+    var addRaw {.noinit.}: array[64, ThreatEdge]
     var nAddRaw = 0
 
-    template pushSubEdge(e: uint32) =
+    template pushSubEdge(e: ThreatEdge) =
         if nSubRaw < 64:
             subRaw[nSubRaw] = e
             inc nSubRaw
@@ -593,7 +590,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
             deltas[Black].needsRefresh = true
             return
 
-    template pushAddEdge(e: uint32) =
+    template pushAddEdge(e: ThreatEdge) =
         if nAddRaw < 64:
             addRaw[nAddRaw] = e
             inc nAddRaw
@@ -615,23 +612,25 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         if pt != King:
             var tgts = getPieceAttacks(sq, pt, pc, occ) and not kings
             let targetMask = ValidThreatTargetMask[pt.ord]
+            let attPiece = makePiece(pc, pt)
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
                 let tp = b.mailbox[dst.int]
                 let ptOrd = tp.pieceType.ord
                 if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushSubEdge(packEdge(sq.int, dst.int, pt.ord, pc, ptOrd, tp.color))
+                    pushSubEdge(makeEdge(sq.int, dst.int, attPiece, tp))
 
     template emitAddAttacks(sq: Square, pt: PieceType, pc: Color) =
         if pt != King:
             var tgts = getPieceAttacks(sq, pt, pc, newOcc) and not newKings
             let targetMask = ValidThreatTargetMask[pt.ord]
+            let attPiece = makePiece(pc, pt)
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
                 let tp = newMail[dst.int]
                 let ptOrd = tp.pieceType.ord
                 if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushAddEdge(packEdge(sq.int, dst.int, pt.ord, pc, ptOrd, tp.color))
+                    pushAddEdge(makeEdge(sq.int, dst.int, attPiece, tp))
 
     if m.isCastling:
         let rookFrom = toSq
@@ -680,14 +679,14 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
                 let tp = b.mailbox[dst.int]
                 let ptOrd = tp.pieceType.ord
                 if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushSubEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
+                    pushSubEdge(makeEdge(oldSq, dst.int, piece, tp))
 
             while not addTgts.isEmpty:
                 let dst = poplsb(addTgts)
                 let tp = newMail[dst.int]
                 let ptOrd = tp.pieceType.ord
                 if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushAddEdge(packEdge(oldSq, dst.int, oldType, oldColor, ptOrd, tp.color))
+                    pushAddEdge(makeEdge(oldSq, dst.int, piece, tp))
 
     let kingSqW = b.kingSquare(White)
     let flipW = computeFlip(White, kingSqW)
