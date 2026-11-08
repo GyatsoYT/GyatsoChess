@@ -602,6 +602,10 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
             return
 
     let kings = b.byPiece[King.ord] or b.byPiece[King.ord + 6]
+    let queens = b.byPiece[Queen.ord] or b.byPiece[Queen.ord + 6]
+    let rooks = b.byPiece[Rook.ord] or b.byPiece[Rook.ord + 6]
+    let knightsRooks = knights or rooks
+    let notQueensKings = not (queens or kings)
     let newKings = if movingPt == King:
                        (if m.isCastling:
                             let kTo = if fromSq.file < toSq.file: fromSq.withFile(6) else: fromSq.withFile(2)
@@ -612,15 +616,16 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
 
     template emitSubAttacks(sq: Square, pt: PieceType, pc: Color) =
         if pt != King:
-            var tgts = getPieceAttacks(sq, pt, pc, occ) and not kings
-            let targetMask = ValidThreatTargetMask[pt.ord]
+            var tgts = getPieceAttacks(sq, pt, pc, occ)
+            case pt
+            of Pawn: tgts = tgts and knightsRooks
+            of Bishop, Rook: tgts = tgts and notQueensKings
+            else: tgts = tgts and not kings
             let attPiece = makePiece(pc, pt)
             while not tgts.isEmpty:
                 let dst = poplsb(tgts)
                 let tp = b.mailbox[dst.int]
-                let ptOrd = tp.pieceType.ord
-                if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushSubEdge(makeEdge(sq.int, dst.int, attPiece, tp))
+                pushSubEdge(makeEdge(sq.int, dst.int, attPiece, tp))
 
     template emitAddAttacks(sq: Square, pt: PieceType, pc: Color) =
         if pt != King:
@@ -672,6 +677,10 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
 
         let common = oldTargets and newTargets and not changedMaskBB
         var subTgts = (oldTargets and not common) and not kings
+        case pt
+        of Pawn: subTgts = subTgts and knightsRooks
+        of Bishop, Rook: subTgts = subTgts and not queens
+        else: discard
         var addTgts = (newTargets and not common) and not newKings
 
         if not subTgts.isEmpty or not addTgts.isEmpty:
@@ -679,9 +688,7 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
             while not subTgts.isEmpty:
                 let dst = poplsb(subTgts)
                 let tp = b.mailbox[dst.int]
-                let ptOrd = tp.pieceType.ord
-                if (targetMask and (1'u8 shl ptOrd)) != 0:
-                    pushSubEdge(makeEdge(oldSq, dst.int, piece, tp))
+                pushSubEdge(makeEdge(oldSq, dst.int, piece, tp))
 
             while not addTgts.isEmpty:
                 let dst = poplsb(addTgts)
