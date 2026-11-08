@@ -33,10 +33,6 @@ proc evaluate*(b: Board, state: var NNUEState): int {.inline.} =
   if ((entry[] xor key) and KeyMask) == 0:
     return system.int(cast[int16](uint16(entry[] and 0xFFFF'u64)))
   result = nnueEvaluate(gNetwork, b, state)
-  if result > MateThreshold:
-    result = MateThreshold
-  elif result < -MateThreshold:
-    result = -MateThreshold
   entry[] = (key and KeyMask) or uint64(cast[uint16](int16(result)))
 
 func evalCachePrefetch(p: pointer) {.importc: "__builtin_prefetch", nodecl, inline.}
