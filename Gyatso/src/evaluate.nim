@@ -26,7 +26,7 @@ proc initNNUE*() =
   doAssert gNetwork != nil, "Failed to allocate memory for NNUE network"
   loadNetworkFromEmbedded(gNetwork)
 
-proc evaluate*(b: Board, state: var NNUEState): int {.inline.} =
+proc evaluate*(b: var Board, state: var NNUEState): int {.inline, gcsafe.} =
   const KeyMask = not 0xFFFF'u64
   let key = cast[uint64](b.hash)
   let entry = addr state.evalCache[key and uint64(EvalCacheSize - 1)]
@@ -43,17 +43,17 @@ proc prefetchEvalCache*(state: var NNUEState, key: uint64) {.inline.} =
 proc refreshNNUE*(b: Board, state: var NNUEState) {.inline.} =
   refreshState(gNetwork, b, state)
 
-proc nnuePush*(b: Board, m: Move, state: var NNUEState) {.inline.} =
+proc nnuePush*(b: var Board, m: Move, state: var NNUEState) {.inline.} =
   pushAccumulator(gNetwork, b, m, state)
 
 proc nnuePop*(state: var NNUEState) {.inline.} =
   popAccumulator(state)
 
-proc nnuePushNull*(state: var NNUEState) {.inline.} =
-  pushNullMove(state)
+proc nnuePushNull*(b: var Board, state: var NNUEState) {.inline.} =
+  pushNullMove(gNetwork, b, state)
 
 proc nnuePopNull*(state: var NNUEState) {.inline.} =
   popNullMove(state)
 
-proc verifyEval*(b: Board, state: var NNUEState) {.inline.} =
+proc verifyEval*(b: var Board, state: var NNUEState) {.inline.} =
   verifyNNUE(gNetwork, b, state)

@@ -271,6 +271,7 @@ proc refreshAccumulator*(net: ptr NNUENetwork, b: Board,
 
 proc refreshState*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
     state.current = 0
+    state.deferred[0] = false
     for p in [White, Black]:
         net.refreshAccumulator(b, state.acc[p][0], p)
         state.accFlags[p][0] = AccComputed
@@ -407,7 +408,11 @@ proc updateAccumulator(net: ptr NNUENetwork, b: Board, state: var NNUEState,
         inc j
         state.accFlags[p][j] = AccComputed
 
-proc nnueEvaluate*(net: ptr NNUENetwork, b: Board, state: var NNUEState): int {.inline.} =
+proc resolveDeferred*(net: ptr NNUENetwork, b: var Board, state: var NNUEState) {.gcsafe.}
+
+proc nnueEvaluate*(net: ptr NNUENetwork, b: var Board, state: var NNUEState): int {.inline, gcsafe.} =
+    if state.deferred[state.current]:
+        resolveDeferred(net, b, state)
     let ply = state.current
     let us = b.stm
     let them = us.opposite()
@@ -757,9 +762,22 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
     deltas[Black].nThSubs = nSubsB
     deltas[Black].nThAdds = nAddsB
 
-proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
-                      state: var NNUEState) =
+proc resolveDeferred*(net: ptr NNUENetwork, b: var Board, state: var NNUEState) {.gcsafe.} =
     let ply = state.current
+    let m = state.deferredMove[ply]
+
+    let savedAttackValid = b.attackStateValid
+    let savedThreats = b.threats
+    let savedPinHV = b.pinHV
+    let savedPinD12 = b.pinD12
+
+    b.unmakeMove(m)
+
+    for p in [White, Black]:
+        if (state.accFlags[p][ply - 1] and AccNeedsRefresh) != 0:
+            net.refreshAccumulator(b, state.acc[p][ply - 1], p)
+            state.accFlags[p][ply - 1] = AccComputed
+
     let us = b.stm
     let movingPt = b.mailbox[m.fromSq.int].pieceType
     let kingToFile = if m.isCastling:
@@ -776,33 +794,54 @@ proc pushAccumulator*(net: ptr NNUENetwork, b: Board, m: Move,
         profComputeDeltaCalls += 1
         profComputeDeltaCyc += (t1 - t0)
 
-    for perspective in [White, Black]:
-        if (state.accFlags[perspective][ply] and AccNeedsRefresh) != 0:
-            net.refreshAccumulator(b, state.acc[perspective][ply], perspective)
-            state.accFlags[perspective][ply] = AccComputed
+    b.makeMove(m)
 
-        if deltas[perspective].needsRefresh:
-            state.accFlags[perspective][ply + 1] = AccNeedsRefresh
+    b.attackStateValid = savedAttackValid
+    b.threats = savedThreats
+    b.pinHV = savedPinHV
+    b.pinD12 = savedPinD12
+
+    for p in [White, Black]:
+        if deltas[p].needsRefresh:
+            state.accFlags[p][ply] = AccNeedsRefresh
         else:
-            state.accFlags[perspective][ply + 1] = 0
-            state.delta[perspective][ply + 1] = deltas[perspective]
+            state.accFlags[p][ply] = 0
+            state.delta[p][ply] = deltas[p]
 
+    state.deferred[ply] = false
+
+proc pushAccumulator*(net: ptr NNUENetwork, b: var Board, m: Move,
+                      state: var NNUEState) =
+    if state.deferred[state.current]:
+        resolveDeferred(net, b, state)
+    let nextPly = state.current + 1
+    state.deferred[nextPly] = true
+    state.deferredMove[nextPly] = m
+    state.accFlags[White][nextPly] = 0
+    state.accFlags[Black][nextPly] = 0
     inc state.current
 
 proc popAccumulator*(state: var NNUEState) {.inline.} =
+    state.deferred[state.current] = false
     dec state.current
 
-proc pushNullMove*(state: var NNUEState) =
+proc pushNullMove*(net: ptr NNUENetwork, b: var Board, state: var NNUEState) =
+    if state.deferred[state.current]:
+        resolveDeferred(net, b, state)
     let ply = state.current
+    state.deferred[ply + 1] = false
     for p in [White, Black]:
         state.accFlags[p][ply + 1] = state.accFlags[p][ply] and AccNeedsRefresh
         state.delta[p][ply + 1] = PerspDelta()
     inc state.current
 
 proc popNullMove*(state: var NNUEState) {.inline.} =
+    state.deferred[state.current] = false
     dec state.current
 
-proc verifyNNUE*(net: ptr NNUENetwork, b: Board, state: var NNUEState) =
+proc verifyNNUE*(net: ptr NNUENetwork, b: var Board, state: var NNUEState) =
+    if state.deferred[state.current]:
+        resolveDeferred(net, b, state)
     let ply = state.current
     for p in [White, Black]:
         net.updateAccumulator(b, state, p)

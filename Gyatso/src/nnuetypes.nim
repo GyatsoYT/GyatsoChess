@@ -64,3 +64,5 @@ type
     accFlags*: array[Color, array[MaxPly + 1, uint8]]
     delta*: array[Color, array[MaxPly + 1, PerspDelta]]
     evalCache*: array[EvalCacheSize, EvalCacheEntry]
+    deferred*: array[MaxPly + 1, bool]
+    deferredMove*: array[MaxPly + 1, Move]
