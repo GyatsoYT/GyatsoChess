@@ -20,13 +20,25 @@ echo 2. AVX2      (x86-64 AVX2 NNUE + Magic Bitboards)
 echo 3. AVX2+BMI2 (x86-64 AVX2 NNUE + BMI2 PEXT/PDEP Bitboards)
 echo 4. AVX512    (x86-64 AVX-512 NNUE + BMI2 Bitboards)
 echo 5. NEON      (explicit ARM64 / Apple Silicon)
-set /p arch_choice="Select extensions (1/2/3/4/5): "
+echo 6. AVX2+VNNI (x86-64 AVX-VNNI NNUE)
+echo 7. AVX512+VNNI (x86-64 AVX-512 VNNI NNUE)
+echo 8. AVX512+VBMI2 (x86-64 AVX-512 VBMI2 sparse NNUE)
+echo 9. AVX512+VNNI+VBMI2 (x86-64 combined NNUE path)
+echo 10. NEON+DotProd (ARMv8.2-A dot-product NNUE)
+set /p arch_choice="Select extensions (1-10): "
 
 set AVX_FLAGS=
+set ARCH_CFLAGS=-march=native
 if "%arch_choice%"=="2" set AVX_FLAGS=-d:avx2
 if "%arch_choice%"=="3" set AVX_FLAGS=-d:avx2 -d:bmi2
 if "%arch_choice%"=="4" set AVX_FLAGS=-d:avx2 -d:bmi2 -d:avx512
 if "%arch_choice%"=="5" set AVX_FLAGS=-d:neon
+if "%arch_choice%"=="6" set AVX_FLAGS=-d:avx2 -d:avxvnni
+if "%arch_choice%"=="7" set AVX_FLAGS=-d:avx2 -d:bmi2 -d:avx512 -d:avx512vnni
+if "%arch_choice%"=="8" set AVX_FLAGS=-d:avx2 -d:bmi2 -d:avx512 -d:avx512vbmi2
+if "%arch_choice%"=="9" set AVX_FLAGS=-d:avx2 -d:bmi2 -d:avx512 -d:avx512vnni -d:avx512vbmi2
+if "%arch_choice%"=="10" set AVX_FLAGS=-d:neon -d:neonDotProd
+if "%arch_choice%"=="10" set ARCH_CFLAGS=-march=armv8.2-a+dotprod
 
 if "%choice%"=="1" goto NORMAL
 if "%choice%"=="2" goto PGO
@@ -35,7 +47,7 @@ goto MENU
 :NORMAL
 echo.
 echo === Normal Build ===
-nim c -d:release -d:danger -d:simd %AVX_FLAGS% --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso.exe Gyatso/src/main.nim
+nim c -d:release -d:danger -d:simd %AVX_FLAGS% --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:%ARCH_CFLAGS% -o:Gyatso.exe Gyatso/src/main.nim
 echo.
 echo Compilation finished.
 pause
@@ -47,7 +59,7 @@ echo === PGO Build Pipeline ===
 echo.
 echo [Stage 1] Instrumenting...
 rem Build with profile generation
-nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.exe Gyatso/src/main.nim
+nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:%ARCH_CFLAGS% --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.exe Gyatso/src/main.nim
 if errorlevel 1 goto ERROR
 
 echo.
@@ -113,7 +125,7 @@ if errorlevel 1 goto ERROR
 
 echo.
 echo [Stage 5] Final Optimized Build...
-nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.exe Gyatso/src/main.nim
+nim c --cc:clang -d:release -d:danger -d:simd %AVX_FLAGS% --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:%ARCH_CFLAGS% --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.exe Gyatso/src/main.nim
 if errorlevel 1 goto ERROR
 
 echo.

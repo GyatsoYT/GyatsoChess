@@ -16,6 +16,8 @@ when defined(avx512):
     {.passC: "-mavx512f -mavx512bw".}
     when defined(avx512vnni):
         {.passC: "-mavx512vnni".}
+    when defined(avx512vbmi2):
+        {.passC: "-mavx512vbmi2".}
 
     type
         M512i* {.importc: "__m512i", header: "immintrin.h", bycopy.} = object
@@ -33,7 +35,17 @@ when defined(avx512):
     func mm512_set1_epi16*(a: int16 | uint16): M512i {.importc: "_mm512_set1_epi16".}
     func mm512_setzero_si512*(): M512i {.importc: "_mm512_setzero_si512".}
     func mm512_reduce_add_epi32*(a: M512i): int32 {.importc: "_mm512_reduce_add_epi32".}
+    when defined(avx512vbmi2):
+        func mm512_cmpneq_epi32_mask(a, b: M512i): uint16 {.importc: "_mm512_cmpneq_epi32_mask".}
+        func mm512_mask_compressstoreu_epi16(p: pointer, mask: uint32, a: M512i) {.importc: "_mm512_mask_compressstoreu_epi16".}
+        func mm512_castsi256_si512(a: M256i): M512i {.importc: "_mm512_castsi256_si512".}
     {.pop.}
+
+    when defined(avx512vbmi2):
+        const AVX512CompactIndexes: array[32, uint16] = [
+          0'u16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+          16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
 
     template mm512_load_si512*(p: pointer): M512i =
         mm512_loadu_si512_impl(p)
@@ -337,7 +349,20 @@ import nnuetypes
 proc collectNonzeroBlocks(inputs: ptr U8Array, blocks: var array[L1_IN div 4, uint16],
                           indexLut: ptr U16Array, countLut: ptr U8Array): int =
   var count = 0
-  when defined(avx2) or defined(avx512):
+  when defined(avx512vbmi2):
+    let zero = mm512_setzero_si512()
+    let indexes = mm512_loadu_si512_impl(unsafeAddr AVX512CompactIndexes[0])
+    for base in countup(0, L1_IN div 4 - 16, 16):
+      let values = mm512_loadu_si512_impl(addr inputs[base * 4])
+      let mask = mm512_cmpneq_epi32_mask(values, zero)
+      if mask != 0:
+        let baseIndexes = mm512_add_epi16(indexes, mm512_set1_epi16(int16(base)))
+        mm512_mask_compressstoreu_epi16(addr blocks[count], uint32(mask), baseIndexes)
+        var active = uint32(mask)
+        while active != 0:
+          inc count
+          active = active and (active - 1)
+  elif defined(avx2) or defined(avx512):
     let zero = mm256_setzero_si256()
     for base in countup(0, L1_IN div 4 - 8, 8):
       let values = mm256_loadu_si256(cast[ptr M256i](addr inputs[base * 4]))
@@ -828,10 +853,12 @@ when defined(avx512) or defined(avx2):
     let nstm = cast[ptr I16Array](rawNstm)
     let outputs = cast[ptr U8Array](rawOutputs)
     let blocks = cast[ptr U16Array](rawBlocks)
-    let indexLut = cast[ptr U16Array](rawIndexLut)
-    let countLut = cast[ptr U8Array](rawCountLut)
+    when not defined(avx512vbmi2):
+      let indexLut = cast[ptr U16Array](rawIndexLut)
+      let countLut = cast[ptr U8Array](rawCountLut)
     var count = 0
-    let zero256 = mm256_setzero_si256()
+    when not defined(avx512vbmi2):
+      let zero256 = mm256_setzero_si256()
     when defined(avx512):
       let zero = mm512SetzeroSi512()
       let maxVec = mm512Set1Epi16(255)
@@ -863,11 +890,25 @@ when defined(avx512) or defined(avx2):
           bytes = mm256_packus_epi16(p0, p1)
           bytes = mm256_permute4x64_epi64(bytes, MM_SHUFFLE(3, 1, 2, 0))
         mm256_storeu_si256(cast[ptr M256i](addr outputs[outBase + i]), bytes)
-        let equalZero = mm256_cmpeq_epi32(bytes, zero256)
-        let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
-        let indexes = mm_loadu_si128(cast[ptr M128i](addr indexLut[mask * 8]))
-        let groupBase = mm_set1_epi16(int16((outBase + i) div 4))
-        mm_storeu_si128(cast[ptr M128i](addr blocks[count]),
-          mm_add_epi16(indexes, groupBase))
-        count += int(countLut[mask])
+        when defined(avx512vbmi2):
+          let wideBytes = mm512_castsi256_si512(bytes)
+          let activeMask = uint32(mm512_cmpneq_epi32_mask(
+            wideBytes, mm512_setzero_si512())) and 0xff'u32
+          if activeMask != 0:
+            let indexes = mm512_loadu_si512_impl(unsafeAddr AVX512CompactIndexes[0])
+            let groupBase = mm512_add_epi16(indexes,
+              mm512_set1_epi16(int16((outBase + i) div 4)))
+            mm512_mask_compressstoreu_epi16(addr blocks[count], activeMask, groupBase)
+            var active = activeMask
+            while active != 0:
+              inc count
+              active = active and (active - 1)
+        else:
+          let equalZero = mm256_cmpeq_epi32(bytes, zero256)
+          let mask = (not mm256_movemask_ps(mm256_castsi256_ps(equalZero))) and 0xff
+          let indexes = mm_loadu_si128(cast[ptr M128i](addr indexLut[mask * 8]))
+          let groupBase = mm_set1_epi16(int16((outBase + i) div 4))
+          mm_storeu_si128(cast[ptr M128i](addr blocks[count]),
+            mm_add_epi16(indexes, groupBase))
+          count += int(countLut[mask])
     count

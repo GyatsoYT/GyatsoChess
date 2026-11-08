@@ -168,7 +168,7 @@ Gyatso is distributed in several variants optimized for different CPU instructio
 - On **Windows**: Open Task Manager → Performance → CPU → check your CPU name on [ark.intel.com](https://ark.intel.com) or [AMD Product Specs](https://www.amd.com/en/products/specifications/processors).
 - On **Linux**: Run `lscpu | grep -i 'avx\|bmi2'` to check flags (`avx2`, `bmi2`). Note that AMD Zen 1 & Zen 2 support BMI2 in software emulation so `avx2` (Magic bitboards) is faster on those CPUs.
 
-> ⚠️ Running an AVX-512 or BMI2 binary on an unsupported CPU will crash immediately. When in doubt, use `avx2`.
+> ⚠️ Running an AVX-512, VNNI, VBMI2, BMI2, or ARM DotProd binary on an unsupported CPU can crash immediately. Build only for extensions present on the target CPU.
 
 ---
 
@@ -217,7 +217,7 @@ compile.bat
 - **Option 1:** Normal build (fast compile, good performance)
 - **Option 2:** PGO build (slow compile, maximum performance — recommended for regular use)
 
-Then choose your SIMD level: Default / AVX2 / AVX-512 / NEON.
+Then choose a matching target: Default, AVX2, AVX2+VNNI, AVX-512, AVX-512+VNNI, AVX-512+VBMI2, AVX-512+VNNI+VBMI2, NEON, or NEON+DotProd. Select only extensions supported by the build machine's CPU.
 
 **Linux / macOS — `compile.sh`**
 ```bash

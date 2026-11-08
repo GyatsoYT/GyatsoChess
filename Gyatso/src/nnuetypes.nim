@@ -16,10 +16,15 @@ const
   EvalCacheSize* = 131072
 
 const IsaName* =
-  when defined(avx512vnni): "avx512+vnni"
+  when defined(avx512) and defined(avx512vnni) and defined(avx512vbmi2):
+    "avx512+vnni+vbmi2"
+  elif defined(avx512) and defined(avx512vbmi2): "avx512+vbmi2"
+  elif defined(avx512) and defined(avx512vnni): "avx512+vnni"
   elif defined(avx512): "avx512"
   elif defined(avxvnni): "avx2+vnni"
   elif defined(avx2): "avx2"
+  elif (defined(neon) or defined(arm64) or defined(aarch64)) and defined(neonDotProd):
+    "neon+dotprod"
   elif defined(neon) or defined(arm64) or defined(aarch64): "neon"
   else: "scalar"
 

@@ -18,10 +18,16 @@ echo "2. AVX2      (x86-64 AVX2 NNUE + Magic Bitboards)"
 echo "3. AVX2+BMI2 (x86-64 AVX2 NNUE + BMI2 PEXT/PDEP Bitboards)"
 echo "4. AVX512    (x86-64 AVX-512 NNUE + BMI2 Bitboards)"
 echo "5. NEON      (explicit ARM64 / Apple Silicon)"
-printf "Select extensions (1/2/3/4/5): "
+echo "6. AVX2+VNNI (x86-64 AVX-VNNI NNUE)"
+echo "7. AVX512+VNNI (x86-64 AVX-512 VNNI NNUE)"
+echo "8. AVX512+VBMI2 (x86-64 AVX-512 VBMI2 sparse NNUE)"
+echo "9. AVX512+VNNI+VBMI2 (x86-64 combined NNUE path)"
+echo "10. NEON+DotProd (ARMv8.2-A dot-product NNUE)"
+printf "Select extensions (1-10): "
 read arch_choice
 
 AVX_FLAGS=""
+ARCH_CFLAGS="-march=native"
 if [ "$arch_choice" = "2" ]; then
     AVX_FLAGS="-d:avx2"
 elif [ "$arch_choice" = "3" ]; then
@@ -30,12 +36,23 @@ elif [ "$arch_choice" = "4" ]; then
     AVX_FLAGS="-d:avx2 -d:bmi2 -d:avx512"
 elif [ "$arch_choice" = "5" ]; then
     AVX_FLAGS="-d:neon"
+elif [ "$arch_choice" = "6" ]; then
+    AVX_FLAGS="-d:avx2 -d:avxvnni"
+elif [ "$arch_choice" = "7" ]; then
+    AVX_FLAGS="-d:avx2 -d:bmi2 -d:avx512 -d:avx512vnni"
+elif [ "$arch_choice" = "8" ]; then
+    AVX_FLAGS="-d:avx2 -d:bmi2 -d:avx512 -d:avx512vbmi2"
+elif [ "$arch_choice" = "9" ]; then
+    AVX_FLAGS="-d:avx2 -d:bmi2 -d:avx512 -d:avx512vnni -d:avx512vbmi2"
+elif [ "$arch_choice" = "10" ]; then
+    AVX_FLAGS="-d:neon -d:neonDotProd"
+    ARCH_CFLAGS="-march=armv8.2-a+dotprod"
 fi
 
 if [ "$choice" = "1" ]; then
     echo
     echo "=== Normal Build ==="
-    nim c -d:release -d:danger -d:simd $AVX_FLAGS --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native -o:Gyatso Gyatso/src/main.nim
+    nim c -d:release -d:danger -d:simd $AVX_FLAGS --cc:clang --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:"$ARCH_CFLAGS" -o:Gyatso Gyatso/src/main.nim
     echo "Compilation finished."
     exit 0
 elif [ "$choice" = "2" ]; then
@@ -44,7 +61,7 @@ elif [ "$choice" = "2" ]; then
     echo
     echo "[Stage 1] Instrumenting..."
     # Build with profile generation
-    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.out Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:"$ARCH_CFLAGS" --passC:-fprofile-generate --passL:-fprofile-generate -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Build failed!"
         exit 1
@@ -120,7 +137,7 @@ EOF
 
     echo
     echo "[Stage 5] Final Optimized Build..."
-    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:-march=native --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.out Gyatso/src/main.nim
+    nim c --cc:clang -d:release -d:danger -d:simd $AVX_FLAGS --mm:arc --define:useMalloc --styleCheck:hint --panics:on --opt:speed --passC:"-O3 -ffast-math -fstrict-aliasing -funroll-loops -fomit-frame-pointer -flto -fno-plt" --passL:"-O3 -flto -fuse-ld=lld" --passC:"$ARCH_CFLAGS" --passC:"-fprofile-use -fprofile-correction" --passL:-fprofile-use -o:Gyatso.out Gyatso/src/main.nim
     if [ $? -ne 0 ]; then
         echo "Final build failed!"
         exit 1

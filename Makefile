@@ -32,6 +32,10 @@ ifneq ($(findstring __AVX512VNNI__,$(HOST_CPU_MACROS)),)
     ARCH_DEFS += -d:avx512vnni
     ISA_CFLAGS += -mavx512vnni
 endif
+ifneq ($(findstring __AVX512VBMI2__,$(HOST_CPU_MACROS)),)
+    ARCH_DEFS += -d:avx512vbmi2
+    ISA_CFLAGS += -mavx512vbmi2
+endif
 else ifneq ($(findstring __AVXVNNI__,$(HOST_CPU_MACROS)),)
     ARCH_DEFS += -d:avx2 -d:avxvnni -d:simd
     ISA_CFLAGS += -mavx2 -mavxvnni
