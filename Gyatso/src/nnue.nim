@@ -684,16 +684,17 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         let oldTargets = getPieceAttacks(sq, pt, oldColor, occ)
         let newTargets = getPieceAttacks(sq, pt, oldColor, newOcc)
 
-        if oldTargets == newTargets and (oldTargets and changedMaskBB).isEmpty:
+        let changedOcc = oldTargets xor newTargets
+        let changedSub = oldTargets and changedMaskBB
+        if (changedOcc or changedSub).isEmpty:
             continue
 
-        let common = oldTargets and newTargets and not changedMaskBB
-        var subTgts = (oldTargets and not common) and not kings
+        var subTgts = ((oldTargets and not newTargets) or changedSub) and not kings
         case pt
         of Pawn: subTgts = subTgts and knightsRooks
         of Bishop, Rook: subTgts = subTgts and not queens
         else: discard
-        var addTgts = (newTargets and not common) and not newKings
+        var addTgts = ((newTargets and not oldTargets) or (newTargets and changedMaskBB)) and not newKings
 
         if not subTgts.isEmpty or not addTgts.isEmpty:
             let targetMask = ValidThreatTargetMask[oldType]
