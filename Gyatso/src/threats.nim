@@ -13,8 +13,7 @@ const ValidThreatTargetMask*: array[5, uint8] = [
 
 var
   thAtt: array[4, array[64, uint64]]
-  thRank: array[4, array[64, array[64, uint8]]]
-  thBase: array[4, array[64, int32]]
+  thRankBase: array[4, array[64, array[64, uint16]]]
   thCount: array[4, int32]
   thClassOff: array[4, int32]
   thTarget: array[4, array[12, int]]
@@ -43,9 +42,9 @@ proc initThreats*() =
         of 1: getBishopAttacks(sq, Bitboard(0)).uint64
         of 2: getRookAttacks(sq, Bitboard(0)).uint64
         else: getQueenAttacks(sq, Bitboard(0)).uint64
-      thBase[t][s] = running
       for d in 0 ..< 64:
-        thRank[t][s][d] = uint8(countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1)))
+        let rank = countSetBits(thAtt[t][s] and ((1'u64 shl d) - 1))
+        thRankBase[t][s][d] = uint16(running + int32(rank))
       running += int32(countSetBits(thAtt[t][s]))
     thCount[t] = running
 
@@ -86,7 +85,7 @@ proc threatIndex*(attType: int, attFriendly: bool, flip: int,
   let t = attType - 1
   if d > s and (relTgt mod 6) == attType: return -1
   let targetOff = thTargetOff[t][relTgt]
-  side + system.int(targetOff) + system.int(thBase[t][s]) + system.int(thRank[t][s][d])
+  side + system.int(targetOff) + system.int(thRankBase[t][s][d])
 
 proc threatIndexDual*(e: uint32,
                       flipW, flipB: int,
@@ -128,16 +127,14 @@ proc threatIndexDual*(e: uint32,
       if isSamePt and dW > sW:
         idxW = -1
       else:
-        let belowW = int32(thRank[t][sW][dW])
-        idxW = baseW + thBase[t][sW] + belowW
+        idxW = baseW + int32(thRankBase[t][sW][dW])
     if doB:
       let sB = src xor flipB
       let dB = dst xor flipB
       if isSamePt and dB > sB:
         idxB = -1
       else:
-        let belowB = int32(thRank[t][sB][dB])
-        idxB = baseB + thBase[t][sB] + belowB
+        idxB = baseB + int32(thRankBase[t][sB][dB])
 
 proc computeFlip*(perspective: Color, kingSq: Square): int {.inline.} =
   result = if perspective == Black: 56 else: 0
