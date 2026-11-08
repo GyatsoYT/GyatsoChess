@@ -180,6 +180,13 @@ proc computeThreatFeatures*(b: Board, perspective: Color,
   let kingSq = b.kingSquare(perspective)
   let flip = computeFlip(perspective, kingSq)
   let occ = b.occupied
+  let pawns = b.byPiece[Pawn.ord] or b.byPiece[Pawn.ord + 6]
+  let knights = b.byPiece[Knight.ord] or b.byPiece[Knight.ord + 6]
+  let bishops = b.byPiece[Bishop.ord] or b.byPiece[Bishop.ord + 6]
+  let rooks = b.byPiece[Rook.ord] or b.byPiece[Rook.ord + 6]
+  let queens = b.byPiece[Queen.ord] or b.byPiece[Queen.ord + 6]
+  let nonKingTargets = pawns or knights or bishops or rooks or queens
+  let nonQueenTargets = pawns or knights or bishops or rooks
 
   nThreat = 0
   nPsqt = 0
@@ -199,25 +206,28 @@ proc computeThreatFeatures*(b: Board, perspective: Color,
     if pt == King: continue
     let attColor = piece.color
     let attType = pt.ord
+    let targetOcc = case pt
+      of Pawn: knights or rooks
+      of Knight, Queen: nonKingTargets
+      of Bishop, Rook: nonQueenTargets
+      else: Bitboard(0)
 
     var pcs = b.byPiece[pieceOrd]
     while not pcs.isEmpty:
       let src = poplsb(pcs)
       var tgts: Bitboard
       case pt
-      of Pawn:   tgts = getPawnAttacks(src, attColor) and occ
-      of Knight: tgts = getKnightAttacks(src) and occ
-      of Bishop: tgts = getBishopAttacks(src, occ) and occ
-      of Rook:   tgts = getRookAttacks(src, occ) and occ
-      of Queen:  tgts = getQueenAttacks(src, occ) and occ
+      of Pawn:   tgts = getPawnAttacks(src, attColor) and targetOcc
+      of Knight: tgts = getKnightAttacks(src) and targetOcc
+      of Bishop: tgts = getBishopAttacks(src, occ) and targetOcc
+      of Rook:   tgts = getRookAttacks(src, occ) and targetOcc
+      of Queen:  tgts = getQueenAttacks(src, occ) and targetOcc
       else: continue
 
-      let targetMask = ValidThreatTargetMask[attType]
       while not tgts.isEmpty:
         let dst = poplsb(tgts)
         let tgtPiece = b.mailbox[dst.int]
         let tgtPtOrd = tgtPiece.pieceType.ord
-        if (targetMask and (1'u8 shl tgtPtOrd)) == 0: continue
         let relTgt = tgtPtOrd + (if tgtPiece.color == perspective: 0 else: 6)
         let attFriendly = (attColor == perspective)
         let idx = threatIndex(attType, attFriendly, flip, src.int, dst.int, relTgt)
