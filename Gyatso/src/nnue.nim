@@ -570,9 +570,11 @@ proc computeDeltaBoth(b: Board, m: Move, deltas: var array[Color, PerspDelta],
         let canPawnTarget = (oldP != NoPiece and (oldP.pieceType == Knight or oldP.pieceType == Rook)) or
                             (newP != NoPiece and (newP.pieceType == Knight or newP.pieceType == Rook))
 
-        var attackers = (getKnightAttacks(cSq) and knights) or
-                        (getBishopAttacks(cSq, occ) and diagSliders) or
-                        (getRookAttacks(cSq, occ) and hvSliders)
+        var attackers = getKnightAttacks(cSq) and knights
+        if (bishopRayMask[c] and diagSliders) != Bitboard(0):
+            attackers = attackers or (getBishopAttacks(cSq, occ) and diagSliders)
+        if (rookRayMask[c] and hvSliders) != Bitboard(0):
+            attackers = attackers or (getRookAttacks(cSq, occ) and hvSliders)
         if canPawnTarget:
             attackers = attackers or (getPawnAttacks(cSq, Black) and wPawns) or
                                      (getPawnAttacks(cSq, White) and bPawns)

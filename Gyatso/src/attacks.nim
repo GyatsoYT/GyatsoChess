@@ -101,6 +101,18 @@ const rankMasks*: array[64, Bitboard] = block:
     tbl[sq] = rankMask(r)
   tbl
 
+const bishopRayMask*: array[64, Bitboard] = block:
+  var tbl: array[64, Bitboard]
+  for sq in 0..63:
+    tbl[sq] = diagonals[sq] or antiDiagonals[sq]
+  tbl
+
+const rookRayMask*: array[64, Bitboard] = block:
+  var tbl: array[64, Bitboard]
+  for sq in 0..63:
+    tbl[sq] = fileMasks[sq] or rankMasks[sq]
+  tbl
+
 func getKnightAttacks*(sq: Square): Bitboard {.inline.} =
   knightAttacks[sq.int]
 
