@@ -326,6 +326,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
   var triedQuiets {.noinit.}: array[128, Move]
   var triedQuietsLen = 0
+  var triedCaptures {.noinit.}: array[32, Move]
+  var triedCapturesLen = 0
   var movesSearched = 0
 
   while true:
@@ -337,6 +339,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       continue
 
     let isQuiet = isQuietMove(b, m)
+    let isCap   = not isQuiet and isCapture(b, m)
     let histToSqInt = m.histToSq.int
     let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
     let toAttacked   = if b.threats.hasSq(m.histToSq): 1 else: 0
@@ -576,6 +579,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
                     updateHistory(b, triedQuiets[i], malus)
+            let captBonus = getBonus(depth)
+            if isCap:
+              updateCaptureHistory(b, m, captBonus)
+            for i in 0 ..< triedCapturesLen:
+              updateCaptureHistory(b, triedCaptures[i], -captBonus)
             let evalToStore = if stack[ply].rawEval ==
                 Unknown: NoEval else: int16(stack[ply].rawEval)
             storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta,
@@ -587,11 +595,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               updateCorrection(b, depth, score - staticEval)
           return bestScore
 
-    # Record tried quiet moves that did not cause a cutoff
+    # Record tried quiet/capture moves that did not cause a cutoff
     if isQuiet:
       if triedQuietsLen < triedQuiets.len:
         triedQuiets[triedQuietsLen] = m
         inc triedQuietsLen
+    elif isCap:
+      if triedCapturesLen < triedCaptures.len:
+        triedCaptures[triedCapturesLen] = m
+        inc triedCapturesLen
 
   if movesSearched == 0:
     if isSingularSearch:

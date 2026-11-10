@@ -16,6 +16,7 @@ type
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
+  CaptureHistoryTable* = array[12, array[64, array[6, int16]]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -23,6 +24,7 @@ type HistoryData* = object
   continuationHistory2*: ContinuationHistory
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
+  captureHistory*: CaptureHistoryTable
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -98,6 +100,15 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
       toAttacked], change)
+
+proc captureVictim*(b: Board, m: Move): int {.inline.} =
+  if m.isEnPassant(): Pawn.ord
+  else: b.mailbox[m.toSq.int].pieceType.ord
+
+proc updateCaptureHistory*(b: Board, m: Move, change: int) {.inline.} =
+  updateHistoryStat(
+    gHistData.captureHistory[ord(b.mailbox[m.fromSq.int])][m.toSq.int][
+        captureVictim(b, m)], change)
 
 template historyTable*(): untyped = gHistData.historyTable
 

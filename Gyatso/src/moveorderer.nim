@@ -30,6 +30,8 @@ const mvvlvaVictimBonus: array[PieceType, int] = [
 const mvvlvaAttackerPenalty: array[PieceType, int] = [
   0, 1, 1, 2, 4, 5, 0,
 ]
+const
+  CaptMvvScale* = 32
 
 func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
   mvvlvaVictimBonus[victimPt] * 8 - mvvlvaAttackerPenalty[attackerPt]
@@ -151,7 +153,13 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
     elif attackerPt == Queen or attackerPt == Knight: 500
     else: 200
 
-  int32(GoodCaptureBase + promoBonus + mvvlva)
+  let captHist =
+    if victimPt != NoPieceType:
+      system.int(gHistData.captureHistory[ord(b.mailbox[m.fromSq.int])][
+          m.toSq.int][victimPt.ord])
+    else: 0
+
+  int32(GoodCaptureBase + promoBonus + mvvlva * CaptMvvScale + captHist)
 
 proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
                  ply, prevPiece, prevToSq, prev2Piece, prev2ToSq: int) {.inline.} =
