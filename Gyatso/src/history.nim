@@ -11,6 +11,11 @@ const
   CorrHistWeightScale* = 256
   CorrHistMax* = CorrHistGrain * 32
 
+const
+  CaptBonusMult* = 9
+  CaptBonusShift* = 8
+  CaptBonusMax* = 400
+  
 type
   HistoryTable* = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
@@ -85,6 +90,9 @@ proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
 
 proc getBonus*(depth: int): int {.inline.} =
   min(1500, depth * depth + 2 * depth)
+
+proc getCaptureBonus*(depth: int): int {.inline.} =
+  clamp(CaptBonusMult * depth - CaptBonusShift, 0, CaptBonusMax)
 
 template updateHistoryStat*(stat: var int16, bonus: int) =
   var s = system.int(stat)

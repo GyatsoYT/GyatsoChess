@@ -579,7 +579,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
                     updateHistory(b, triedQuiets[i], malus)
-            let captBonus = getBonus(depth)
+            let captBonus = getCaptureBonus(depth)
             if isCap:
               updateCaptureHistory(b, m, captBonus)
             for i in 0 ..< triedCapturesLen:
