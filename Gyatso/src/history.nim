@@ -11,11 +11,17 @@ const
   CorrHistWeightScale* = 256
   CorrHistMax* = CorrHistGrain * 32
 
+const
+  CaptBonusMult* = 9
+  CaptBonusShift* = 8
+  CaptBonusMax* = 400
+  
 type
   HistoryTable* = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
+  CaptureHistoryTable* = array[12, array[64, array[6, int16]]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -23,6 +29,7 @@ type HistoryData* = object
   continuationHistory2*: ContinuationHistory
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
+  captureHistory*: CaptureHistoryTable
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -84,6 +91,9 @@ proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
 proc getBonus*(depth: int): int {.inline.} =
   min(1500, depth * depth + 2 * depth)
 
+proc getCaptureBonus*(depth: int): int {.inline.} =
+  clamp(CaptBonusMult * depth - CaptBonusShift, 0, CaptBonusMax)
+
 template updateHistoryStat*(stat: var int16, bonus: int) =
   var s = system.int(stat)
   let gravityDiv = 512 + (abs(bonus) shr 4)
@@ -98,6 +108,15 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
       toAttacked], change)
+
+proc captureVictim*(b: Board, m: Move): int {.inline.} =
+  if m.isEnPassant(): Pawn.ord
+  else: b.mailbox[m.toSq.int].pieceType.ord
+
+proc updateCaptureHistory*(b: Board, m: Move, change: int) {.inline.} =
+  updateHistoryStat(
+    gHistData.captureHistory[ord(b.mailbox[m.fromSq.int])][m.toSq.int][
+        captureVictim(b, m)], change)
 
 template historyTable*(): untyped = gHistData.historyTable
 
