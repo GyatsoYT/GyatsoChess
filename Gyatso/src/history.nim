@@ -10,6 +10,8 @@ const
   CorrHistGrain* = 512
   CorrHistWeightScale* = 256
   CorrHistMax* = CorrHistGrain * 32
+  CorrContWeight* = 256
+  CorrContScale* = 256
 
 const
   CaptBonusMult* = 9
@@ -22,6 +24,7 @@ type
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
   CaptureHistoryTable* = array[12, array[64, array[6, int16]]]
+  ContCorrHist* = array[2, array[12, array[64, array[12, array[64, int16]]]]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -30,6 +33,7 @@ type HistoryData* = object
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
   captureHistory*: CaptureHistoryTable
+  contCorrHist*: ContCorrHist
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -199,3 +203,17 @@ proc updateNonPawnCorrection*(b: Board, depth, diff: int) {.inline.} =
 proc updateCorrection*(b: Board, depth, diff: int) {.inline.} =
   updatePawnCorrection(b, depth, diff)
   updateNonPawnCorrection(b, depth, diff)
+
+proc getContCorrection*(stm, ourPiece, ourTo, theirPiece,
+    theirTo: int): int {.inline.} =
+  if gHistData == nil: return 0
+  (system.int(gHistData.contCorrHist[stm][ourPiece][ourTo][theirPiece][
+      theirTo]) * CorrContWeight) div (CorrHistGrain * CorrContScale)
+
+proc updateContCorrection*(stm, ourPiece, ourTo, theirPiece, theirTo, depth,
+    diff: int) {.inline.} =
+  if gHistData == nil: return
+  let newWeight = min(16, 1 + depth)
+  let scaledDiff = clamp(diff, -1000, 1000) * CorrHistGrain
+  updateCorrEntry(gHistData.contCorrHist[stm][ourPiece][ourTo][theirPiece][
+      theirTo], newWeight, scaledDiff)

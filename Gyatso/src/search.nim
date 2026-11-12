@@ -87,6 +87,24 @@ func hasNonPawnKingPiece(b: Board): bool {.inline.} =
     b.byPiece[offset + Queen.ord]
   not nonPawnKing.isEmpty
 
+proc totalCorrection(b: Board, stack: var SearchStack, ply: int): int {.inline.} =
+  result = getCorrection(b)
+  if ply >= 2 and stack[ply - 1].move != NullMove and
+      stack[ply - 2].move != NullMove:
+    result += getContCorrection(b.stm.ord,
+      system.int(stack[ply - 2].piece), stack[ply - 2].move.histToSq.int,
+      system.int(stack[ply - 1].piece), stack[ply - 1].move.histToSq.int)
+
+proc updateTotalCorrection(b: Board, stack: var SearchStack, ply, depth,
+    diff: int) {.inline.} =
+  updateCorrection(b, depth, diff)
+  if ply >= 2 and stack[ply - 1].move != NullMove and
+      stack[ply - 2].move != NullMove:
+    updateContCorrection(b.stm.ord,
+      system.int(stack[ply - 2].piece), stack[ply - 2].move.histToSq.int,
+      system.int(stack[ply - 1].piece), stack[ply - 1].move.histToSq.int,
+      depth, diff)
+
 proc qSearch*(b: var Board, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack): int =
@@ -109,8 +127,8 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
   let inCheckQ = not b.checkers.isEmpty
   let rawQEval = evaluate(b, nnue[])
   let standPat = if inCheckQ: rawQEval
-                 else: clamp(rawQEval + getCorrection(b), -MateThreshold + 1,
-                     MateThreshold - 1)
+                 else: clamp(rawQEval + totalCorrection(b, stack, ply),
+                     -MateThreshold + 1, MateThreshold - 1)
   var bestScore = standPat
 
   if standPat >= beta:
@@ -136,6 +154,10 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     # as ttMove, so no other stage yields promotions.)
     if not inCheckQ and m.isPromotion() and picker.stage == StageBadNoisies:
       continue
+
+    # Continuation correction in the child reads stack[ply] as its ply-1.
+    stack[ply].move = m
+    stack[ply].piece = uint8(ord(b.mailbox[m.fromSq.int]))
 
     nnuePush(b, m, nnue[])
     b.makeMove(m)
@@ -235,7 +257,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let raw = if ttEval != NoEval: system.int(ttEval)
               else: evaluate(b, nnue[])
     stack[ply].rawEval = raw
-    let corr = getCorrection(b)
+    let corr = totalCorrection(b, stack, ply)
     stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1,
         MateThreshold - 1)
   let staticEval = stack[ply].staticEval
@@ -592,7 +614,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             # Update correction history on beta cutoff
             if not inCheck and isQuiet and abs(score) <
                 MateThreshold and score > staticEval:
-              updateCorrection(b, depth, score - staticEval)
+              updateTotalCorrection(b, stack, ply, depth, score - staticEval)
           return bestScore
 
     # Record tried quiet/capture moves that did not cause a cutoff
@@ -644,7 +666,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        abs(bestScore) < MateThreshold and
        (bestMove == NullMove or isQuietMove(b, bestMove)) and
        not (bound == BoundAlpha and bestScore >= staticEval):
-      updateCorrection(b, depth, bestScore - staticEval)
+      updateTotalCorrection(b, stack, ply, depth, bestScore - staticEval)
   return bestScore
 
 proc elapsedMs(info: SearchInfo): int64 {.inline.} =
