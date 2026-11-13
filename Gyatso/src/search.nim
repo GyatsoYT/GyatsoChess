@@ -282,6 +282,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].move = NullMove
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
+    prefetchTT(b.keyAfterNull())
     nnuePushNull(nnue[])
     b.makeNullMove()
 
@@ -442,12 +443,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
 
     let prevNodes = if ply == 0: info.nodes else: 0'u64
-
+    prefetchTT(b.keyAfter(m))    
     nnuePush(b, m, nnue[])
     b.makeMove(m)
-    # The child's TT cluster and evalCache slot are both keyed on its hash;
-    # start both loads now so the probes pay less latency.
-    prefetchTT(cast[system.uint64](b.hash))
     prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
     prefetchCorrection(b)
 
