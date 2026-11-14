@@ -830,3 +830,46 @@ proc fromDfrcIndex*(n: uint32): Board =
   let whiteBack = scharnaglToBackrank(n mod 960)
   let blackBack  = scharnaglToBackrank(n div 960)
   buildFrcBoard(whiteBack, blackBack)
+
+func keyAfter*(b: Board, m: Move): uint64 {.inline.} =
+  var key = b.hash xor sideKey
+  if b.epSquare != NoSquare:
+    key = key xor epKeys[b.epSquare.file]
+  if m.isCastling:
+    return cast[system.uint64](key)
+
+  let fromSq = m.fromSq
+  let toSq = m.toSq
+  let moving = b.mailbox[fromSq.int]
+
+  if m.isEnPassant:
+    let capPawn = if b.stm == White: BlackPawn else: WhitePawn
+    let capSq = toSq + (if b.stm == White: -8 else: 8)
+    key = key xor pieceKeys[capPawn.ord][capSq.int]
+  else:
+    let captured = b.mailbox[toSq.int]
+    if captured != NoPiece:
+      key = key xor pieceKeys[captured.ord][toSq.int]
+
+  if m.isPromotion:
+    let pt = case m.promoType
+      of PromoKnight: PieceType.Knight
+      of PromoBishop: PieceType.Bishop
+      of PromoRook: PieceType.Rook
+      of PromoQueen: PieceType.Queen
+    key = key xor pieceKeys[moving.ord][fromSq.int] xor
+          pieceKeys[makePiece(b.stm, pt).ord][toSq.int]
+  else:
+    key = key xor pieceKeys[moving.ord][fromSq.int] xor
+          pieceKeys[moving.ord][toSq.int]
+    if (moving == WhitePawn or moving == BlackPawn) and
+       abs(toSq.int - fromSq.int) == 16:
+      key = key xor epKeys[fromSq.file]
+
+  cast[system.uint64](key)
+
+func keyAfterNull*(b: Board): uint64 {.inline.} =
+  var key = b.hash xor sideKey
+  if b.epSquare != NoSquare:
+    key = key xor epKeys[b.epSquare.file]
+  cast[system.uint64](key)
