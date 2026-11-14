@@ -14,8 +14,8 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
 const
-    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
-    NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1024x16x32.perm")
+    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1536x16x32.bin")
+    NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1536x16x32.perm")
     NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
                      L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
                      L3_SIZE * 4 + L3_SIZE * 4 + 4
@@ -320,7 +320,7 @@ proc forward*(net: ptr NNUENetwork, stmAcc, nstmAcc: var Accumulator): int {.inl
     var pairwise {.noinit.}: array[HL, uint8]
     var l1Sums {.noinit.}: array[L2_SIZE, int32]
     when defined(avx512) or defined(avx2) or defined(neon) or defined(arm64) or defined(aarch64):
-        var blocks {.noinit.}: array[256, uint16]
+        var blocks {.noinit.}: array[HL div 4, uint16]
         let nnzCount = simd.gyatsoPairwiseNnz(addr stmAcc.data[0], addr nstmAcc.data[0],
             addr pairwise[0], addr blocks[0],
             addr NNUE_NNZ_INDEX_LUT[0][0], addr NNUE_NNZ_COUNT_LUT[0])

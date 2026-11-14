@@ -1,10 +1,10 @@
 EXE      ?= Gyatso
-EVALFILE ?= Gyatso/Net/GyatsoNet1024x16x32.bin
+EVALFILE ?= Gyatso/Net/GyatsoNet1536x16x32.bin
 SRC       = Gyatso/src/main.nim
 DATAGEN_SRC = Gyatso/src/datagen.nim
 NIM      ?= nim
 NIM_CC   ?= clang
-NETFILE   = Gyatso/Net/GyatsoNet1024x16x32.bin
+NETFILE   = Gyatso/Net/GyatsoNet1536x16x32.bin
 DATAGEN  ?= GyatsoDatagen
 
 ifeq ($(OS),Windows_NT)

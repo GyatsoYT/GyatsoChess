@@ -3,7 +3,7 @@ import coretypes
 const
   ALIGNMENT* = 64
   FT_IN*     = 768   
-  HL*        = 1024  
+  HL*        = 1536  
   L2_SIZE*   = 16
   L3_SIZE*   = 32
   PAIR_COUNT* = HL div 2
