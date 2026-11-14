@@ -67,6 +67,10 @@ CFLAGS = -O3 -ffast-math -fstrict-aliasing -funroll-loops \
 
 LDFLAGS = -O3 -flto $(LD_LLD)
 
+ifeq ($(DETECTED_OS),Linux)
+    LDFLAGS += -Wl,--wrap=pthread_attr_setstacksize
+endif
+
 PGO_DIR ?= pgo
 ifdef PGO_GEN
 CFLAGS  += -fprofile-generate=$(PGO_DIR)

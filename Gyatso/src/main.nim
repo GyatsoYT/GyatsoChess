@@ -8,6 +8,9 @@ import history
 import bench
 import threads
 import genfens
+{.push warning[UnusedImport]: off.}
+import threadstack
+{.pop.}
 
 when isMainModule:
   initAttacks()

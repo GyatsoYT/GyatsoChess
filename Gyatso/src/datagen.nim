@@ -2,6 +2,9 @@ import coretypes, bitboard, board, movegen, search, attacks, evaluate,
        tt, searchparams, history, nnue, viriformat
 import std/[os, strutils, random, monotimes, times, atomics, cpuinfo,
             parseopt, json]
+{.push warning[UnusedImport]: off.}
+import threadstack
+{.pop.}
 
 type
   OpeningBook = object
