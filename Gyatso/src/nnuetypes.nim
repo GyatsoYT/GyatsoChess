@@ -9,7 +9,7 @@ const
   PAIR_COUNT* = HL div 2
   QA*        = 255   
   QB*        = 64    
-  EVAL_SCALE* = 400
+  EVAL_SCALE* = 317
   EvalCacheSize* = 131072
 
 const IsaName* =
