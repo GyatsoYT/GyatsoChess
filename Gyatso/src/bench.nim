@@ -57,11 +57,6 @@ proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   data.bestMove = bestMove
   data.nodes = info.nodes
 
-proc clearTT() =
-  ## Zero out the transposition table between positions for reproducibility.
-  if ttTable != nil and ttMask > 0:
-    zeroMem(ttTable, sizeof(TTCluster) * int(ttMask + 1))
-
 proc runBench*(depth: int = DefaultBenchDepth) =
   var totalNodes: uint64 = 0
   let totalStart = getMonoTime()
