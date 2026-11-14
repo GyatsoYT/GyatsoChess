@@ -254,6 +254,7 @@ proc runUciLoop*() =
       stopSearch()
       destroyThreadPool()
       freeSharedHistory()
+      freeTT()
       break
 
     of "uci":
@@ -271,6 +272,7 @@ proc runUciLoop*() =
     of "ucinewgame":
       stopSearch()
       waitHelpers()
+      clearTT()
       clearAllHistory()
       currentBoard = parseFen(StartPos)
 
@@ -292,7 +294,10 @@ proc runUciLoop*() =
           let optName = parts[nameIdx ..< (valueIdx - 1)].join(" ").toLowerAscii()
           case optName:
           of "hash":
-            try: initTT(parseInt(parts[valueIdx]))
+            try:
+              let mb = parseInt(parts[valueIdx])
+              initTT(mb)
+              reply "info string Hash set to " & $mb & " MB (huge pages: " & (if hugePagesActive: "active" else: "inactive") & ")"
             except ValueError: discard
           of "threads":
             try:

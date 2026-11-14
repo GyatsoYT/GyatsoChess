@@ -1,4 +1,6 @@
 import coretypes
+import hugepage
+export hugepage.hugePagesActive
 
 const
   BoundExact* = 0'u8
@@ -21,6 +23,8 @@ var
   ttTable*:      ptr UncheckedArray[TTCluster] = nil
   ttMask*:       uint64 = 0
   ttGeneration*: uint8  = 0
+  ttBytes:       int  = 0
+  ttFromOs:      bool = false
 
 func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
 
@@ -54,10 +58,16 @@ func unpackData*(data: uint64, move: var Move, score: var int16,
   ttPv       = bool((data shr 47) and 0x1'u64)
   eval       = cast[int16](uint16(data shr 48))
 
-proc initTT*(sizeMB: int) =
+proc freeTT*() =
   if ttTable != nil:
-    deallocShared(ttTable)
+    if ttFromOs: osFree(ttTable, ttBytes)
+    else: deallocShared(ttTable)
     ttTable = nil
+  ttBytes = 0
+  ttFromOs = false
+
+proc initTT*(sizeMB: int) =
+  freeTT()
 
   if sizeMB <= 0:
     ttMask = 0
@@ -74,7 +84,21 @@ proc initTT*(sizeMB: int) =
     numClusters = 1024
 
   ttMask = numClusters - 1
-  ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(numClusters * uint64(clusterSize)))
+  ttBytes = int(numClusters * uint64(clusterSize))
+
+  # OS huge pages first
+  let mem = osAlloc(ttBytes)
+  if mem != nil:
+    ttTable = cast[ptr UncheckedArray[TTCluster]](mem)
+    ttFromOs = true
+  else:
+    ttTable = cast[ptr UncheckedArray[TTCluster]](allocShared0(ttBytes))
+    ttFromOs = false
+    hugePagesActive = false
+
+proc clearTT*() =
+  if ttTable != nil:
+    zeroMem(ttTable, ttBytes)
 
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
               depth: var int, bound: var uint8, eval: var int16,
