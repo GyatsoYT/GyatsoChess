@@ -1,4 +1,4 @@
-import std/[strutils, atomics, monotimes, times]
+import std/[strutils, atomics, monotimes, times, locks, deques]
 import coretypes
 import board
 import movegen
@@ -12,9 +12,64 @@ import threads
 import searchparams
 import genfens
 
+const moSeqCst = moSequentiallyConsistent
+
 proc reply(s: string) {.inline.} =
   stdout.writeLine(s)
   stdout.flushFile()
+
+var
+  gCmdQueue: Deque[string]
+  gCmdLock:  Lock
+  gCmdCond:  Cond
+  gStopRequested: Atomic[bool]
+  gSearching:     Atomic[bool]
+  gReaderThread:  Thread[void]
+
+proc pushCommand(cmd: string) =
+  acquire(gCmdLock)
+  gCmdQueue.addLast(cmd)
+  signal(gCmdCond)
+  release(gCmdLock)
+
+proc popCommand(): string =
+  acquire(gCmdLock)
+  while gCmdQueue.len == 0:
+    wait(gCmdCond, gCmdLock)
+  result = gCmdQueue.popFirst()
+  release(gCmdLock)
+
+proc inputReader() {.thread.} =
+  {.cast(gcsafe).}:
+    var line: string
+    while true:
+      var cmd: string
+      var eof = false
+      if stdin.readLine(line):
+        cmd = line.strip()
+      else:
+        cmd = "quit"
+        eof = true
+      if cmd.len == 0: continue
+
+      if cmd == "stop":
+        gStopRequested.store(true, moSeqCst)
+        gThreadPool.stopFlag.store(true, moRelease)
+        continue
+      elif cmd == "isready" and gSearching.load(moSeqCst):
+        reply "readyok"
+        continue
+      elif cmd == "quit":
+        if not eof:
+          gStopRequested.store(true, moSeqCst)
+          gThreadPool.stopFlag.store(true, moRelease)
+        pushCommand(cmd)
+        break
+      elif cmd == "go" or cmd.startsWith("go "):
+        gStopRequested.store(false, moSeqCst)
+        gSearching.store(true, moSeqCst)
+
+      pushCommand(cmd)
 
 proc handlePosition(line: string, b: var Board) =
   var rest = line
@@ -180,6 +235,9 @@ proc handleGo(line: string, b: Board) =
 
   dispatchHelpers(b, startTime, softMs, hardMs, depth, hn, sn)
 
+  if gStopRequested.load(moSeqCst):
+    gThreadPool.stopFlag.store(true, moRelease)
+
   var t0 = gThreadPool.threads[0]
   t0.board          = b
   t0.info.id        = 0
@@ -243,11 +301,15 @@ proc stopSearch() =
 proc runUciLoop*() =
   var currentBoard = parseFen(StartPos)
 
+  gCmdQueue = initDeque[string]()
+  initLock(gCmdLock)
+  initCond(gCmdCond)
+  gStopRequested.store(false, moSeqCst)
+  gSearching.store(false, moSeqCst)
+  createThread(gReaderThread, inputReader)
+
   while true:
-    var line: string
-    if not stdin.readLine(line): break
-    line = line.strip()
-    if line.len == 0: continue
+    let line = popCommand()
 
     case line:
     of "quit":
@@ -275,9 +337,6 @@ proc runUciLoop*() =
       clearTT()
       clearAllHistory()
       currentBoard = parseFen(StartPos)
-
-    of "stop":
-      stopSearch()
 
     of "d":
       reply currentBoard.toFen()
@@ -315,8 +374,11 @@ proc runUciLoop*() =
       elif line.startsWith("position"):
         handlePosition(line, currentBoard)
 
-      elif line.startsWith("go"):
-        handleGo(line, currentBoard)
+      elif line == "go" or line.startsWith("go "):
+        try:
+          handleGo(line, currentBoard)
+        finally:
+          gSearching.store(false, moSeqCst)
 
       elif line.startsWith("perft "):
         handlePerft(line[6..^1], currentBoard)

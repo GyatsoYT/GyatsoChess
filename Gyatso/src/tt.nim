@@ -21,16 +21,39 @@ type
 
 var
   ttTable*:      ptr UncheckedArray[TTCluster] = nil
-  ttMask*:       uint64 = 0
+  ttClusters*:   uint64 = 0
   ttGeneration*: uint8  = 0
   ttBytes:       int  = 0
   ttFromOs:      bool = false
 
 func prefetch(p: pointer; rw: cint = 0; locality: cint = 3) {.importc: "__builtin_prefetch", nodecl, varargs, inline.}
 
+## High 64 bits of the 128-bit product a * b.
+func mulHi64(a, b: uint64): uint64 {.inline.} =
+  when defined(gcc) or defined(clang):
+    var r: uint64
+    {.emit: "`r` = (NU64)(((unsigned __int128)`a` * (unsigned __int128)`b`) >> 64);".}
+    return r
+  else:
+    let
+      aLo = a and 0xFFFFFFFF'u64
+      aHi = a shr 32
+      bLo = b and 0xFFFFFFFF'u64
+      bHi = b shr 32
+      ll = aLo * bLo
+      lh = aLo * bHi
+      hl = aHi * bLo
+      hh = aHi * bHi
+      mid = (ll shr 32) + (lh and 0xFFFFFFFF'u64) + (hl and 0xFFFFFFFF'u64)
+    return hh + (lh shr 32) + (hl shr 32) + (mid shr 32)
+
+## Maps a key to a cluster index in [0, ttClusters) for any cluster count.
+proc ttIndex(key: uint64): uint64 {.inline.} =
+  mulHi64(key, ttClusters)
+
 proc prefetchTT*(key: uint64) {.inline.} =
   if ttTable != nil:
-    prefetch(addr ttTable[key and ttMask], 0, 3)
+    prefetch(addr ttTable[ttIndex(key)], 0, 3)
 
 proc newTTGeneration*() {.inline.} =
   inc ttGeneration
@@ -70,21 +93,17 @@ proc initTT*(sizeMB: int) =
   freeTT()
 
   if sizeMB <= 0:
-    ttMask = 0
+    ttClusters = 0
     return
 
-  let clusterSize = sizeof(TTCluster)
-  let bytes = sizeMB * 1024 * 1024
+  let clusterSize = uint64(sizeof(TTCluster))
+  let bytes = uint64(sizeMB) * 1024'u64 * 1024'u64
 
-  var numClusters = 1'u64
-  while numClusters * uint64(clusterSize) * 2'u64 <= uint64(bytes):
-    numClusters = numClusters shl 1
+  var numClusters = bytes div clusterSize
+  if numClusters == 0: numClusters = 1
 
-  if numClusters == 0:
-    numClusters = 1024
-
-  ttMask = numClusters - 1
-  ttBytes = int(numClusters * uint64(clusterSize))
+  ttClusters = numClusters
+  ttBytes = int(numClusters * clusterSize)
 
   # OS huge pages first
   let mem = osAlloc(ttBytes)
@@ -103,9 +122,9 @@ proc clearTT*() =
 proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
               depth: var int, bound: var uint8, eval: var int16,
               ttPv: var bool): bool {.inline.} =
-  if ttTable == nil or ttMask == 0: return false
+  if ttTable == nil or ttClusters == 0: return false
 
-  let cluster = addr ttTable[key and ttMask]
+  let cluster = addr ttTable[ttIndex(key)]
 
   for i in 0 ..< EntriesPerCluster:
     let dataVal = cluster.entries[i].data
@@ -139,9 +158,9 @@ proc probeTT*(key: uint64, ply: int, move: var Move, score: var int,
 
 proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
               bound: uint8, ply: int, eval: int16, ttPv: bool) =
-  if ttTable == nil or ttMask == 0: return
+  if ttTable == nil or ttClusters == 0: return
 
-  let cluster = addr ttTable[key and ttMask]
+  let cluster = addr ttTable[ttIndex(key)]
 
   var storedScore = score
   if score > MateThreshold:
@@ -165,9 +184,6 @@ proc storeTT*(key: uint64, move: Move, score: int16, depth: int8,
       target = i
       break
 
-    # Only depth and generation fields feed the replacement score; decode
-    # just those instead of unpacking all seven fields. Depth is stored
-    # sign-extended as int8.
     let ed = system.int(cast[int8](uint8((entryData shr 32) and 0xFF'u64)))
     let eg = uint8((entryData shr 42) and 0x1F'u64)
 
