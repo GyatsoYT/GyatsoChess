@@ -12,6 +12,7 @@ const
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15
   RfpImprovementClamp* = 80
+  ProbCutBetaMargin* = 400
   # TT-PV adjustments
   TtPvRfpMargin* = 25
   TtPvLmrReduction* = 1

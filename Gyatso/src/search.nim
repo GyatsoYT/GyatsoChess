@@ -308,6 +308,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
+  # ProbCut
+  if not isSingularSearch and
+     not pvNode and
+     ttBound == BoundAlpha and
+     ttDepth >= depth - 4 and
+     ttScore >= ProbCutBetaMargin + beta and
+     abs(ttScore) < MateThreshold and
+     abs(beta) < MateThreshold:
+    return ProbCutBetaMargin
+
   let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
   let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: system.int(stack[ply -
