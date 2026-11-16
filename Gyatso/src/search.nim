@@ -87,6 +87,9 @@ func hasNonPawnKingPiece(b: Board): bool {.inline.} =
     b.byPiece[offset + Queen.ord]
   not nonPawnKing.isEmpty
 
+func isValuableVictim(pt: PieceType): bool {.inline.} =
+  pt >= Knight and pt <= Queen
+
 proc qSearch*(b: var Board, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack): int =
@@ -266,6 +269,12 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     if staticEval - rfpMargin >= beta:
       return staticEval - rfpMargin
 
+  let ttWinningCapture = hasTT and
+                         ttBound == BoundBeta and
+                         ttMove != NullMove and
+                         isCapture(b, ttMove) and
+                         isValuableVictim(b.mailbox[ttMove.toSq.int].pieceType)
+
   # Null Move Pruning (NMP)
   if depth >= NmpMinDepth and
      ply >= NmpMinPly and
@@ -275,7 +284,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      not inCheck and
      hasNonPawnKingPiece(b) and
      not skipNullMove and
-     not isSingularSearch:
+     not isSingularSearch and
+     not ttWinningCapture:
     let evalMargin = (staticEval - beta) div NMPEvalMargin
     let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
