@@ -569,7 +569,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           if not isSingularSearch:
             if isQuiet:
               storeKiller(ply, m)
-              let bonus = getBonus(depth)
+              let historyDepth = depth + (if not inCheck and staticEval <= alpha: 1 else: 0)
+              let bonus = getBonus(historyDepth)
               let malus = -bonus
               updateHistory(b, m, bonus)
               if prevPiece >= 0:
