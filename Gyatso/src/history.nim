@@ -13,7 +13,7 @@ const
   CaptBonusMult* = 9
   CaptBonusShift* = 8
   CaptBonusMax* = 400
-  PawnHistSize* = 32768
+  PawnHistSize* = 2048
   PawnHistMask* = system.uint64(PawnHistSize - 1)
   
 type
