@@ -354,6 +354,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let histToSqInt = m.histToSq.int
     let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
     let toAttacked   = if b.threats.hasSq(m.histToSq): 1 else: 0
+    let pawnHistVal =
+      if isQuiet and movesSearched > 0 and depth >= 3:
+        getPawnHistScore(b, ord(b.mailbox[m.fromSq.int]), histToSqInt)
+      else: 0
 
     # Futility Pruning
     if movesSearched > 0 and
@@ -500,6 +504,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           # 1-ply continuation history
           if prevPiece >= 0:
             histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
+          histAdj += PawnHistLmrWeight * pawnHistVal
           reduction -= histAdj div 8192
 
         # TT-PV reduction

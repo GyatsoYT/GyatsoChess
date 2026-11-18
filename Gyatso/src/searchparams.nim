@@ -15,6 +15,7 @@ const
   # TT-PV adjustments
   TtPvRfpMargin* = 25
   TtPvLmrReduction* = 1
+  PawnHistLmrWeight* = 1
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75

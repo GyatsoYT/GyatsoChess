@@ -110,6 +110,9 @@ proc updatePawnHist*(b: Board, m: Move, change: int) {.inline.} =
   updateHistoryStat(
     gHistData.pawnHistory[pawnHistIdx(b)][piece][m.histToSq.int], change)
 
+proc getPawnHistScore*(b: Board, piece, toSq: int): int {.inline.} =
+  system.int(gHistData.pawnHistory[pawnHistIdx(b)][piece][toSq])
+
 proc updateHistory*(b: Board, m: Move, change: int) =
   let stm = b.stm.ord
   let fromSq = m.fromSq.int
