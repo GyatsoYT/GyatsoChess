@@ -10,11 +10,11 @@ const
   CorrHistGrain* = 512
   CorrHistWeightScale* = 256
   CorrHistMax* = CorrHistGrain * 32
-
-const
   CaptBonusMult* = 9
   CaptBonusShift* = 8
   CaptBonusMax* = 400
+  PawnHistSize* = 32768
+  PawnHistMask* = system.uint64(PawnHistSize - 1)
   
 type
   HistoryTable* = array[2, array[64, array[64, array[2, array[2, int16]]]]]
@@ -22,6 +22,7 @@ type
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
   CaptureHistoryTable* = array[12, array[64, array[6, int16]]]
+  PawnHistory* = array[PawnHistSize, array[12, array[64, int16]]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -30,6 +31,7 @@ type HistoryData* = object
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
   captureHistory*: CaptureHistoryTable
+  pawnHistory*: PawnHistory
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -100,6 +102,14 @@ template updateHistoryStat*(stat: var int16, bonus: int) =
   s += (32 * bonus) - (s * abs(bonus)) div gravityDiv
   stat = int16(clamp(s, -16384, 16384))
 
+template pawnHistIdx*(b: Board): int =
+  system.int(b.pawnHash.uint64 and PawnHistMask)
+
+proc updatePawnHist*(b: Board, m: Move, change: int) {.inline.} =
+  let piece = ord(b.mailbox[m.fromSq.int])
+  updateHistoryStat(
+    gHistData.pawnHistory[pawnHistIdx(b)][piece][m.histToSq.int], change)
+
 proc updateHistory*(b: Board, m: Move, change: int) =
   let stm = b.stm.ord
   let fromSq = m.fromSq.int
@@ -108,6 +118,7 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
       toAttacked], change)
+  updatePawnHist(b, m, change)
 
 proc captureVictim*(b: Board, m: Move): int {.inline.} =
   if m.isEnPassant(): Pawn.ord

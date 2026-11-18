@@ -172,6 +172,7 @@ proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
   let threats = b.threats
   let cont1 = if prevPiece >= 0: addr hist.continuationHistory[prevPiece][prevToSq] else: nil
   let cont2 = if prev2Piece >= 0: addr hist.continuationHistory2[prev2Piece][prev2ToSq] else: nil
+  let pawnRow = addr hist.pawnHistory[pawnHistIdx(b)]
   for i in 0 ..< ml.len:
     let m = ml.moves[i]
     if m == killer0:
@@ -190,6 +191,7 @@ proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
       score += 2 * system.int(cont1[][curPiece][toSq])
     if cont2 != nil:
       score += system.int(cont2[][curPiece][toSq])
+    score += system.int(pawnRow[][curPiece][toSq])
     scores[i] = int32(score)
 
 proc initMovePicker*(picker: var MovePicker, b: ptr Board,
