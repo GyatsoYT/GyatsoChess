@@ -530,14 +530,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       score = -negamax[false](b, reducedDepth, -curAlpha - 1, -curAlpha, ply +
           1, info, stack, cutnode = not cutnode)
 
-      # Re-search at full depth if LMR raised alpha
+      var researchDepth = newDepth
+
+      # Re-search if LMR raised alpha (Do Deeper / Do Shallower)
       if reduction > 0 and score > curAlpha:
-        score = -negamax[false](b, newDepth, -curAlpha - 1, -curAlpha, ply + 1,
-            info, stack, cutnode = not cutnode)
+        if score > bestScore + LmrDeeperBase + LmrDeeperScale * newDepth:
+          inc researchDepth
+        elif score < bestScore + LmrShallowerMargin:
+          dec researchDepth
+
+        researchDepth = max(1, researchDepth)
+
+        if researchDepth > reducedDepth:
+          score = -negamax[false](b, researchDepth, -curAlpha - 1, -curAlpha, ply + 1,
+              info, stack, cutnode = not cutnode)
 
       # PVS re-search with full window
       if score > curAlpha and score < beta:
-        score = -negamax[true](b, newDepth, -beta, -curAlpha, ply + 1, info,
+        score = -negamax[true](b, researchDepth, -beta, -curAlpha, ply + 1, info,
             stack, cutnode = false)
 
     b.unmakeMove(m)
