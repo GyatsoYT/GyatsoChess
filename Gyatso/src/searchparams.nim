@@ -8,6 +8,7 @@ const
   NmpDepthDiv* = 4 # so R = 2 + depth div 4
   NmpVerificationDepth* = 14
   NMPEvalMargin* = 200
+  NmpEarlyStopMargin* = 16
   RfpDepth* = 12
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15

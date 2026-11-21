@@ -165,7 +165,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               stack: var SearchStack,
               cutnode: bool = false,
               skipNullMove: bool = false,
-              excludedMove: Move = NullMove): int {.gcsafe.} =
+              excludedMove: Move = NullMove,
+              afterNull: bool = false): int {.gcsafe.} =
   let nnue = addr nnueState
   if ply >= MaxPly:
     return evaluate(b, nnue[])
@@ -242,6 +243,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1,
         MateThreshold - 1)
   let staticEval = stack[ply].staticEval
+  if afterNull and
+     stack[ply - 1].rawEval != Unknown and
+     stack[ply].rawEval != Unknown and
+     stack[ply - 1].rawEval + stack[ply].rawEval < -NmpEarlyStopMargin:
+    return beta
 
   # Improving flag and delta (improvement) calculation
   var improving = false
@@ -298,7 +304,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
 
     let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,
                              ply + 1, info, stack, cutnode = true,
-                             skipNullMove = true)
+                             skipNullMove = true, afterNull = true)
 
     b.unmakeNullMove()
     nnuePopNull(nnue[])
