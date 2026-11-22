@@ -243,6 +243,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         MateThreshold - 1)
   let staticEval = stack[ply].staticEval
 
+  # TT-adjusted eval
+  var ttAdjustedEval = staticEval
+  if hasTT and ttMove != NullMove and not inCheck and not isSingularSearch and
+      abs(ttScore) < MateThreshold and
+      (ttBound == BoundExact or
+       (ttBound == BoundBeta and ttScore >= staticEval) or
+       (ttBound == BoundAlpha and ttScore <= staticEval)):
+    ttAdjustedEval = ttScore
+
   # Improving flag and delta (improvement) calculation
   var improving = false
   var improvement = 0
@@ -266,8 +275,8 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth -
                     clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp) +
                     (if wasPV: TtPvRfpMargin else: 0)
-    if staticEval - rfpMargin >= beta:
-      return staticEval - rfpMargin
+    if ttAdjustedEval - rfpMargin >= beta:
+      return ttAdjustedEval - rfpMargin
 
   let ttWinningCapture = hasTT and
                          ttBound == BoundBeta and
