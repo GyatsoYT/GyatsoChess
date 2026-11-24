@@ -14,7 +14,7 @@ func featureIndex*(perspective, pieceColor: Color, pt: PieceType, sq: Square, pe
     result = (colorIdx * 6 + ptIdx) * 64 + sqIdx
 
 const
-    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32.bin")
+    NNUE_EMBEDDED* = staticRead("../Net/GyatsoNet1024x16x32Reloaded.bin")
     NNUE_PAIRWISE_PERMUTATION = staticRead("../Net/GyatsoNet1024x16x32.perm")
     NNUE_RAW_BYTES* = FT_IN * HL * 2 + HL * 2 + HL * L2_SIZE +
                      L2_SIZE * 4 + L2_SIZE * L3_SIZE * 4 +
