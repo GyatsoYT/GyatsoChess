@@ -22,7 +22,7 @@ const Unknown* = high(int)
 type
   SearchStackEntry* = object
     move*: Move
-    piece*: int
+    piece*: uint8
     staticEval*: int
     rawEval*: int
 
@@ -87,11 +87,15 @@ func hasNonPawnKingPiece(b: Board): bool {.inline.} =
     b.byPiece[offset + Queen.ord]
   not nonPawnKing.isEmpty
 
+func isValuableVictim(pt: PieceType): bool {.inline.} =
+  pt >= Knight and pt <= Queen
+
 proc qSearch*(b: var Board, alpha, beta, ply: int,
               info: var SearchInfo,
               stack: var SearchStack): int =
+  let nnue = addr nnueState
   if ply >= MaxPly:
-    return evaluate(b, nnueState)
+    return evaluate(b, nnue[])
 
   inc info.nodes
 
@@ -106,7 +110,7 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     return system.int((info.nodes mod 5)) - 2
 
   let inCheckQ = not b.checkers.isEmpty
-  let rawQEval = evaluate(b, nnueState)
+  let rawQEval = evaluate(b, nnue[])
   let standPat = if inCheckQ: rawQEval
                  else: clamp(rawQEval + getCorrection(b), -MateThreshold + 1,
                      MateThreshold - 1)
@@ -117,10 +121,11 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
 
   var curAlpha = max(alpha, standPat)
 
-  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
+  var picker {.noinit.}: MovePicker
+  initMovePicker(picker,
     addr b, NullMove, ply, prevPiece, prevToSq,
     -1, -1,
     inCheck = inCheckQ, isQSearch = true)
@@ -129,16 +134,19 @@ proc qSearch*(b: var Board, alpha, beta, ply: int,
     let m = picker.next()
     if m == NullMove: break
 
-    if not inCheckQ and m.isPromotion() and not see(b, m, 0):
+    # Promotions from StageGoodNoisies already passed see(m, 0); from
+    # StageBadNoisies they already failed it. (qsearch passes NullMove
+    # as ttMove, so no other stage yields promotions.)
+    if not inCheckQ and m.isPromotion() and picker.stage == StageBadNoisies:
       continue
 
-    stack[ply].move = m
-    nnuePush(b, m, nnueState)
+    nnuePush(b, m, nnue[])
     b.makeMove(m)
-    prefetchTT(cast[system.uint64](b.hash))
+    prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
+    prefetchCorrection(b)
     let score = -qSearch(b, -beta, -curAlpha, ply + 1, info, stack)
     b.unmakeMove(m)
-    nnuePop(nnueState)
+    nnuePop(nnue[])
 
     if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
       return 0
@@ -158,13 +166,17 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
               cutnode: bool = false,
               skipNullMove: bool = false,
               excludedMove: Move = NullMove): int {.gcsafe.} =
+  let nnue = addr nnueState
   if ply >= MaxPly:
-    return evaluate(b, nnueState)
+    return evaluate(b, nnue[])
 
   inc info.nodes
 
   if checkStop(info):
     return 0
+  # `info.stopFlag` is set once before the search and never reassigned; keep a
+  # local so the per-move checks don't re-load it through the var parameter.
+  let stopFlag = info.stopFlag
 
   # Clear PV length for this ply — will be populated if we find a best move.
   info.pvLen[ply] = 0
@@ -191,9 +203,11 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var ttBound = 0'u8
   var ttEval = NoEval
   let hashVal = cast[system.uint64](b.hash)
-  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval)
+  var ttPv = false
+  let hasTT = probeTT(hashVal, ply, ttMove, ttScore, ttDepth, ttBound, ttEval, ttPv)
+  let wasPV = pvNode or (hasTT and ttPv)
 
-  if hasTT and ttDepth >= depth and ply > 0 and not isSingularSearch:
+  if hasTT and ttDepth >= depth and ply > 0 and not isSingularSearch and not pvNode:
     if ttBound == BoundExact:
       return ttScore
     elif ttBound == BoundAlpha and ttScore <= alpha:
@@ -202,6 +216,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       # TT-Hit History Reward
       if ttMove != NullMove and isQuietMove(b, ttMove):
         let ttBonus = getBonus(depth) div 2
+        b.ensureAttackState()  # history is indexed by threatened squares
         updateHistory(b, ttMove, ttBonus)
       return ttScore
 
@@ -221,7 +236,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     stack[ply].rawEval = Unknown
   elif stack[ply].staticEval == Unknown:
     let raw = if ttEval != NoEval: system.int(ttEval)
-              else: evaluate(b, nnueState)
+              else: evaluate(b, nnue[])
     stack[ply].rawEval = raw
     let corr = getCorrection(b)
     stack[ply].staticEval = clamp(raw + corr, -MateThreshold + 1,
@@ -249,9 +264,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      not isSingularSearch and
      abs(beta) < MateThreshold:
     let rfpMargin = RfpLinearMargin * depth + RfpQuadraticMargin * depth * depth -
-                    clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp)
+                    clamp(improvement div 2, -RfpImprovementClamp, RfpImprovementClamp) +
+                    (if wasPV: TtPvRfpMargin else: 0)
     if staticEval - rfpMargin >= beta:
       return staticEval - rfpMargin
+
+  let ttWinningCapture = hasTT and
+                         ttBound == BoundBeta and
+                         ttMove != NullMove and
+                         isCapture(b, ttMove) and
+                         isValuableVictim(b.mailbox[ttMove.toSq.int].pieceType)
 
   # Null Move Pruning (NMP)
   if depth >= NmpMinDepth and
@@ -262,14 +284,16 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
      not inCheck and
      hasNonPawnKingPiece(b) and
      not skipNullMove and
-     not isSingularSearch:
-
-    let R = NmpBaseR + depth div NmpDepthDiv # 2 + depth/4
+     not isSingularSearch and
+     not ttWinningCapture:
+    let evalMargin = (staticEval - beta) div NMPEvalMargin
+    let R = NmpBaseR + depth div NmpDepthDiv + min(3, evalMargin) # 2 + depth/4 + min(3, evalMargin)
 
     stack[ply].move = NullMove
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
-    nnuePushNull(nnueState)
+    prefetchTT(b.keyAfterNull())
+    nnuePushNull(nnue[])
     b.makeNullMove()
 
     let nullScore = -negamax[false](b, depth - R - 1, -beta, -beta + 1,
@@ -277,9 +301,9 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                              skipNullMove = true)
 
     b.unmakeNullMove()
-    nnuePopNull(nnueState)
+    nnuePopNull(nnue[])
 
-    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+    if stopFlag != nil and stopFlag[].load(moAcquire):
       return 0
 
     if nullScore >= beta:
@@ -294,14 +318,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       else:
         return beta
 
-  let prevPiece = if ply > 0: stack[ply - 1].piece else: -1
+  let prevPiece = if ply > 0: system.int(stack[ply - 1].piece) else: -1
   let prevToSq = if ply > 0: stack[ply - 1].move.histToSq.int else: -1
-  let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
-      2].piece else: -1
+  let prev2Piece = if ply >= 2 and stack[ply - 2].move != NullMove: system.int(stack[ply -
+      2].piece) else: -1
   let prev2ToSq = if ply >= 2 and stack[ply - 2].move != NullMove: stack[ply -
       2].move.histToSq.int else: -1
 
-  var picker = initMovePicker(
+  var picker {.noinit.}: MovePicker
+  initMovePicker(picker,
     addr b, ttMove, ply, prevPiece, prevToSq,
     prev2Piece, prev2ToSq,
     inCheck = inCheck, isQSearch = false)
@@ -310,8 +335,10 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
   var curAlpha = alpha
   var bestMove = NullMove
 
-  var triedQuiets: array[128, Move]
+  var triedQuiets {.noinit.}: array[128, Move]
   var triedQuietsLen = 0
+  var triedCaptures {.noinit.}: array[32, Move]
+  var triedCapturesLen = 0
   var movesSearched = 0
 
   while true:
@@ -322,11 +349,17 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     if m == excludedMove:
       continue
 
+    let isQuiet = isQuietMove(b, m)
+    let isCap   = not isQuiet and isCapture(b, m)
+    let histToSqInt = m.histToSq.int
+    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
+    let toAttacked   = if b.threats.hasSq(m.histToSq): 1 else: 0
+
     # Futility Pruning
     if movesSearched > 0 and
        depth <= FpDepth and
        not inCheck and
-       isQuietMove(b, m) and
+       isQuiet and
        m != ttMove and
        m != killerMoves[ply][0] and
        m != killerMoves[ply][1] and
@@ -341,7 +374,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
        depth <= 7 and
        not inCheck and
        not pvNode and
-       isQuietMove(b, m) and
+       isQuiet and
        curAlpha < MateThreshold and
        movesSearched >= LmpTable[depth]:
       picker.skipQuiets()
@@ -350,16 +383,21 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
     # Quiet SEE Pruning
     if movesSearched > 0 and
        not inCheck and
-       isQuietMove(b, m) and
+       isQuiet and
        abs(curAlpha) < MateThreshold and
        not see(b, m, StaticPruning[depth]):
       continue
 
-    # Noisy SEE Pruning
+    # Noisy SEE Pruning.
+    # Moves yielded during StageGoodNoisies already passed see(m, 0) inside
+    # picker.next(); SEEPruning[depth] <= 0 for all d, and see() is monotone
+    # in its threshold, so the check is guaranteed to pass there. TT moves
+    # and StageBadNoisies moves still need the real test.
     if movesSearched > 0 and
        not inCheck and
-       not isQuietMove(b, m) and
+       not isQuiet and
        not m.isPromotion() and
+       picker.stage != StageGoodNoisies and
        abs(curAlpha) < MateThreshold and
        not see(b, m, SEEPruning[depth]):
       continue
@@ -386,7 +424,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                                          excludedMove = ttMove)
       info.pvLen[ply] = 0
 
-      if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+      if stopFlag != nil and stopFlag[].load(moAcquire):
         return 0
 
       if singularScore < sBeta:
@@ -399,24 +437,27 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
       elif ttScore >= beta:
         singularExtension = -SeNegativeExtTtBeta
 
+      # Recapture extension
+      if singularExtension > 0 and prevToSq >= 0 and
+          histToSqInt == prevToSq:
+        singularExtension = min(singularExtension + SeRecaptureExt, SeRecaptureCap)
+
     stack[ply].move = m
-    stack[ply].piece = ord(b.mailbox[m.fromSq.int])
+    stack[ply].piece = uint8(ord(b.mailbox[m.fromSq.int]))
     stack[ply + 1].staticEval = Unknown
     stack[ply + 1].rawEval = Unknown
 
-    # Pre-compute history values before makeMove
-    let isQuiet = isQuietMove(b, m) and not m.isPromotion()
+    # historyTable lookup is only needed for quiet moves; defer it into the
+    # isQuiet branch of the LMR block so noisy moves skip the memory read.
     let lmrStm = b.stm.ord
-    let fromAttacked = if b.threats.hasSq(m.fromSq): 1 else: 0
-    let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
-    let lmrHistScore = system.int(historyTable[lmrStm][m.fromSq.int][
-        m.histToSq.int][fromAttacked][toAttacked])
+
 
     let prevNodes = if ply == 0: info.nodes else: 0'u64
-
-    nnuePush(b, m, nnueState)
+    prefetchTT(b.keyAfter(m))    
+    nnuePush(b, m, nnue[])
     b.makeMove(m)
-    prefetchTT(cast[system.uint64](b.hash))
+    prefetchEvalCache(nnue[], cast[system.uint64](b.hash))
+    prefetchCorrection(b)
 
     # Check Extension and Singular Extension
     let givesCheck = not b.checkers.isEmpty
@@ -446,18 +487,24 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         if isQuiet and not improving:
           inc reduction
 
+        # TT-move reduction
+        if hasTT and ttMove != NullMove and ttBound != BoundAlpha:
+          inc reduction
+
         # History-based LMR adjustment
         if isQuiet:
-          let curPiece = stack[ply].piece
-          let curToSq = m.histToSq.int
-          var histAdj = lmrHistScore
+          let curPiece = system.int(stack[ply].piece)
+          let curToSq = histToSqInt
+          var histAdj = system.int(historyTable[lmrStm][m.fromSq.int][
+              histToSqInt][fromAttacked][toAttacked])
           # 1-ply continuation history
           if prevPiece >= 0:
             histAdj += 2 * getContHistScore(prevPiece, prevToSq, curPiece, curToSq)
-          # 2-ply continuation history
-          if prev2Piece >= 0:
-            histAdj += getContHistScore2(prev2Piece, prev2ToSq, curPiece, curToSq)
           reduction -= histAdj div 8192
+
+        # TT-PV reduction
+        if wasPV:
+          reduction -= TtPvLmrReduction
 
         # Cut-node reduction
         if cutnode and isQuiet:
@@ -494,7 +541,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             stack, cutnode = false)
 
     b.unmakeMove(m)
-    nnuePop(nnueState)
+    nnuePop(nnue[])
 
     if ply == 0:
       let deltaNodes = info.nodes - prevNodes
@@ -503,7 +550,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
           info.rootMoveNodes[rIdx] += deltaNodes
           break
 
-    if info.stopFlag != nil and info.stopFlag[].load(moAcquire):
+    if stopFlag != nil and stopFlag[].load(moAcquire):
       return 0
 
     inc movesSearched
@@ -520,14 +567,15 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
         info.pvLen[ply] = childLen + 1
         if curAlpha >= beta:
           if not isSingularSearch:
-            if isQuietMove(b, m):
+            if isQuiet:
               storeKiller(ply, m)
-              let bonus = getBonus(depth)
+              let historyDepth = depth + (if not inCheck and staticEval <= alpha: 1 else: 0)
+              let bonus = getBonus(historyDepth)
               let malus = -bonus
               updateHistory(b, m, bonus)
               if prevPiece >= 0:
-                let curPiece = stack[ply].piece
-                let curToSq = m.histToSq.int
+                let curPiece = system.int(stack[ply].piece)
+                let curToSq = histToSqInt
                 updateContHist(prevPiece, prevToSq, curPiece, curToSq, bonus)
                 if prev2Piece >= 0:
                   updateContHist2(prev2Piece, prev2ToSq, curPiece, curToSq, bonus)
@@ -544,22 +592,31 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
                 for i in 0 ..< triedQuietsLen:
                   if triedQuiets[i] != m:
                     updateHistory(b, triedQuiets[i], malus)
+            let captBonus = getCaptureBonus(depth)
+            if isCap:
+              updateCaptureHistory(b, m, captBonus)
+            for i in 0 ..< triedCapturesLen:
+              updateCaptureHistory(b, triedCaptures[i], -captBonus)
             let evalToStore = if stack[ply].rawEval ==
                 Unknown: NoEval else: int16(stack[ply].rawEval)
             storeTT(hashVal, bestMove, bestScore.int16, depth.int8, BoundBeta,
-                ply, evalToStore)
+                ply, evalToStore, wasPV)
 
             # Update correction history on beta cutoff
-            if not inCheck and isQuietMove(b, m) and abs(score) <
+            if not inCheck and isQuiet and abs(score) <
                 MateThreshold and score > staticEval:
               updateCorrection(b, depth, score - staticEval)
           return bestScore
 
-    # Record tried quiet moves that did not cause a cutoff
-    if isQuietMove(b, m):
+    # Record tried quiet/capture moves that did not cause a cutoff
+    if isQuiet:
       if triedQuietsLen < triedQuiets.len:
         triedQuiets[triedQuietsLen] = m
         inc triedQuietsLen
+    elif isCap:
+      if triedCapturesLen < triedCaptures.len:
+        triedCaptures[triedCapturesLen] = m
+        inc triedCapturesLen
 
   if movesSearched == 0:
     if isSingularSearch:
@@ -593,7 +650,7 @@ proc negamax*[pvNode: static bool](b: var Board, depth, alpha, beta, ply: int,
             updateHistory(b, triedQuiets[i], malus)
     let evalToStore2 = if stack[ply].rawEval == Unknown: NoEval else: int16(
         stack[ply].rawEval)
-    storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2)
+    storeTT(hashVal, bestMove, bestScore.int16, depth.int8, bound, ply, evalToStore2, wasPV)
 
     # Update correction history on fail-low or exact bound
     if not inCheck and
@@ -653,7 +710,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
   var stack: SearchStack
   for i in 0 .. MaxPly + 1:
     stack[i].move = NullMove
-    stack[i].piece = 0
+    stack[i].piece = 0'u8
     stack[i].staticEval = Unknown
     stack[i].rawEval = Unknown
 
@@ -766,7 +823,7 @@ proc iterativeDeepening*(b: var Board, info: var SearchInfo): (Move, int) =
             bmIdx = i
             break
         let bmNodes = if bmIdx >= 0: info.rootMoveNodes[bmIdx] else: 0'u64
-        info.timeManager.update(depth, info.nodes, bestMove, bmNodes)
+        info.timeManager.update(depth, info.nodes, bestMove, bmNodes, bestScore)
 
         if info.timeManager.stopSoft(elapsed):
           if info.stopFlag != nil: info.stopFlag[].store(true, moRelease)

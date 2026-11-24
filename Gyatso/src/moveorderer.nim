@@ -12,11 +12,6 @@ proc storeKiller*(ply: int, m: Move) {.inline.} =
     killerMoves[ply][1] = killerMoves[ply][0]
     killerMoves[ply][0] = m
 
-proc isKiller(m: Move, ply: int): int {.inline.} =
-  if killerMoves[ply][0] == m: 2
-  elif killerMoves[ply][1] == m: 1
-  else: 0
-
 func isCapture*(b: Board, m: Move): bool {.inline.} =
   if m.isEnPassant: return true
   if m.isCastling: return false  # toSq is own rook, not a capture
@@ -35,22 +30,50 @@ const mvvlvaVictimBonus: array[PieceType, int] = [
 const mvvlvaAttackerPenalty: array[PieceType, int] = [
   0, 1, 1, 2, 4, 5, 0,
 ]
+const
+  CaptMvvScale* = 32
 
 func mvvlvaScore(attackerPt, victimPt: PieceType): int {.inline.} =
   mvvlvaVictimBonus[victimPt] * 8 - mvvlvaAttackerPenalty[attackerPt]
 
+# Finds the first index in `cur ..< count` holding the maximum score and swaps
+# it into position `cur`. The search must keep the FIRST max (the scalar loop
+# only replaces `best` on a strictly greater score), so the SIMD scan uses
+# strictly-greater lane masks and earliest-lane wins.
+when defined(avx2):
+  import std/bitops
+  import nimsimd/avx2
+  import nimsimd/avx
+  import nimsimd/sse2
+
 proc pickBest(moves: var array[256, Move],
               scores: var array[256, int32],
               cur, count: int): Move {.inline.} =
-  var bestPacked = system.uint64(0)
   var bestIdx    = cur
-  for i in cur ..< count:
-    let remaining = system.uint64(count - 1 - i)
-    let adjusted  = system.uint32(scores[i]) xor 0x80000000'u32
-    let packed    = (system.uint64(adjusted) shl 32) or remaining
-    if packed >= bestPacked:
-      bestPacked = packed
-      bestIdx    = i
+  var bestScore = scores[cur]
+  var i = cur + 1
+  when defined(avx2):
+    # SIMD pays off only when enough tail remains to amortize the setup.
+    if count - i >= 64:
+      while i + 8 <= count:
+        let chunk = mm256_loadu_si256(cast[ptr M256i](addr scores[i]))
+        let thr   = mm256_cmpgt_epi32(chunk, mm256_set1_epi32(bestScore))
+        var mask  = uint32(bitand(mm256_movemask_ps(mm256_castsi256_ps(thr)), 0xFF))
+        # Only lanes beating the pre-chunk best are candidates; each accepted
+        # lane raises bestScore, so later lanes must re-validate — this keeps
+        # strict first-maximum semantics identical to the scalar loop.
+        while mask != 0:
+          let j = countTrailingZeroBits(mask)
+          mask = mask and (mask - 1)
+          if scores[i + j] > bestScore:
+            bestScore = scores[i + j]
+            bestIdx   = i + j
+        i += 8
+  while i < count:
+    if scores[i] > bestScore:
+      bestScore = scores[i]
+      bestIdx   = i
+    inc i
   if bestIdx != cur:
     let tmpMove     = moves[cur]
     let tmpScore    = scores[cur]
@@ -78,17 +101,15 @@ type MovePicker* = object
   prev2Piece*:     int
   prev2ToSq*:      int
   stage*:          MovePickerStage
-  noisyMoves:      array[256, Move]
+  noisyMoves:      MoveList
   noisyScores:     array[256, int32]
-  noisyCount:      int
   noisyCur:        int
   badMoves:        array[64, Move]
   badScores:       array[64, int32]
   badCount:        int
   badCur:          int
-  quietMoves:      array[256, Move]
+  quietMoves:      MoveList
   quietScores:     array[256, int32]
-  quietCount:      int
   quietCur:        int
   skipQuietsMark*: bool
   isQSearch*:      bool
@@ -132,62 +153,78 @@ proc scoreNoisy(b: Board, m: Move): int32 {.inline.} =
     elif attackerPt == Queen or attackerPt == Knight: 500
     else: 200
 
-  int32(GoodCaptureBase + promoBonus + mvvlva)
-
-proc scoreQuiet(b: Board, m: Move, ply, prevPiece, prevToSq,
-                prev2Piece, prev2ToSq: int): int32 {.inline.} =
-  let killerSlot = isKiller(m, ply)
-  if killerSlot > 0:
-    return int32(KillerBase + killerSlot * 1_000)
-
-  let stm       = b.stm.ord
-  let fromSq    = m.fromSq.int
-  let toSq      = m.histToSq.int
-  let fromThrt  = if b.threats.hasSq(m.fromSq): 1 else: 0
-  let toThrt    = if b.threats.hasSq(m.histToSq):   1 else: 0
-  let histScore = system.int(historyTable[stm][fromSq][toSq][fromThrt][toThrt])
-  let curPiece  = ord(b.mailbox[m.fromSq.int])
-  let cont1 =
-    if prevPiece >= 0:
-      getContHistScore(prevPiece, prevToSq, curPiece, toSq)
+  let captHist =
+    if victimPt != NoPieceType:
+      system.int(gHistData.captureHistory[ord(b.mailbox[m.fromSq.int])][
+          m.toSq.int][victimPt.ord])
     else: 0
-  let cont2 =
-    if prev2Piece >= 0:
-      getContHistScore2(prev2Piece, prev2ToSq, curPiece, toSq)
-    else: 0
-  let contScore = 2 * cont1 + cont2
 
-  int32(histScore + contScore)
+  int32(GoodCaptureBase + promoBonus + mvvlva * CaptMvvScale + captHist)
 
-proc initMovePicker*(b: ptr Board,
+proc scoreQuiets(b: Board, ml: var MoveList, scores: var array[256, int32],
+                 ply, prevPiece, prevToSq, prev2Piece, prev2ToSq: int) {.inline.} =
+  ## Thread-local tables and continuation rows are resolved once per batch
+  ## instead of once per move.
+  let killer0 = killerMoves[ply][0]
+  let killer1 = killerMoves[ply][1]
+  let hist = gHistData
+  let stm = b.stm.ord
+  let threats = b.threats
+  let cont1 = if prevPiece >= 0: addr hist.continuationHistory[prevPiece][prevToSq] else: nil
+  let cont2 = if prev2Piece >= 0: addr hist.continuationHistory2[prev2Piece][prev2ToSq] else: nil
+  let pawnRow = addr hist.pawnHistory[pawnHistIdx(b)]
+  for i in 0 ..< ml.len:
+    let m = ml.moves[i]
+    if m == killer0:
+      scores[i] = int32(KillerBase + 2 * 1_000)
+      continue
+    if m == killer1:
+      scores[i] = int32(KillerBase + 1 * 1_000)
+      continue
+    let fromSq   = m.fromSq.int
+    let toSq     = m.histToSq.int
+    let fromThrt = if threats.hasSq(m.fromSq): 1 else: 0
+    let toThrt   = if threats.hasSq(m.histToSq): 1 else: 0
+    var score = system.int(hist.historyTable[stm][fromSq][toSq][fromThrt][toThrt])
+    let curPiece = ord(b.mailbox[fromSq])
+    if cont1 != nil:
+      score += 2 * system.int(cont1[][curPiece][toSq])
+    if cont2 != nil:
+      score += system.int(cont2[][curPiece][toSq])
+    score += system.int(pawnRow[][curPiece][toSq])
+    scores[i] = int32(score)
+
+proc initMovePicker*(picker: var MovePicker, b: ptr Board,
                      ttMove: Move,
                      ply, prevPiece, prevToSq,
                      prev2Piece, prev2ToSq: int,
-                     inCheck, isQSearch: bool): MovePicker {.inline.} =
-  result.board          = b
-  result.ttMove         = ttMove
-  result.ply            = ply
-  result.prevPiece      = prevPiece
-  result.prevToSq       = prevToSq
-  result.prev2Piece     = prev2Piece
-  result.prev2ToSq      = prev2ToSq
-  result.stage          = StageTTMove
-  result.noisyCount     = 0
-  result.noisyCur       = 0
-  result.badCount       = 0
-  result.badCur         = 0
-  result.quietCount     = 0
-  result.quietCur       = 0
-  result.skipQuietsMark = false
-  result.isQSearch      = isQSearch
-  result.inCheck        = inCheck
+                     inCheck, isQSearch: bool) {.inline.} =
+  # Search reads threats/pins for every move it gets from the picker.
+  b[].ensureAttackState()
+  picker.board          = b
+  picker.ttMove         = ttMove
+  picker.ply            = ply
+  picker.prevPiece      = prevPiece
+  picker.prevToSq       = prevToSq
+  picker.prev2Piece     = prev2Piece
+  picker.prev2ToSq      = prev2ToSq
+  picker.stage          = StageTTMove
+  picker.noisyMoves.len = 0
+  picker.noisyCur       = 0
+  picker.badCount       = 0
+  picker.badCur         = 0
+  picker.quietMoves.len = 0
+  picker.quietCur       = 0
+  picker.skipQuietsMark = false
+  picker.isQSearch      = isQSearch
+  picker.inCheck        = inCheck
 
 proc skipQuiets*(picker: var MovePicker) {.inline.} =
   picker.skipQuietsMark = true
   if picker.stage == StageQuiets:
     picker.stage = StageBadNoisies
 
-proc next*(picker: var MovePicker): Move =
+proc next*(picker: var MovePicker): Move {.inline.} =
   let b = picker.board
 
   while true:
@@ -199,19 +236,16 @@ proc next*(picker: var MovePicker): Move =
         return picker.ttMove
 
     of StageGenNoisies:
-      var ml: MoveList
-      generateCaptures(b[], ml)
-      picker.noisyCount = ml.len
-      for i in 0 ..< ml.len:
-        picker.noisyMoves[i]  = ml.moves[i]
-        picker.noisyScores[i] = scoreNoisy(b[], ml.moves[i])
+      generateCaptures(b[], picker.noisyMoves)
+      for i in 0 ..< picker.noisyMoves.len:
+        picker.noisyScores[i] = scoreNoisy(b[], picker.noisyMoves.moves[i])
       picker.noisyCur = 0
       picker.stage    = StageGoodNoisies
 
     of StageGoodNoisies:
-      while picker.noisyCur < picker.noisyCount:
-        let m = pickBest(picker.noisyMoves, picker.noisyScores,
-                         picker.noisyCur, picker.noisyCount)
+      while picker.noisyCur < picker.noisyMoves.len:
+        let m = pickBest(picker.noisyMoves.moves, picker.noisyScores,
+                         picker.noisyCur, picker.noisyMoves.len)
         inc picker.noisyCur
         if m == picker.ttMove: continue
         if see(b[], m, 0):
@@ -231,17 +265,10 @@ proc next*(picker: var MovePicker): Move =
       if picker.skipQuietsMark:
         picker.stage = StageBadNoisies
       else:
-        var ml: MoveList
-        generateQuiets(b[], ml)
-        picker.quietCount = ml.len
-        for i in 0 ..< ml.len:
-          picker.quietMoves[i]  = ml.moves[i]
-          picker.quietScores[i] = scoreQuiet(b[], ml.moves[i],
-                                             picker.ply,
-                                             picker.prevPiece,
-                                             picker.prevToSq,
-                                             picker.prev2Piece,
-                                             picker.prev2ToSq)
+        generateQuiets(b[], picker.quietMoves)
+        scoreQuiets(b[], picker.quietMoves, picker.quietScores, picker.ply,
+                    picker.prevPiece, picker.prevToSq,
+                    picker.prev2Piece, picker.prev2ToSq)
         picker.quietCur = 0
         picker.stage    = StageQuiets
 
@@ -250,9 +277,9 @@ proc next*(picker: var MovePicker): Move =
         picker.stage = StageBadNoisies
         continue
 
-      while picker.quietCur < picker.quietCount:
-        let m = pickBest(picker.quietMoves, picker.quietScores,
-                         picker.quietCur, picker.quietCount)
+      while picker.quietCur < picker.quietMoves.len:
+        let m = pickBest(picker.quietMoves.moves, picker.quietScores,
+                         picker.quietCur, picker.quietMoves.len)
         inc picker.quietCur
         if m == picker.ttMove: continue
         return m

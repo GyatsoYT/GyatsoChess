@@ -33,7 +33,7 @@ proc updateNodeScale*(tm: var TimeManager, bestMoveNodes, totalNodes: uint64) =
   tm.scale = max(TmNodeBase - bmFrac * TmNodeScale, TmNodeScaleMin)
 
 proc update*(tm: var TimeManager, depth: int, totalNodes: uint64,
-             bestMove: Move, bestMoveNodes: uint64) =
+             bestMove: Move, bestMoveNodes: uint64, score: int) =
   if bestMove == tm.prevBestMove:
     inc tm.stability
   else:
@@ -47,5 +47,17 @@ proc update*(tm: var TimeManager, depth: int, totalNodes: uint64,
     let s = tm.stability.float64
     scale *= min(TmBmStabMax,
                  TmBmStabMin + TmBmStabScale * pow(s + TmBmStabOffset, TmBmStabPower))
+
+  # Score-drop scaling: when the root eval falls below its recent average,
+  # the position is unstable — spend more time. A rising score never slows
+  # the search (drop clamps at 0).
+  if tm.hasAvgScore:
+    let drop = max(0, tm.avgScore - score)
+    scale *= min(TmScoreDropMax, 1.0 + drop.float64 * TmScoreDropScale)
+  if not tm.hasAvgScore:
+    tm.avgScore = score
+    tm.hasAvgScore = true
+  else:
+    tm.avgScore = (tm.avgScore + score) div 2
 
   tm.scale = max(scale, TmScaleMin)

@@ -10,12 +10,19 @@ const
   CorrHistGrain* = 512
   CorrHistWeightScale* = 256
   CorrHistMax* = CorrHistGrain * 32
-
+  CaptBonusMult* = 9
+  CaptBonusShift* = 8
+  CaptBonusMax* = 400
+  PawnHistSize* = 2048
+  PawnHistMask* = system.uint64(PawnHistSize - 1)
+  
 type
   HistoryTable* = array[2, array[64, array[64, array[2, array[2, int16]]]]]
   ContinuationHistory* = array[12, array[64, array[12, array[64, int16]]]]
   PawnCorrHist* = array[2, array[CorrHistSize, int16]]
   NonPawnCorrHist* = array[2, array[2, array[CorrHistSize, int16]]]
+  CaptureHistoryTable* = array[12, array[64, array[6, int16]]]
+  PawnHistory* = array[PawnHistSize, array[12, array[64, int16]]]
 
 type HistoryData* = object
   historyTable*: HistoryTable
@@ -23,6 +30,8 @@ type HistoryData* = object
   continuationHistory2*: ContinuationHistory
   pawnCorrHist*: PawnCorrHist
   nonPawnCorrHist*: NonPawnCorrHist
+  captureHistory*: CaptureHistoryTable
+  pawnHistory*: PawnHistory
 
 var gHistData* {.threadvar.}: ptr HistoryData
 
@@ -84,11 +93,22 @@ proc isQuietMove*(b: Board, m: Move): bool {.inline.} =
 proc getBonus*(depth: int): int {.inline.} =
   min(1500, depth * depth + 2 * depth)
 
+proc getCaptureBonus*(depth: int): int {.inline.} =
+  clamp(CaptBonusMult * depth - CaptBonusShift, 0, CaptBonusMax)
+
 template updateHistoryStat*(stat: var int16, bonus: int) =
   var s = system.int(stat)
   let gravityDiv = 512 + (abs(bonus) shr 4)
   s += (32 * bonus) - (s * abs(bonus)) div gravityDiv
   stat = int16(clamp(s, -16384, 16384))
+
+template pawnHistIdx*(b: Board): int =
+  system.int(b.pawnHash.uint64 and PawnHistMask)
+
+proc updatePawnHist*(b: Board, m: Move, change: int) {.inline.} =
+  let piece = ord(b.mailbox[m.fromSq.int])
+  updateHistoryStat(
+    gHistData.pawnHistory[pawnHistIdx(b)][piece][m.histToSq.int], change)
 
 proc updateHistory*(b: Board, m: Move, change: int) =
   let stm = b.stm.ord
@@ -98,6 +118,16 @@ proc updateHistory*(b: Board, m: Move, change: int) =
   let toAttacked = if b.threats.hasSq(m.histToSq): 1 else: 0
   updateHistoryStat(gHistData.historyTable[stm][fromSq][toSq][fromAttacked][
       toAttacked], change)
+  updatePawnHist(b, m, change)
+
+proc captureVictim*(b: Board, m: Move): int {.inline.} =
+  if m.isEnPassant(): Pawn.ord
+  else: b.mailbox[m.toSq.int].pieceType.ord
+
+proc updateCaptureHistory*(b: Board, m: Move, change: int) {.inline.} =
+  updateHistoryStat(
+    gHistData.captureHistory[ord(b.mailbox[m.fromSq.int])][m.toSq.int][
+        captureVictim(b, m)], change)
 
 template historyTable*(): untyped = gHistData.historyTable
 
@@ -138,6 +168,20 @@ proc getNonPawnCorrection*(b: Board): int {.inline.} =
 
 proc getCorrection*(b: Board): int {.inline.} =
   getPawnCorrection(b) + getNonPawnCorrection(b)
+
+func corrPrefetch(p: pointer) {.importc: "__builtin_prefetch", nodecl, inline.}
+
+proc prefetchCorrection*(b: Board) {.inline.} =
+  ## Warm the three correction-table lines a child's getCorrection will read.
+  ## Called right after makeMove so the loads overlap the child's prologue.
+  if gHistData == nil: return
+  let side = b.stm.ord
+  corrPrefetch(addr gHistData.pawnCorrHist[side][
+      system.int(b.pawnHash.uint64 and CorrHistMask)])
+  corrPrefetch(addr gHistData.nonPawnCorrHist[0][side][
+      system.int(b.nonPawnHash[0].uint64 and CorrHistMask)])
+  corrPrefetch(addr gHistData.nonPawnCorrHist[1][side][
+      system.int(b.nonPawnHash[1].uint64 and CorrHistMask)])
 
 proc updateCorrEntry(entry: var int16, newWeight, scaledDiff: int) {.inline.} =
   let old = system.int(entry)

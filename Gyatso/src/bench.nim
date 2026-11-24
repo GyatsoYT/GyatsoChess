@@ -1,11 +1,11 @@
 import std/[atomics, monotimes, times, strformat]
 import coretypes
 import board
-import attacks
 import perft
 import search
 import tt
 import history
+import nnuetypes
 
 const
   DefaultBenchDepth* = 15
@@ -36,7 +36,6 @@ type BenchWorkerData = object
 
 proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   initHistoryData()
-  initThreadAttacks()
 
   var b = parseFen(data.fen)
 
@@ -57,11 +56,6 @@ proc benchWorker(data: ptr BenchWorkerData) {.thread.} =
   let (bestMove, _) = iterativeDeepening(b, info)
   data.bestMove = bestMove
   data.nodes = info.nodes
-
-proc clearTT() =
-  ## Zero out the transposition table between positions for reproducibility.
-  if ttTable != nil and ttMask > 0:
-    zeroMem(ttTable, sizeof(TTCluster) * int(ttMask + 1))
 
 proc runBench*(depth: int = DefaultBenchDepth) =
   var totalNodes: uint64 = 0
@@ -99,6 +93,7 @@ proc runBench*(depth: int = DefaultBenchDepth) =
 
   echo ""
   echo "=== BENCHMARK RESULTS ==="
+  echo &"ISA:         {IsaName}"
   echo &"Depth:       {depth}"
   echo &"Positions:   {BenchmarkPositions.len}"
   echo &"Total nodes: {totalNodes}"

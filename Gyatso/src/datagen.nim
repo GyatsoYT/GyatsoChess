@@ -165,7 +165,6 @@ var gTotalGames     {.global.}: Atomic[int64]
 var gStopFlag       {.global.}: Atomic[bool]
 
 proc workerThread(args: WorkerArgs) {.thread.} =
-  initThreadAttacks()
   initHistoryData()
 
   var book: OpeningBook
@@ -261,7 +260,6 @@ when isMainModule:
     softNodes = hardNodes
 
   initAttacks()
-  initThreadAttacks()
   initTT(ttSizeMb)
   initTables()
   initNNUE()
@@ -358,6 +356,11 @@ when isMainModule:
 
   saveState(outputDir, gTotalPositions.load(moRelaxed),
             gTotalGames.load(moRelaxed), seed)
+
+  when defined(nnueStats):
+    let statsPath = outputDir / "nnue_nnz_counts.txt"
+    writeNNUEActivationStats(statsPath)
+    echo "  NNUE stats: ", statsPath
 
   let elapsed  = (getMonoTime() - startTime).inSeconds
   let finalPos = gTotalPositions.load(moRelaxed)

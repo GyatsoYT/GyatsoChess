@@ -7,10 +7,14 @@ const
   NmpBaseR* = 2
   NmpDepthDiv* = 4 # so R = 2 + depth div 4
   NmpVerificationDepth* = 14
+  NMPEvalMargin* = 200
   RfpDepth* = 12
   RfpLinearMargin* = 75
   RfpQuadraticMargin* = 15
   RfpImprovementClamp* = 80
+  # TT-PV adjustments
+  TtPvRfpMargin* = 25
+  TtPvLmrReduction* = 1
   FpDepth* = 8
   FpMarginConst* = 75
   FpMarginScale* = 75
@@ -29,6 +33,8 @@ const
   SeMultiCutLerp* = 40
   # Negative Extension
   SeNegativeExtTtBeta* = 2
+  SeRecaptureExt* = 1
+  SeRecaptureCap* = 2
   SeePruneCutoff* = 50
   SeePruningA* = 12
   SeePruningB* = 41
@@ -55,6 +61,10 @@ const
   TmBmStabOffset*     = 0.9
   TmBmStabPower*      = -2.57
   TmScaleMin*         = 0.20
+  # Score-drop time scaling: scale = min(TmScoreDropMax,
+  # 1 + (avgScore - score) * TmScoreDropScale) when score falls.
+  TmScoreDropScale*   = 0.008
+  TmScoreDropMax*     = 1.50
 
 var
   gMoveOverhead*: int = MoveOverheadMs

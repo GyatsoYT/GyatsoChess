@@ -39,6 +39,7 @@ type
     pinHV*: Bitboard
     pinD12*: Bitboard
     threats*: Bitboard
+    attackStateValid*: bool
 
   Board* = object
     byPiece*: array[12, Bitboard]
@@ -58,7 +59,13 @@ type
     pinHV*: Bitboard
     pinD12*: Bitboard
     threats*: Bitboard
+    ## pinHV/pinD12/threats are only meaningful when attackStateValid; call
+    ## ensureAttackState before reading them after makeMove.
+    attackStateValid*: bool
     history*: array[1024, UndoInfo]
+    ## repHash[i] == history[i].hash (the hash before move i was made).
+    ## Kept contiguous so isRepetition scans 8-byte stride instead of ~80-byte.
+    repHash*: array[1024, ZobristKey]
     histLen*: int
 
 func pieceOn*(b: Board, sq: Square): Piece {.inline.} =
@@ -146,7 +153,20 @@ proc attackersTo*(b: Board, sq: Square, occ: Bitboard, them: Color): Bitboard =
   (getKingAttacks(sq) and enemyKing)
 
 proc attackersTo*(b: Board, sq: Square, occ: Bitboard): Bitboard {.inline.} =
-  b.attackersTo(sq, occ, White) or b.attackersTo(sq, occ, Black)
+  # Fused two-color version: per-color attackersTo would compute the slider
+  # attacks (magic lookups) twice; the result is identical.
+  let diag = getBishopAttacks(sq, occ)
+  let hv   = getRookAttacks(sq, occ)
+  let diagSliders = b.byPiece[Bishop.ord] or b.byPiece[Bishop.ord + 6] or
+                    b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+  let hvSliders   = b.byPiece[Rook.ord]   or b.byPiece[Rook.ord + 6] or
+                    b.byPiece[Queen.ord]  or b.byPiece[Queen.ord + 6]
+  (getPawnAttacks(sq, Black) and b.byPiece[Pawn.ord]) or
+  (getPawnAttacks(sq, White) and b.byPiece[Pawn.ord + 6]) or
+  (getKnightAttacks(sq) and (b.byPiece[Knight.ord] or b.byPiece[Knight.ord + 6])) or
+  (diag and diagSliders) or
+  (hv and hvSliders) or
+  (getKingAttacks(sq) and (b.byPiece[King.ord] or b.byPiece[King.ord + 6]))
 
 func pawnAttackLeft(bb: Bitboard, c: Color): Bitboard {.inline.} =
   if c == White: (bb and not FileA) shl 7
@@ -156,13 +176,11 @@ func pawnAttackRight(bb: Bitboard, c: Color): Bitboard {.inline.} =
   if c == White: (bb and not FileH) shl 9
   else: (bb and not FileA) shr 9
 
-proc updateAttackState*(b: var Board) =
+proc computePinsAndThreats(b: var Board) =
   let us = b.stm
   let them = us.opposite()
   let kingSq = b.byPiece[us.ord * 6 + King.ord].lsb()
   let occ = b.occupied
-
-  b.checkers = b.attackersTo(kingSq, occ, them)
 
   b.pinHV = Bitboard(0)
   b.pinD12 = Bitboard(0)
@@ -200,9 +218,14 @@ proc updateAttackState*(b: var Board) =
   b.threats = b.threats or getKingAttacks(enemyKingSq)
 
   # 3. Knight threats
-  var enemyKnights = b.byPiece[offset + Knight.ord]
-  for sq in enemyKnights:
-    b.threats = b.threats or getKnightAttacks(sq)
+  let setwiseKnightThreats = allKnightAttacks(b.byPiece[offset + Knight.ord])
+  when not defined(release):
+    var dbgKnightThreats = Bitboard(0)
+    var dbgKnights = b.byPiece[offset + Knight.ord]
+    for sq in dbgKnights:
+      dbgKnightThreats = dbgKnightThreats or getKnightAttacks(sq)
+    assert setwiseKnightThreats == dbgKnightThreats, "allKnightAttacks mismatch!"
+  b.threats = b.threats or setwiseKnightThreats
 
   # 4. Rook / Queen threats (HV)
   var enemyRooksAndQueens = enemyRooks or enemyQueens
@@ -213,6 +236,21 @@ proc updateAttackState*(b: var Board) =
   var enemyBishopsAndQueens = enemyBishops or enemyQueens
   for sq in enemyBishopsAndQueens:
     b.threats = b.threats or getBishopAttacks(sq, occNoKing)
+
+  b.attackStateValid = true
+
+proc ensureAttackState*(b: var Board) {.inline.} =
+  ## Pins and threats are computed on first use after a move: most nodes
+  ## return (stand pat, TT or eval cutoffs) before generating moves.
+  if not b.attackStateValid:
+    computePinsAndThreats(b)
+
+proc updateAttackState*(b: var Board) {.inline.} =
+  ## Checkers are needed by almost every node, so they are kept eager.
+  let us = b.stm
+  let kingSq = b.byPiece[us.ord * 6 + King.ord].lsb()
+  b.checkers = b.attackersTo(kingSq, b.occupied, us.opposite())
+  b.attackStateValid = false
 
 func pinRayOf*(b: Board, sq: Square): Bitboard {.inline.} =
   if b.pinHV.hasSq(sq): return b.pinHV
@@ -456,19 +494,20 @@ proc makeMove*(b: var Board, m: Move) =
   else:
     captured = b.mailbox[toSq.int]
 
-  b.history[b.histLen] = UndoInfo(
-    hash: b.hash,
-    pawnHash: b.pawnHash,
-    nonPawnHash: b.nonPawnHash,
-    castlingRooks: b.castlingRooks,
-    epSquare: b.epSquare,
-    halfmove: b.halfmove,
-    captured: captured,
-    checkers: b.checkers,
-    pinHV: b.pinHV,
-    pinD12: b.pinD12,
-    threats: b.threats
-  )
+  let undo = addr b.history[b.histLen]
+  undo.hash             = b.hash
+  undo.pawnHash         = b.pawnHash
+  undo.nonPawnHash      = b.nonPawnHash
+  undo.castlingRooks    = b.castlingRooks
+  undo.epSquare         = b.epSquare
+  undo.halfmove         = b.halfmove
+  undo.captured         = captured
+  undo.checkers         = b.checkers
+  undo.pinHV            = b.pinHV
+  undo.pinD12           = b.pinD12
+  undo.threats          = b.threats
+  undo.attackStateValid = b.attackStateValid
+  b.repHash[b.histLen] = b.hash
   inc b.histLen
 
   b.hash = b.hash xor castlingKeys[b.castlingRooks.rightsMask]
@@ -544,7 +583,7 @@ proc makeMove*(b: var Board, m: Move) =
 
 proc unmakeMove*(b: var Board, m: Move) =
   dec b.histLen
-  let undo = b.history[b.histLen]
+  let undo = addr b.history[b.histLen]
 
   let fromSq = m.fromSq
   let toSq = m.toSq
@@ -591,23 +630,25 @@ proc unmakeMove*(b: var Board, m: Move) =
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
   b.threats = undo.threats
+  b.attackStateValid = undo.attackStateValid
 
 proc makeNullMove*(b: var Board) =
   doAssert b.histLen < 1024
 
-  b.history[b.histLen] = UndoInfo(
-    hash: b.hash,
-    pawnHash: b.pawnHash,
-    nonPawnHash: b.nonPawnHash,
-    castlingRooks: b.castlingRooks,
-    epSquare: b.epSquare,
-    halfmove: b.halfmove,
-    captured: NoPiece,
-    checkers: b.checkers,
-    pinHV: b.pinHV,
-    pinD12: b.pinD12,
-    threats: b.threats
-  )
+  let undo = addr b.history[b.histLen]
+  undo.hash             = b.hash
+  undo.pawnHash         = b.pawnHash
+  undo.nonPawnHash      = b.nonPawnHash
+  undo.castlingRooks    = b.castlingRooks
+  undo.epSquare         = b.epSquare
+  undo.halfmove         = b.halfmove
+  undo.captured         = NoPiece
+  undo.checkers         = b.checkers
+  undo.pinHV            = b.pinHV
+  undo.pinD12           = b.pinD12
+  undo.threats          = b.threats
+  undo.attackStateValid = b.attackStateValid
+  b.repHash[b.histLen] = b.hash
   inc b.histLen
 
   if b.epSquare != NoSquare:
@@ -624,11 +665,15 @@ proc makeNullMove*(b: var Board) =
 
   b.hash = b.hash xor sideKey
 
-  updateAttackState(b)
+  # A null move cannot give check: occupancy is unchanged, so the new stm's
+  # king has the same attackers it had before — none, in a legal position.
+  # Pins/threats are stm-relative and must still be recomputed lazily.
+  b.checkers = Bitboard(0)
+  b.attackStateValid = false
 
 proc unmakeNullMove*(b: var Board) =
   dec b.histLen
-  let undo = b.history[b.histLen]
+  let undo = addr b.history[b.histLen]
 
   b.castlingRooks = undo.castlingRooks
   b.epSquare = undo.epSquare
@@ -640,6 +685,7 @@ proc unmakeNullMove*(b: var Board) =
   b.pinHV = undo.pinHV
   b.pinD12 = undo.pinD12
   b.threats = undo.threats
+  b.attackStateValid = undo.attackStateValid
 
   # Restore STM, gamePly, fullmove
   b.stm = b.stm.opposite()
@@ -648,10 +694,19 @@ proc unmakeNullMove*(b: var Board) =
   dec b.gamePly
 
 func isRepetition*(b: Board): bool {.inline.} =
+  # A repetition needs at least 4 plies; skip the scan entirely below that.
+  if b.halfmove < 4 or b.histLen < 2:
+    return false
   let limit = max(0, b.histLen - system.int(b.halfmove))
   var i = b.histLen - 2
+  # Two comparisons per iteration: amortizes the loop/branch cost over
+  # the step-2 scan.
+  while i >= limit + 2:
+    if b.repHash[i] == b.hash or b.repHash[i - 2] == b.hash:
+      return true
+    dec(i, 4)
   while i >= limit:
-    if b.history[i].hash == b.hash:
+    if b.repHash[i] == b.hash:
       return true
     dec(i, 2)
   return false
@@ -775,3 +830,46 @@ proc fromDfrcIndex*(n: uint32): Board =
   let whiteBack = scharnaglToBackrank(n mod 960)
   let blackBack  = scharnaglToBackrank(n div 960)
   buildFrcBoard(whiteBack, blackBack)
+
+func keyAfter*(b: Board, m: Move): uint64 {.inline.} =
+  var key = b.hash xor sideKey
+  if b.epSquare != NoSquare:
+    key = key xor epKeys[b.epSquare.file]
+  if m.isCastling:
+    return cast[system.uint64](key)
+
+  let fromSq = m.fromSq
+  let toSq = m.toSq
+  let moving = b.mailbox[fromSq.int]
+
+  if m.isEnPassant:
+    let capPawn = if b.stm == White: BlackPawn else: WhitePawn
+    let capSq = toSq + (if b.stm == White: -8 else: 8)
+    key = key xor pieceKeys[capPawn.ord][capSq.int]
+  else:
+    let captured = b.mailbox[toSq.int]
+    if captured != NoPiece:
+      key = key xor pieceKeys[captured.ord][toSq.int]
+
+  if m.isPromotion:
+    let pt = case m.promoType
+      of PromoKnight: PieceType.Knight
+      of PromoBishop: PieceType.Bishop
+      of PromoRook: PieceType.Rook
+      of PromoQueen: PieceType.Queen
+    key = key xor pieceKeys[moving.ord][fromSq.int] xor
+          pieceKeys[makePiece(b.stm, pt).ord][toSq.int]
+  else:
+    key = key xor pieceKeys[moving.ord][fromSq.int] xor
+          pieceKeys[moving.ord][toSq.int]
+    if (moving == WhitePawn or moving == BlackPawn) and
+       abs(toSq.int - fromSq.int) == 16:
+      key = key xor epKeys[fromSq.file]
+
+  cast[system.uint64](key)
+
+func keyAfterNull*(b: Board): uint64 {.inline.} =
+  var key = b.hash xor sideKey
+  if b.epSquare != NoSquare:
+    key = key xor epKeys[b.epSquare.file]
+  cast[system.uint64](key)

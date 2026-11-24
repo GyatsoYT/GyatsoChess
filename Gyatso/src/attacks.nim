@@ -104,6 +104,16 @@ const rankMasks*: array[64, Bitboard] = block:
 func getKnightAttacks*(sq: Square): Bitboard {.inline.} =
   knightAttacks[sq.int]
 
+func allKnightAttacks*(knights: Bitboard): Bitboard {.inline.} =
+  let noA  = knights and not FileA
+  let noH  = knights and not FileH
+  let noAB = knights and not (FileA or fileMask(1))
+  let noGH = knights and not (fileMask(6) or FileH)
+  (noH  shl 17) or (noH  shr 15) or
+  (noA  shl 15) or (noA  shr 17) or
+  (noGH shl 10) or (noGH shr  6) or
+  (noAB shl  6) or (noAB shr 10)
+
 func getKingAttacks*(sq: Square): Bitboard {.inline.} =
   kingAttacks[sq.int]
 
@@ -253,13 +263,6 @@ var bishopMagics*: array[64, MagicEntry]
 var gRookAttackTable:   ptr UncheckedArray[Bitboard]
 var gBishopAttackTable: ptr UncheckedArray[Bitboard]
 
-var rookAttacks*   {.threadvar.}: ptr UncheckedArray[Bitboard]
-var bishopAttacks* {.threadvar.}: ptr UncheckedArray[Bitboard]
-
-proc initThreadAttacks*() {.inline.} =
-  rookAttacks   = gRookAttackTable
-  bishopAttacks = gBishopAttackTable
-
 var rayBetweenTable: array[64, array[64, Bitboard]]
 var rayPastTable:    array[64, array[64, Bitboard]]
 
@@ -337,17 +340,14 @@ proc initMagics*() =
       gBishopAttackTable[bishopOffset + idx] = attacks
     bishopOffset += 1 shl (64 - bishopShifts[sq])
 
-  # Set thread-local pointers for the main thread
-  initThreadAttacks()
-
 # Magic lookups
 proc getRookAttacksMagic(sq: Square, occ: Bitboard): Bitboard {.inline.} =
   let e = rookMagics[sq.int]
-  rookAttacks[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
+  gRookAttackTable[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
 
 proc getBishopAttacksMagic(sq: Square, occ: Bitboard): Bitboard {.inline.} =
   let e = bishopMagics[sq.int]
-  bishopAttacks[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
+  gBishopAttackTable[e.offset + system.int((occ.uint64 or e.mask.uint64) * e.magic shr e.shift)]
 
 # BMI2 data structures and tables
 type
@@ -365,7 +365,7 @@ var rookBmi2*:   array[64, RookBmi2Entry]
 var bishopBmi2*: array[64, BishopBmi2Entry]
 
 # Flat attack storage
-var gRookBmi2Table*:   ptr UncheckedArray[uint16]
+var gRookBmi2Table*:   ptr UncheckedArray[Bitboard]
 var gBishopBmi2Table*: ptr UncheckedArray[Bitboard]
 
 proc initBmi2*() =
@@ -410,8 +410,8 @@ proc initBmi2*() =
     )
     bishopTableSizeBmi2 += 1 shl bmask.popcount()
 
-  gRookBmi2Table = cast[ptr UncheckedArray[uint16]](
-    allocShared0(rookTableSizeBmi2 * sizeof(uint16)))
+  gRookBmi2Table = cast[ptr UncheckedArray[Bitboard]](
+    allocShared0(rookTableSizeBmi2 * sizeof(Bitboard)))
   gBishopBmi2Table = cast[ptr UncheckedArray[Bitboard]](
     allocShared0(bishopTableSizeBmi2 * sizeof(Bitboard)))
 
@@ -424,8 +424,7 @@ proc initBmi2*() =
       for i in 0 ..< entries:
         let occ        = Bitboard(pdep(cast[uint64](i), e.srcMask.uint64))
         let attacks    = rookAttacksSlow(s, occ)
-        let compressed = pext(attacks.uint64, e.dstMask.uint64)
-        gRookBmi2Table[e.offset + i] = cast[uint16](compressed)
+        gRookBmi2Table[e.offset + i] = attacks
 
     for sq in 0..63:
       let s   = Square(sq)
@@ -440,7 +439,7 @@ when defined(bmi2):
   proc getRookAttacksBmi2(sq: Square, occ: Bitboard): Bitboard {.inline.} =
     let e   = rookBmi2[sq.int]
     let idx = pext(occ.uint64, e.srcMask.uint64)
-    Bitboard(pdep(cast[uint64](gRookBmi2Table[e.offset + system.int(idx)]), e.dstMask.uint64))
+    gRookBmi2Table[e.offset + system.int(idx)]
 
   proc getBishopAttacksBmi2(sq: Square, occ: Bitboard): Bitboard {.inline.} =
     let e   = bishopBmi2[sq.int]
